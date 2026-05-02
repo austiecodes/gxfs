@@ -35,7 +35,7 @@ Codex / Claude Code
 
 ## Repository Configuration
 
-Each codebase can contain a `gxfs.toml`. `GXFS_CONFIG` can point at another file when needed.
+Each codebase can contain an agent-facing `gxfs.toml`. `GXFS_CONFIG` can point at another file when needed. This file tells the CLI which GXFS service to call and what repo/mount view the agent wants. It must not contain storage backend type, storage schema, or storage credentials.
 
 ```toml
 project = "gxfs"
@@ -50,16 +50,25 @@ exclude = [
   "node_modules/**",
   "java-reference/**"
 ]
+```
 
-[backend]
+The repo config only contains `project`, `server.addr`, and mount preferences. Storage backend settings live in `gxfs-server` config, because Postgres, SQLite, or future storage choices are server concerns.
+
+Example server config:
+
+```toml
+addr = ":7635"
+
+[[repos]]
+name = "gxfs"
+
+[repos.backend]
 type = "postgres"
 
-[backend.postgres]
+[repos.backend.postgres]
 dsn = "${GXFS_POSTGRES_DSN}"
 schema = "public"
 ```
-
-The repo config only needs `project`, `server.addr`, and mount preferences. Backend settings live in server config for production. Local development may point `gxfs-server --config` at a combined TOML file, but the CLI must not require backend credentials.
 
 ## CLI
 
