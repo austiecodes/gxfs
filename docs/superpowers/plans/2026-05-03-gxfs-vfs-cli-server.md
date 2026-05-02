@@ -221,27 +221,27 @@ git commit -m "feat: add store capability interfaces"
 - Create: `internal/vfs/tree_test.go`
 - Create: `internal/vfs/tree.go`
 
-- [ ] **Step 1: Write failing tests for tree construction and operations**
+- [x] **Step 1: Write failing tests for tree construction and operations**
 
 Tests cover parent directory synthesis, sorted `LS`, `Tree` depth, `Find` glob matching, `Stat`, `Cat`, and `Grep` with plain substring matching.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/vfs`
 
 Expected: FAIL because package functions are missing.
 
-- [ ] **Step 3: Implement minimal tree behavior**
+- [x] **Step 3: Implement minimal tree behavior**
 
 Implement a concrete `Tree` type with `New(files []File) (*Tree, error)`, `LS`, `Tree`, `Cat`, `Grep`, `Find`, and `Stat`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/vfs`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/vfs
