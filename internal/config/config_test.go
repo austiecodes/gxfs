@@ -89,3 +89,37 @@ schema = "public"
 		t.Fatalf("dsn = %q, want expanded env", repo.Backend.Postgres.DSN)
 	}
 }
+
+func TestLoadServerConfigParsesPostgresFileTable(t *testing.T) {
+	path := writeConfig(t, "server.toml", `
+addr = ":7635"
+
+[[repos]]
+name = "gxfs"
+
+[repos.backend]
+type = "postgres"
+
+[repos.backend.postgres]
+dsn = "postgres://localhost/gxfs"
+schema = "public"
+
+[repos.backend.postgres.files]
+table = "knowledge_files"
+path_column = "file_path"
+content_column = "body"
+size_column = "byte_size"
+mtime_column = "changed_at"
+`)
+
+	cfg, err := LoadServer(path)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	files := cfg.Repos[0].Backend.Postgres.Files
+	if files.Table != "knowledge_files" || files.PathColumn != "file_path" ||
+		files.ContentColumn != "body" || files.SizeColumn != "byte_size" ||
+		files.MTimeColumn != "changed_at" {
+		t.Fatalf("postgres files = %+v, want custom mapping", files)
+	}
+}

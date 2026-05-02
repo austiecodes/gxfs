@@ -38,8 +38,17 @@ type BackendConfig struct {
 }
 
 type PostgresConfig struct {
-	DSN    string `toml:"dsn"`
-	Schema string `toml:"schema"`
+	DSN    string              `toml:"dsn"`
+	Schema string              `toml:"schema"`
+	Files  PostgresFileMapping `toml:"files"`
+}
+
+type PostgresFileMapping struct {
+	Table         string `toml:"table"`
+	PathColumn    string `toml:"path_column"`
+	ContentColumn string `toml:"content_column"`
+	SizeColumn    string `toml:"size_column"`
+	MTimeColumn   string `toml:"mtime_column"`
 }
 
 func LoadCLI(path string) (CLIConfig, error) {

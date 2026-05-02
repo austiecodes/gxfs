@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,8 +13,8 @@ import (
 
 	"gxfs/internal/config"
 	"gxfs/internal/server"
-	"gxfs/internal/store/memory"
-	"gxfs/internal/vfs"
+	"gxfs/internal/store"
+	"gxfs/internal/store/postgres"
 )
 
 func splitAddr(addr string) (string, int, error) {
@@ -36,6 +37,42 @@ func splitAddr(addr string) (string, int, error) {
 	return host, port, nil
 }
 
+func adapterFromServerConfig(ctx context.Context, cfg config.ServerConfig) (store.Adapter, error) {
+	if len(cfg.Repos) != 1 {
+		return nil, fmt.Errorf("exactly one repo is supported in this version")
+	}
+
+	repo := cfg.Repos[0]
+	switch repo.Backend.Type {
+	case "postgres":
+		return postgres.Connect(ctx, postgresConfigFromRepo(repo))
+	default:
+		return nil, fmt.Errorf("unsupported backend type: %s", repo.Backend.Type)
+	}
+}
+
+func postgresConfigFromRepo(repo config.RepoConfig) postgres.Config {
+	files := repo.Backend.Postgres.Files
+	return postgres.Config{
+		DSN:    repo.Backend.Postgres.DSN,
+		Schema: repo.Backend.Postgres.Schema,
+		Files: postgres.FileTableConfig{
+			Table:         defaultString(files.Table, "vfs_files"),
+			PathColumn:    defaultString(files.PathColumn, "path"),
+			ContentColumn: defaultString(files.ContentColumn, "content"),
+			SizeColumn:    defaultString(files.SizeColumn, "size"),
+			MTimeColumn:   defaultString(files.MTimeColumn, "updated_at"),
+		},
+	}
+}
+
+func defaultString(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
 func main() {
 	path := os.Getenv("GXFS_SERVER_CONFIG")
 	if path == "" {
@@ -53,12 +90,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	tree, err := vfs.New(nil)
+	adapter, err := adapterFromServerConfig(context.Background(), cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	handler := server.NewHandler(memory.New(tree))
+	handler := server.NewHandler(adapter)
 
 	srv := rest.MustNewServer(rest.RestConf{Host: host, Port: port})
 	defer srv.Stop()

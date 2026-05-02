@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"gxfs/internal/config"
+)
 
 func TestSplitAddr(t *testing.T) {
 	tests := []struct {
@@ -23,5 +27,27 @@ func TestSplitAddr(t *testing.T) {
 				t.Fatalf("splitAddr() = %s %d, want %s %d", host, port, tt.host, tt.port)
 			}
 		})
+	}
+}
+
+func TestPostgresConfigFromRepoDefaultsFileTable(t *testing.T) {
+	cfg := postgresConfigFromRepo(config.RepoConfig{
+		Name: "gxfs",
+		Backend: config.BackendConfig{
+			Type: "postgres",
+			Postgres: config.PostgresConfig{
+				DSN:    "postgres://localhost/gxfs",
+				Schema: "public",
+			},
+		},
+	})
+
+	if cfg.DSN != "postgres://localhost/gxfs" || cfg.Schema != "public" {
+		t.Fatalf("postgres config = %+v, want dsn/schema", cfg)
+	}
+	if cfg.Files.Table != "vfs_files" || cfg.Files.PathColumn != "path" ||
+		cfg.Files.ContentColumn != "content" || cfg.Files.SizeColumn != "size" ||
+		cfg.Files.MTimeColumn != "updated_at" {
+		t.Fatalf("files config = %+v, want default file table mapping", cfg.Files)
 	}
 }

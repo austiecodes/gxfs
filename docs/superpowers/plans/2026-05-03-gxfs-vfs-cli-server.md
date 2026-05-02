@@ -398,27 +398,27 @@ git commit -m "feat: add gxfs server routes"
 - Create: `internal/store/postgres/adapter.go`
 - Create: `internal/store/postgres/query.go`
 
-- [ ] **Step 1: Write failing Postgres adapter tests**
+- [x] **Step 1: Write failing Postgres adapter tests**
 
 Tests assert `var _ store.Adapter = (*Adapter)(nil)` and verify SQL query construction for file-table mode.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/store/postgres`
 
 Expected: FAIL because package is missing.
 
-- [ ] **Step 3: Implement adapter skeleton and query builder**
+- [x] **Step 3: Implement adapter skeleton and query builder**
 
 Use `pgxpool` for connection ownership and map result rows into VFS files.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/store/postgres`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add go.mod go.sum internal/store/postgres
