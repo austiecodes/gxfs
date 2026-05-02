@@ -322,35 +322,35 @@ git commit -m "feat: add gxfs config loading"
 - Create: `cmd/gxfs/main_test.go`
 - Create: `cmd/gxfs/main.go`
 
-- [ ] **Step 1: Write failing HTTP client tests**
+- [x] **Step 1: Write failing HTTP client tests**
 
 Use `httptest.Server` to verify `LS`, `Cat`, `Grep`, `Find`, `Tree`, and `Stat` URLs and response decoding.
 
-- [ ] **Step 2: Run client tests to verify they fail**
+- [x] **Step 2: Run client tests to verify they fail**
 
 Run: `go test ./internal/client`
 
 Expected: FAIL because package is missing.
 
-- [ ] **Step 3: Implement minimal HTTP client**
+- [x] **Step 3: Implement minimal HTTP client**
 
 Implement concrete client methods that call `/v1/repos/{repo}/...`.
 
-- [ ] **Step 4: Write failing CLI output tests**
+- [x] **Step 4: Write failing CLI output tests**
 
 Test command output formatting with an injected fake client.
 
-- [ ] **Step 5: Implement Cobra CLI**
+- [x] **Step 5: Implement Cobra CLI**
 
 Implement `gxfs ls/tree/cat/grep/find/stat/config doctor` and useful `--help`.
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [x] **Step 6: Run tests to verify they pass**
 
 Run: `go test ./internal/client ./cmd/gxfs`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add go.mod go.sum internal/client cmd/gxfs
