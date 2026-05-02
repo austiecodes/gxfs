@@ -430,17 +430,17 @@ git commit -m "feat: add postgres store adapter"
 **Files:**
 - Create: `docs/agents/gxfs.md`
 
-- [ ] **Step 1: Write agent usage document**
+- [x] **Step 1: Write agent usage document**
 
 Document `gxfs --help`, `gxfs tree / -L 2`, `gxfs ls`, `gxfs cat`, `gxfs grep`, and `gxfs find`.
 
-- [ ] **Step 2: Run full verification**
+- [x] **Step 2: Run full verification**
 
 Run: `go test ./...`
 
 Expected: PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/agents
