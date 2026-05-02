@@ -254,27 +254,27 @@ git commit -m "feat: add in-memory vfs tree"
 - Create: `internal/store/memory/adapter_test.go`
 - Create: `internal/store/memory/adapter.go`
 
-- [ ] **Step 1: Write failing adapter tests**
+- [x] **Step 1: Write failing adapter tests**
 
 Tests assert `var _ store.Adapter = (*Adapter)(nil)` and verify requests delegate to the in-memory tree.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/store/memory`
 
 Expected: FAIL because package is missing.
 
-- [ ] **Step 3: Implement memory adapter**
+- [x] **Step 3: Implement memory adapter**
 
 Implement `Adapter` as a small concrete struct containing a `*vfs.Tree`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/store/memory`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/store/memory
