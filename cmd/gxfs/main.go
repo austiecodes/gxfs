@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -180,20 +182,49 @@ func argPath(args []string, fallback string) string {
 }
 
 func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		cmd := newRootCommand(nil, "")
+		cmd.SetArgs(args)
+		cmd.SetOut(stdout)
+		cmd.SetErr(stderr)
+		if err := cmd.Execute(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
 	path := os.Getenv("GXFS_CONFIG")
 	if path == "" {
 		path = "gxfs.toml"
 	}
 	cfg, err := config.LoadCLI(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
 
 	cmd := newRootCommand(client.New(cfg.Server.Addr), cfg.Project)
+	cmd.SetArgs(args)
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
 	cmd.SetContext(context.Background())
 	if err := cmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
+	return 0
+}
+
+func wantsHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "help" || arg == "--help" || arg == "-h" || strings.HasSuffix(arg, " --help") {
+			return true
+		}
+	}
+	return false
 }

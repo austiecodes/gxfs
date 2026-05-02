@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"gxfs/internal/store"
@@ -81,5 +82,19 @@ func TestGrepOutputAndRegexFlag(t *testing.T) {
 	}
 	if !client.grepReq.Regex || client.grepReq.Pattern != "type Adapter" || client.grepReq.Path != "/go" {
 		t.Fatalf("grep request = %+v, want regex request", client.grepReq)
+	}
+}
+
+func TestRunHelpDoesNotRequireConfig(t *testing.T) {
+	t.Setenv("GXFS_CONFIG", "/path/that/does/not/exist")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--help"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(--help) code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "GXFS gives agents Unix-like commands") {
+		t.Fatalf("help output = %q, want GXFS help", stdout.String())
 	}
 }
