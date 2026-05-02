@@ -364,27 +364,27 @@ git commit -m "feat: add gxfs cli client"
 - Create: `internal/server/server.go`
 - Create: `cmd/gxfs-server/main.go`
 
-- [ ] **Step 1: Write failing server route tests**
+- [x] **Step 1: Write failing server route tests**
 
 Use a fake `store.Adapter` and assert each route builds the correct request.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/server`
 
 Expected: FAIL because package is missing.
 
-- [ ] **Step 3: Implement server routing**
+- [x] **Step 3: Implement server routing**
 
 Use `go-zero` for the service entrypoint and keep route handlers thin.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/server ./cmd/gxfs-server`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add go.mod go.sum internal/server cmd/gxfs-server
