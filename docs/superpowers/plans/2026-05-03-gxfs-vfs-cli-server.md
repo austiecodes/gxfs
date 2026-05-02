@@ -38,7 +38,7 @@
 - Create: `internal/store/store_test.go`
 - Create: `internal/store/store.go`
 
-- [ ] **Step 1: Write the failing capability-interface test**
+- [x] **Step 1: Write the failing capability-interface test**
 
 ```go
 package store_test
@@ -81,13 +81,13 @@ func TestCapabilityRequestTypesCarryRepoAndPath(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `go test ./internal/store`
 
 Expected: FAIL because `gxfs/internal/store` does not exist.
 
-- [ ] **Step 3: Add minimal module and store interface implementation**
+- [x] **Step 3: Add minimal module and store interface implementation**
 
 Create `go.mod`:
 
@@ -202,13 +202,13 @@ type Adapter interface {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `go test ./internal/store`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add go.mod internal/store
