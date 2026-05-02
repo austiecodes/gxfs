@@ -287,27 +287,27 @@ git commit -m "feat: add memory store adapter"
 - Create: `internal/config/config_test.go`
 - Create: `internal/config/config.go`
 
-- [ ] **Step 1: Write failing tests for CLI and server config**
+- [x] **Step 1: Write failing tests for CLI and server config**
 
 Tests verify CLI config rejects backend credentials, server config accepts backend credentials, and environment variables expand.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/config`
 
 Expected: FAIL because package is missing.
 
-- [ ] **Step 3: Implement config loading**
+- [x] **Step 3: Implement config loading**
 
 Use a TOML parser. Keep CLI config and server config as separate concrete structs.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./internal/config`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add go.mod go.sum internal/config
