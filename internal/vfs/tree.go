@@ -77,34 +77,134 @@ func New(files []File) (*Tree, error) {
 	return tree, nil
 }
 
-func (t *Tree) LS(p string) ([]Node, error) {
+type LSOptions struct {
+	Sort      string
+	Reverse   bool
+	Recursive bool
+	All       bool
+}
+
+func (t *Tree) LS(p string, opts LSOptions) ([]Node, error) {
 	node, err := t.mustDir(p)
 	if err != nil {
 		return nil, err
 	}
 
-	paths := t.children[node.Path]
-	nodes := make([]Node, 0, len(paths))
-	for _, child := range paths {
-		nodes = append(nodes, t.nodes[child])
+	var nodes []Node
+	if opts.Recursive {
+		nodes = t.collectRecursive(node.Path, opts.All)
+	} else {
+		paths := t.children[node.Path]
+		nodes = make([]Node, 0, len(paths))
+		for _, child := range paths {
+			nodes = append(nodes, t.nodes[child])
+		}
 	}
+
+	if !opts.All {
+		nodes = filterHidden(nodes)
+	}
+
+	sortNodes(nodes, opts.Sort, opts.Reverse)
 	return nodes, nil
 }
 
-func (t *Tree) Tree(p string, depth int) (string, error) {
+func (t *Tree) collectRecursive(dir string, showHidden bool) []Node {
+	var nodes []Node
+	for _, child := range t.children[dir] {
+		node := t.nodes[child]
+		if !showHidden && isHidden(node.Name) {
+			continue
+		}
+		nodes = append(nodes, node)
+		if node.Kind == KindDir {
+			nodes = append(nodes, t.collectRecursive(node.Path, showHidden)...)
+		}
+	}
+	return nodes
+}
+
+func sortNodes(nodes []Node, sortField string, reverse bool) {
+	sort.SliceStable(nodes, func(i, j int) bool {
+		less, equal := compareField(nodes[i], nodes[j], sortField)
+		if equal {
+			return false
+		}
+		if reverse {
+			return !less
+		}
+		return less
+	})
+}
+
+func SortNodesCopy(nodes []Node, sortField string, reverse bool) []Node {
+	cp := make([]Node, len(nodes))
+	copy(cp, nodes)
+	sortNodes(cp, sortField, reverse)
+	return cp
+}
+
+func compareField(a, b Node, field string) (less, equal bool) {
+	switch field {
+	case "size":
+		if a.Size == b.Size {
+			return false, true
+		}
+		return a.Size < b.Size, false
+	case "mtime":
+		if a.ModTime == b.ModTime {
+			return false, true
+		}
+		return a.ModTime < b.ModTime, false
+	default:
+		if a.Name == b.Name {
+			return false, true
+		}
+		return a.Name < b.Name, false
+	}
+}
+
+func isHidden(name string) bool {
+	return strings.HasPrefix(name, ".")
+}
+
+func filterHidden(nodes []Node) []Node {
+	filtered := make([]Node, 0, len(nodes))
+	for _, n := range nodes {
+		if !isHidden(n.Name) {
+			filtered = append(filtered, n)
+		}
+	}
+	return filtered
+}
+
+type TreeOptions struct {
+	All       bool
+	DirsOnly  bool
+	FullPath  bool
+	ShowSize  bool
+	Sort      string
+	DirsFirst bool
+}
+
+func (t *Tree) Tree(p string, depth int, opts TreeOptions) (string, error) {
 	node, err := t.mustDir(p)
 	if err != nil {
 		return "", err
 	}
 
 	var out strings.Builder
-	out.WriteString(node.Name)
+	if opts.FullPath {
+		out.WriteString(node.Path)
+	} else {
+		out.WriteString(node.Name)
+	}
 	if node.Path == "/" {
 		out.Reset()
 		out.WriteString("/")
 	}
 	out.WriteByte('\n')
-	t.writeTree(&out, node.Path, 1, depth)
+	t.writeTree(&out, node.Path, 1, depth, opts)
 	return out.String(), nil
 }
 
@@ -120,51 +220,134 @@ func (t *Tree) Cat(p string) (string, error) {
 	return t.content[filePath], nil
 }
 
-func (t *Tree) Grep(root, pattern string, regex bool) ([]Match, error) {
+type GrepOptions struct {
+	CaseInsensitive bool
+	Invert          bool
+	WholeWord       bool
+	WholeLine       bool
+	ContextBefore   int
+	ContextAfter    int
+	All             bool
+	Include         string
+	Exclude         string
+}
+
+func (t *Tree) Grep(root, pattern string, regex bool, opts GrepOptions) ([]Match, error) {
 	rootPath := cleanPath(root)
 	if _, err := t.mustDir(rootPath); err != nil {
 		return nil, err
 	}
 
+	effectivePattern := pattern
+	if regex {
+		if opts.CaseInsensitive {
+			effectivePattern = "(?i)" + effectivePattern
+		}
+		if opts.WholeWord {
+			effectivePattern = `\b` + effectivePattern + `\b`
+		}
+		if opts.WholeLine {
+			effectivePattern = `^` + effectivePattern + `$`
+		}
+	}
+
 	var re *regexp.Regexp
 	if regex {
-		compiled, err := regexp.Compile(pattern)
+		compiled, err := regexp.Compile(effectivePattern)
 		if err != nil {
 			return nil, fmt.Errorf("invalid regex: %w", err)
 		}
 		re = compiled
 	}
 
+	paths := t.filePathsUnder(rootPath)
+	if !opts.All {
+		paths = filterHiddenPaths(paths, rootPath)
+	}
+	paths = filterByGlob(paths, opts.Include, opts.Exclude)
+
 	var matches []Match
-	for _, filePath := range t.filePathsUnder(rootPath) {
+	for _, filePath := range paths {
 		lines := strings.Split(t.content[filePath], "\n")
 		for i, line := range lines {
-			if lineMatches(line, pattern, re) {
-				matches = append(matches, Match{
+			matched := grepLineMatches(line, pattern, re, opts)
+			if matched {
+				m := Match{
 					Path: filePath,
 					Line: i + 1,
 					Text: line,
-				})
+				}
+				if opts.ContextBefore > 0 {
+					start := max(0, i-opts.ContextBefore)
+					m.Before = copyLines(lines[start:i])
+				}
+				if opts.ContextAfter > 0 {
+					end := min(len(lines), i+1+opts.ContextAfter)
+					m.After = copyLines(lines[i+1 : end])
+				}
+				matches = append(matches, m)
 			}
 		}
 	}
 	return matches, nil
 }
 
-func (t *Tree) Find(root, name string) ([]Node, error) {
+type FindOptions struct {
+	Type     string
+	MaxDepth int
+	MinDepth int
+	All      bool
+	IName    string
+}
+
+func (t *Tree) Find(root, name string, opts FindOptions) ([]Node, error) {
 	rootPath := cleanPath(root)
 	if _, err := t.mustDir(rootPath); err != nil {
 		return nil, err
 	}
 
+	candidates := t.allNodesUnder(rootPath)
+
 	var nodes []Node
-	for _, filePath := range t.filePathsUnder(rootPath) {
-		node := t.nodes[filePath]
-		ok, err := path.Match(name, node.Name)
-		if err != nil {
-			return nil, fmt.Errorf("invalid name pattern: %w", err)
+	for _, node := range candidates {
+		if !opts.All && pathHasHiddenComponent(node.Path, rootPath) {
+			continue
 		}
-		if ok {
+
+		switch opts.Type {
+		case "dir":
+			if node.Kind != KindDir {
+				continue
+			}
+		case "file", "":
+			if node.Kind != KindFile {
+				continue
+			}
+		}
+
+		depth := relativeDepth(rootPath, node.Path)
+		if opts.MaxDepth > 0 && depth > opts.MaxDepth {
+			continue
+		}
+		if opts.MinDepth > 0 && depth < opts.MinDepth {
+			continue
+		}
+
+		matched := false
+		if opts.IName != "" {
+			ok, err := path.Match(strings.ToLower(opts.IName), strings.ToLower(node.Name))
+			if err != nil {
+				return nil, fmt.Errorf("invalid iname pattern: %w", err)
+			}
+			matched = ok
+		} else {
+			ok, err := path.Match(name, node.Name)
+			if err != nil {
+				return nil, fmt.Errorf("invalid name pattern: %w", err)
+			}
+			matched = ok
+		}
+		if matched {
 			nodes = append(nodes, node)
 		}
 	}
@@ -208,21 +391,73 @@ func (t *Tree) mustDir(p string) (Node, error) {
 	return node, nil
 }
 
-func (t *Tree) writeTree(out *strings.Builder, dir string, level, depth int) {
+func (t *Tree) writeTree(out *strings.Builder, dir string, level, depth int, opts TreeOptions) {
 	if depth >= 0 && level > depth {
 		return
 	}
 
+	children := make([]Node, 0, len(t.children[dir]))
 	for _, child := range t.children[dir] {
-		node := t.nodes[child]
+		children = append(children, t.nodes[child])
+	}
+
+	if !opts.All {
+		filtered := make([]Node, 0, len(children))
+		for _, n := range children {
+			if !isHidden(n.Name) {
+				filtered = append(filtered, n)
+			}
+		}
+		children = filtered
+	}
+
+	if opts.DirsOnly {
+		filtered := make([]Node, 0, len(children))
+		for _, n := range children {
+			if n.Kind == KindDir {
+				filtered = append(filtered, n)
+			}
+		}
+		children = filtered
+	}
+
+	sort.SliceStable(children, func(i, j int) bool {
+		less, equal := compareField(children[i], children[j], opts.Sort)
+		if equal {
+			return false
+		}
+		return less
+	})
+
+	if opts.DirsFirst {
+		dirs := make([]Node, 0)
+		files := make([]Node, 0)
+		for _, n := range children {
+			if n.Kind == KindDir {
+				dirs = append(dirs, n)
+			} else {
+				files = append(files, n)
+			}
+		}
+		children = append(dirs, files...)
+	}
+
+	for _, node := range children {
 		out.WriteString(strings.Repeat("  ", level))
-		out.WriteString(node.Name)
+		if opts.FullPath {
+			out.WriteString(node.Path)
+		} else {
+			out.WriteString(node.Name)
+		}
 		if node.Kind == KindDir {
 			out.WriteByte('/')
 		}
+		if opts.ShowSize && node.Kind == KindFile {
+			fmt.Fprintf(out, " [%d]", node.Size)
+		}
 		out.WriteByte('\n')
 		if node.Kind == KindDir {
-			t.writeTree(out, node.Path, level+1, depth)
+			t.writeTree(out, node.Path, level+1, depth, opts)
 		}
 	}
 }
@@ -237,6 +472,35 @@ func (t *Tree) filePathsUnder(root string) []string {
 	}
 	sort.Strings(paths)
 	return paths
+}
+
+func (t *Tree) allNodesUnder(root string) []Node {
+	var nodes []Node
+	for nodePath, node := range t.nodes {
+		if node.Path == root {
+			continue
+		}
+		if under(root, nodePath) {
+			nodes = append(nodes, node)
+		}
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].Path < nodes[j].Path
+	})
+	return nodes
+}
+
+func relativeDepth(root, p string) int {
+	rel := p
+	if root == "/" {
+		rel = strings.TrimPrefix(p, "/")
+	} else {
+		rel = strings.TrimPrefix(p, root+"/")
+	}
+	if rel == "" {
+		return 0
+	}
+	return strings.Count(rel, "/") + 1
 }
 
 func cleanPath(p string) string {
@@ -273,9 +537,144 @@ func under(root, p string) bool {
 	return p == root || strings.HasPrefix(p, root+"/")
 }
 
-func lineMatches(line, pattern string, re *regexp.Regexp) bool {
+func grepLineMatches(line, pattern string, re *regexp.Regexp, opts GrepOptions) bool {
+	var matched bool
+	switch {
+	case opts.WholeLine:
+		matched = wholeLineMatch(line, pattern, re, opts.CaseInsensitive)
+	case opts.WholeWord:
+		matched = wholeWordMatch(line, pattern, re, opts.CaseInsensitive)
+	default:
+		matched = grepBasicMatch(line, pattern, re, opts.CaseInsensitive)
+	}
+	if opts.Invert {
+		return !matched
+	}
+	return matched
+}
+
+func grepBasicMatch(line, pattern string, re *regexp.Regexp, caseInsensitive bool) bool {
 	if re != nil {
 		return re.MatchString(line)
 	}
+	if caseInsensitive {
+		return strings.Contains(strings.ToLower(line), strings.ToLower(pattern))
+	}
 	return strings.Contains(line, pattern)
+}
+
+func wholeLineMatch(line, pattern string, re *regexp.Regexp, caseInsensitive bool) bool {
+	if re != nil {
+		return re.MatchString(line)
+	}
+	if caseInsensitive {
+		return strings.EqualFold(line, pattern)
+	}
+	return line == pattern
+}
+
+func wholeWordMatch(line, pattern string, re *regexp.Regexp, caseInsensitive bool) bool {
+	if re != nil {
+		return re.MatchString(line)
+	}
+	if caseInsensitive {
+		return hasWholeWordSubstring(strings.ToLower(line), strings.ToLower(pattern))
+	}
+	return hasWholeWordSubstring(line, pattern)
+}
+
+func hasWholeWordSubstring(line, pattern string) bool {
+	idx := strings.Index(line, pattern)
+	for idx != -1 {
+		if isWordBoundary(line, idx) && isWordBoundary(line, idx+len(pattern)) {
+			return true
+		}
+		next := strings.Index(line[idx+1:], pattern)
+		if next == -1 {
+			return false
+		}
+		idx = idx + 1 + next
+	}
+	return false
+}
+
+func isWordBoundary(s string, pos int) bool {
+	if pos <= 0 || pos >= len(s) {
+		return true
+	}
+	return !isWordChar(s[pos-1]) || !isWordChar(s[pos])
+}
+
+func isWordChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+func filterHiddenPaths(paths []string, root string) []string {
+	var result []string
+	for _, p := range paths {
+		if !pathHasHiddenComponent(p, root) {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+func pathHasHiddenComponent(p, root string) bool {
+	rel := p
+	if root != "/" && root != "" {
+		rel = strings.TrimPrefix(p, root+"/")
+	} else if root == "/" {
+		rel = strings.TrimPrefix(p, "/")
+	}
+	for _, part := range strings.Split(rel, "/") {
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+func filterByGlob(paths []string, include, exclude string) []string {
+	if include == "" && exclude == "" {
+		return paths
+	}
+	var result []string
+	for _, p := range paths {
+		name := path.Base(p)
+		if include != "" {
+			if ok, _ := path.Match(include, name); !ok {
+				continue
+			}
+		}
+		if exclude != "" {
+			if ok, _ := path.Match(exclude, name); ok {
+				continue
+			}
+		}
+		result = append(result, p)
+	}
+	return result
+}
+
+func copyLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	cp := make([]string, len(lines))
+	copy(cp, lines)
+	return cp
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

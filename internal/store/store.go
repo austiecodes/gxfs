@@ -12,14 +12,20 @@ type Node struct {
 }
 
 type Match struct {
-	Path string `json:"path"`
-	Line int    `json:"line"`
-	Text string `json:"text"`
+	Path   string   `json:"path"`
+	Line   int      `json:"line"`
+	Text   string   `json:"text"`
+	Before []string `json:"before,omitempty"`
+	After  []string `json:"after,omitempty"`
 }
 
 type LSRequest struct {
-	Repo string
-	Path string
+	Repo      string
+	Path      string
+	Sort      string // "name" (default), "size", "mtime"
+	Reverse   bool
+	Recursive bool
+	All       bool // show hidden files (names starting with .)
 }
 
 type LSResponse struct {
@@ -27,9 +33,15 @@ type LSResponse struct {
 }
 
 type TreeRequest struct {
-	Repo  string
-	Path  string
-	Depth int
+	Repo      string
+	Path      string
+	Depth     int
+	All       bool
+	DirsOnly  bool
+	FullPath  bool
+	ShowSize  bool
+	Sort      string // "name" (default), "size", "mtime"
+	DirsFirst bool
 }
 
 type TreeResponse struct {
@@ -48,10 +60,19 @@ type CatResponse struct {
 }
 
 type GrepRequest struct {
-	Repo    string
-	Path    string
-	Pattern string
-	Regex   bool
+	Repo            string
+	Path            string
+	Pattern         string
+	Regex           bool
+	CaseInsensitive bool
+	Invert          bool
+	WholeWord       bool
+	WholeLine       bool
+	ContextBefore   int
+	ContextAfter    int
+	All             bool
+	Include         string
+	Exclude         string
 }
 
 type GrepResponse struct {
@@ -59,9 +80,14 @@ type GrepResponse struct {
 }
 
 type FindRequest struct {
-	Repo string
-	Path string
-	Name string
+	Repo     string
+	Path     string
+	Name     string
+	Type     string // "file" or "" = files only, "dir" = dirs only
+	MaxDepth int
+	MinDepth int
+	All      bool // include hidden files
+	IName    string // case-insensitive name glob (empty = use Name only)
 }
 
 type FindResponse struct {

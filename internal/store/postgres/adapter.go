@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -52,7 +53,13 @@ func (a *Adapter) LS(ctx context.Context, req store.LSRequest) (*store.LSRespons
 	if err != nil {
 		return nil, err
 	}
-	nodes, err := tree.LS(req.Path)
+	opts := vfs.LSOptions{
+		Sort:      req.Sort,
+		Reverse:   req.Reverse,
+		Recursive: req.Recursive,
+		All:       req.All,
+	}
+	nodes, err := tree.LS(req.Path, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +75,15 @@ func (a *Adapter) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeR
 	if err != nil {
 		return nil, err
 	}
-	text, err := tree.Tree(req.Path, req.Depth)
+	opts := vfs.TreeOptions{
+		All:       req.All,
+		DirsOnly:  req.DirsOnly,
+		FullPath:  req.FullPath,
+		ShowSize:  req.ShowSize,
+		Sort:      req.Sort,
+		DirsFirst: req.DirsFirst,
+	}
+	text, err := tree.Tree(req.Path, req.Depth, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +107,18 @@ func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepR
 	if err != nil {
 		return nil, err
 	}
-	matches, err := tree.Grep(req.Path, req.Pattern, req.Regex)
+	opts := vfs.GrepOptions{
+		CaseInsensitive: req.CaseInsensitive,
+		Invert:          req.Invert,
+		WholeWord:       req.WholeWord,
+		WholeLine:       req.WholeLine,
+		ContextBefore:   req.ContextBefore,
+		ContextAfter:    req.ContextAfter,
+		All:             req.All,
+		Include:         req.Include,
+		Exclude:         req.Exclude,
+	}
+	matches, err := tree.Grep(req.Path, req.Pattern, req.Regex, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +130,14 @@ func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindR
 	if err != nil {
 		return nil, err
 	}
-	nodes, err := tree.Find(req.Path, req.Name)
+	opts := vfs.FindOptions{
+		Type:     req.Type,
+		MaxDepth: req.MaxDepth,
+		MinDepth: req.MinDepth,
+		All:      req.All,
+		IName:    req.IName,
+	}
+	nodes, err := tree.Find(req.Path, req.Name, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -156,9 +189,11 @@ func (a *Adapter) loadTree(ctx context.Context) (*vfs.Tree, error) {
 	var files []vfs.File
 	for rows.Next() {
 		var file vfs.File
-		if err := rows.Scan(&file.Path, &file.Content, &file.Size, &file.ModTime); err != nil {
+		var mtime time.Time
+		if err := rows.Scan(&file.Path, &file.Content, &file.Size, &mtime); err != nil {
 			return nil, fmt.Errorf("scan postgres file: %w", err)
 		}
+		file.ModTime = mtime.UTC().Format(time.RFC3339)
 		files = append(files, file)
 	}
 	if err := rows.Err(); err != nil {

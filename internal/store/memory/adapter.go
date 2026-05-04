@@ -18,7 +18,13 @@ func New(tree *vfs.Tree) *Adapter {
 }
 
 func (a *Adapter) LS(_ context.Context, req store.LSRequest) (*store.LSResponse, error) {
-	nodes, err := a.tree.LS(req.Path)
+	opts := vfs.LSOptions{
+		Sort:      req.Sort,
+		Reverse:   req.Reverse,
+		Recursive: req.Recursive,
+		All:       req.All,
+	}
+	nodes, err := a.tree.LS(req.Path, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +36,15 @@ func (a *Adapter) Tree(_ context.Context, req store.TreeRequest) (*store.TreeRes
 	if err != nil {
 		return nil, err
 	}
-	text, err := a.tree.Tree(req.Path, req.Depth)
+	opts := vfs.TreeOptions{
+		All:       req.All,
+		DirsOnly:  req.DirsOnly,
+		FullPath:  req.FullPath,
+		ShowSize:  req.ShowSize,
+		Sort:      req.Sort,
+		DirsFirst: req.DirsFirst,
+	}
+	text, err := a.tree.Tree(req.Path, req.Depth, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +60,18 @@ func (a *Adapter) Cat(_ context.Context, req store.CatRequest) (*store.CatRespon
 }
 
 func (a *Adapter) Grep(_ context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
-	matches, err := a.tree.Grep(req.Path, req.Pattern, req.Regex)
+	opts := vfs.GrepOptions{
+		CaseInsensitive: req.CaseInsensitive,
+		Invert:          req.Invert,
+		WholeWord:       req.WholeWord,
+		WholeLine:       req.WholeLine,
+		ContextBefore:   req.ContextBefore,
+		ContextAfter:    req.ContextAfter,
+		All:             req.All,
+		Include:         req.Include,
+		Exclude:         req.Exclude,
+	}
+	matches, err := a.tree.Grep(req.Path, req.Pattern, req.Regex, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +79,14 @@ func (a *Adapter) Grep(_ context.Context, req store.GrepRequest) (*store.GrepRes
 }
 
 func (a *Adapter) Find(_ context.Context, req store.FindRequest) (*store.FindResponse, error) {
-	nodes, err := a.tree.Find(req.Path, req.Name)
+	opts := vfs.FindOptions{
+		Type:     req.Type,
+		MaxDepth: req.MaxDepth,
+		MinDepth: req.MinDepth,
+		All:      req.All,
+		IName:    req.IName,
+	}
+	nodes, err := a.tree.Find(req.Path, req.Name, opts)
 	if err != nil {
 		return nil, err
 	}
