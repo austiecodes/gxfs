@@ -44,13 +44,30 @@ func (h *handler) dispatch(r *http.Request, repo, op string) (any, error) {
 	q := r.URL.Query()
 	switch op {
 	case "ls":
-		return h.adapter.LS(r.Context(), store.LSRequest{Repo: repo, Path: queryPath(q)})
+		return h.adapter.LS(r.Context(), store.LSRequest{
+			Repo:      repo,
+			Path:      queryPath(q),
+			Sort:      q.Get("sort"),
+			Reverse:   queryBoolOr(q, "reverse"),
+			Recursive: queryBoolOr(q, "recursive"),
+			All:       queryBoolOr(q, "all"),
+		})
 	case "tree":
 		depth, err := queryInt(q, "depth")
 		if err != nil {
 			return nil, err
 		}
-		return h.adapter.Tree(r.Context(), store.TreeRequest{Repo: repo, Path: queryPath(q), Depth: depth})
+		return h.adapter.Tree(r.Context(), store.TreeRequest{
+			Repo:      repo,
+			Path:      queryPath(q),
+			Depth:     depth,
+			All:       queryBoolOr(q, "all"),
+			DirsOnly:  queryBoolOr(q, "dirs_only"),
+			FullPath:  queryBoolOr(q, "full_path"),
+			ShowSize:  queryBoolOr(q, "show_size"),
+			Sort:      q.Get("sort"),
+			DirsFirst: queryBoolOr(q, "dirs_first"),
+		})
 	case "cat":
 		return h.adapter.Cat(r.Context(), store.CatRequest{Repo: repo, Path: queryPath(q)})
 	case "grep":
@@ -58,12 +75,35 @@ func (h *handler) dispatch(r *http.Request, repo, op string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		ctxBefore, _ := queryInt(q, "context_before")
+		ctxAfter, _ := queryInt(q, "context_after")
 		return h.adapter.Grep(r.Context(), store.GrepRequest{
-			Repo: repo, Path: queryPath(q), Pattern: q.Get("pattern"), Regex: regex,
+			Repo:            repo,
+			Path:            queryPath(q),
+			Pattern:         q.Get("pattern"),
+			Regex:           regex,
+			CaseInsensitive: queryBoolOr(q, "case_insensitive"),
+			Invert:          queryBoolOr(q, "invert"),
+			WholeWord:       queryBoolOr(q, "whole_word"),
+			WholeLine:       queryBoolOr(q, "whole_line"),
+			ContextBefore:   ctxBefore,
+			ContextAfter:    ctxAfter,
+			All:             queryBoolOr(q, "all"),
+			Include:         q.Get("include"),
+			Exclude:         q.Get("exclude"),
 		})
 	case "find":
+		maxDepth, _ := queryInt(q, "maxdepth")
+		minDepth, _ := queryInt(q, "mindepth")
 		return h.adapter.Find(r.Context(), store.FindRequest{
-			Repo: repo, Path: queryPath(q), Name: q.Get("name"),
+			Repo:     repo,
+			Path:     queryPath(q),
+			Name:     q.Get("name"),
+			Type:     q.Get("type"),
+			MaxDepth: maxDepth,
+			MinDepth: minDepth,
+			All:      queryBoolOr(q, "all"),
+			IName:    q.Get("iname"),
 		})
 	case "stat":
 		return h.adapter.Stat(r.Context(), store.StatRequest{Repo: repo, Path: queryPath(q)})
@@ -117,6 +157,11 @@ func queryBool(q url.Values, key string) (bool, error) {
 		return false, fmt.Errorf("invalid %s: %w", key, err)
 	}
 	return value, nil
+}
+
+func queryBoolOr(q url.Values, key string) bool {
+	v, _ := queryBool(q, key)
+	return v
 }
 
 func writeJSON(w http.ResponseWriter, resp any) {

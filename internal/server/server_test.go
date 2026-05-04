@@ -13,6 +13,8 @@ import (
 type fakeAdapter struct {
 	lsReq   store.LSRequest
 	grepReq store.GrepRequest
+	findReq store.FindRequest
+	treeReq store.TreeRequest
 }
 
 func (f *fakeAdapter) LS(_ context.Context, req store.LSRequest) (*store.LSResponse, error) {
@@ -20,7 +22,8 @@ func (f *fakeAdapter) LS(_ context.Context, req store.LSRequest) (*store.LSRespo
 	return &store.LSResponse{Nodes: []store.Node{{Path: "/docs", Name: "docs", Kind: "dir"}}}, nil
 }
 
-func (f *fakeAdapter) Tree(context.Context, store.TreeRequest) (*store.TreeResponse, error) {
+func (f *fakeAdapter) Tree(_ context.Context, req store.TreeRequest) (*store.TreeResponse, error) {
+	f.treeReq = req
 	return &store.TreeResponse{Text: "/\n"}, nil
 }
 
@@ -33,7 +36,8 @@ func (f *fakeAdapter) Grep(_ context.Context, req store.GrepRequest) (*store.Gre
 	return &store.GrepResponse{Matches: []store.Match{{Path: "/go/store.go", Line: 12, Text: "type Adapter interface {"}}}, nil
 }
 
-func (f *fakeAdapter) Find(context.Context, store.FindRequest) (*store.FindResponse, error) {
+func (f *fakeAdapter) Find(_ context.Context, req store.FindRequest) (*store.FindResponse, error) {
+	f.findReq = req
 	return &store.FindResponse{Nodes: []store.Node{{Path: "/go/store.go", Name: "store.go", Kind: "file"}}}, nil
 }
 
@@ -63,6 +67,74 @@ func TestHandlerRoutesLS(t *testing.T) {
 	}
 }
 
+func TestHandlerRoutesLSParams(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want store.LSRequest
+	}{
+		{
+			name: "defaults",
+			url:  "/v1/repos/test/ls?path=/docs",
+			want: store.LSRequest{Repo: "test", Path: "/docs"},
+		},
+		{
+			name: "sort",
+			url:  "/v1/repos/test/ls?path=/docs&sort=size",
+			want: store.LSRequest{Repo: "test", Path: "/docs", Sort: "size"},
+		},
+		{
+			name: "reverse",
+			url:  "/v1/repos/test/ls?path=/docs&reverse=true",
+			want: store.LSRequest{Repo: "test", Path: "/docs", Reverse: true},
+		},
+		{
+			name: "recursive",
+			url:  "/v1/repos/test/ls?path=/docs&recursive=true",
+			want: store.LSRequest{Repo: "test", Path: "/docs", Recursive: true},
+		},
+		{
+			name: "all",
+			url:  "/v1/repos/test/ls?path=/docs&all=true",
+			want: store.LSRequest{Repo: "test", Path: "/docs", All: true},
+		},
+		{
+			name: "invalid reverse treated as false",
+			url:  "/v1/repos/test/ls?path=/docs&reverse=garbage",
+			want: store.LSRequest{Repo: "test", Path: "/docs"},
+			},
+		{
+			name: "invalid recursive treated as false",
+			url:  "/v1/repos/test/ls?path=/docs&recursive=nope",
+			want: store.LSRequest{Repo: "test", Path: "/docs"},
+			},
+		{
+			name: "invalid all treated as false",
+			url:  "/v1/repos/test/ls?path=/docs&all=bogus",
+			want: store.LSRequest{Repo: "test", Path: "/docs"},
+			},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := &fakeAdapter{}
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+
+			NewHandler(adapter).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			got := adapter.lsReq
+			if got.Repo != tt.want.Repo || got.Path != tt.want.Path ||
+				got.Sort != tt.want.Sort || got.Reverse != tt.want.Reverse ||
+				got.Recursive != tt.want.Recursive || got.All != tt.want.All {
+				t.Fatalf("ls req = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHandlerRoutesGrepRegex(t *testing.T) {
 	adapter := &fakeAdapter{}
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/grep?path=/go&pattern=Adapter&regex=true", nil)
@@ -79,10 +151,261 @@ func TestHandlerRoutesGrepRegex(t *testing.T) {
 	}
 }
 
+func TestHandlerRoutesGrepParams(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want store.GrepRequest
+	}{
+		{
+			name: "defaults",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello"},
+		},
+		{
+			name: "case_insensitive",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&case_insensitive=true",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", CaseInsensitive: true},
+		},
+		{
+			name: "invert",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&invert=true",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", Invert: true},
+		},
+		{
+			name: "whole_word",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&whole_word=true",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", WholeWord: true},
+		},
+		{
+			name: "whole_line",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&whole_line=true",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", WholeLine: true},
+		},
+		{
+			name: "context_before",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&context_before=3",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", ContextBefore: 3},
+		},
+		{
+			name: "context_after",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&context_after=5",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", ContextAfter: 5},
+		},
+		{
+			name: "all",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&all=true",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", All: true},
+		},
+		{
+			name: "include",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&include=*.go",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", Include: "*.go"},
+		},
+		{
+			name: "exclude",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&exclude=*.md",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", Exclude: "*.md"},
+		},
+		{
+			name: "invalid bool treated as false",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&case_insensitive=garbage&invert=nope",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello"},
+		},
+		{
+			name: "invalid int treated as zero",
+			url:  "/v1/repos/test/grep?path=/src&pattern=hello&context_before=abc&context_after=xyz",
+			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := &fakeAdapter{}
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+
+			NewHandler(adapter).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			got := adapter.grepReq
+			if got != tt.want {
+				t.Fatalf("grep req = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHandlerHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
 	NewHandler(&fakeAdapter{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
 		t.Fatalf("healthz = %d %q, want ok", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandlerRoutesFindParams(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want store.FindRequest
+	}{
+		{
+			name: "defaults",
+			url:  "/v1/repos/test/find?path=/src",
+			want: store.FindRequest{Repo: "test", Path: "/src"},
+		},
+		{
+			name: "name",
+			url:  "/v1/repos/test/find?path=/src&name=*.go",
+			want: store.FindRequest{Repo: "test", Path: "/src", Name: "*.go"},
+		},
+		{
+			name: "type",
+			url:  "/v1/repos/test/find?path=/src&type=dir",
+			want: store.FindRequest{Repo: "test", Path: "/src", Type: "dir"},
+		},
+		{
+			name: "maxdepth",
+			url:  "/v1/repos/test/find?path=/src&maxdepth=3",
+			want: store.FindRequest{Repo: "test", Path: "/src", MaxDepth: 3},
+		},
+		{
+			name: "mindepth",
+			url:  "/v1/repos/test/find?path=/src&mindepth=2",
+			want: store.FindRequest{Repo: "test", Path: "/src", MinDepth: 2},
+		},
+		{
+			name: "all",
+			url:  "/v1/repos/test/find?path=/src&all=true",
+			want: store.FindRequest{Repo: "test", Path: "/src", All: true},
+		},
+		{
+			name: "iname",
+			url:  "/v1/repos/test/find?path=/src&iname=README",
+			want: store.FindRequest{Repo: "test", Path: "/src", IName: "README"},
+		},
+		{
+			name: "all params combined",
+			url:  "/v1/repos/test/find?path=/src&name=*.go&type=file&maxdepth=5&mindepth=1&all=true&iname=readme",
+			want: store.FindRequest{Repo: "test", Path: "/src", Name: "*.go", Type: "file", MaxDepth: 5, MinDepth: 1, All: true, IName: "readme"},
+		},
+		{
+			name: "invalid bool treated as false",
+			url:  "/v1/repos/test/find?path=/src&all=garbage",
+			want: store.FindRequest{Repo: "test", Path: "/src"},
+		},
+		{
+			name: "invalid int treated as zero",
+			url:  "/v1/repos/test/find?path=/src&maxdepth=abc&mindepth=xyz",
+			want: store.FindRequest{Repo: "test", Path: "/src"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := &fakeAdapter{}
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+
+			NewHandler(adapter).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			got := adapter.findReq
+			if got != tt.want {
+				t.Fatalf("find req = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandlerRoutesTreeParams(t *testing.T) {
+	tests := []struct {
+		name        string
+		url         string
+		want        store.TreeRequest
+		expectError bool
+	}{
+		{
+			name: "defaults",
+			url:  "/v1/repos/test/tree?path=/src",
+			want: store.TreeRequest{Repo: "test", Path: "/src"},
+		},
+		{
+			name: "depth",
+			url:  "/v1/repos/test/tree?path=/src&depth=2",
+			want: store.TreeRequest{Repo: "test", Path: "/src", Depth: 2},
+		},
+		{
+			name: "all",
+			url:  "/v1/repos/test/tree?path=/src&all=true",
+			want: store.TreeRequest{Repo: "test", Path: "/src", All: true},
+		},
+		{
+			name: "dirs_only",
+			url:  "/v1/repos/test/tree?path=/src&dirs_only=true",
+			want: store.TreeRequest{Repo: "test", Path: "/src", DirsOnly: true},
+		},
+		{
+			name: "full_path",
+			url:  "/v1/repos/test/tree?path=/src&full_path=true",
+			want: store.TreeRequest{Repo: "test", Path: "/src", FullPath: true},
+		},
+		{
+			name: "show_size",
+			url:  "/v1/repos/test/tree?path=/src&show_size=true",
+			want: store.TreeRequest{Repo: "test", Path: "/src", ShowSize: true},
+		},
+		{
+			name: "sort",
+			url:  "/v1/repos/test/tree?path=/src&sort=size",
+			want: store.TreeRequest{Repo: "test", Path: "/src", Sort: "size"},
+		},
+		{
+			name: "dirs_first",
+			url:  "/v1/repos/test/tree?path=/src&dirs_first=true",
+			want: store.TreeRequest{Repo: "test", Path: "/src", DirsFirst: true},
+		},
+		{
+			name: "all params combined",
+			url:  "/v1/repos/test/tree?path=/src&depth=3&all=true&dirs_only=true&full_path=true&show_size=true&sort=mtime&dirs_first=true",
+			want: store.TreeRequest{Repo: "test", Path: "/src", Depth: 3, All: true, DirsOnly: true, FullPath: true, ShowSize: true, Sort: "mtime", DirsFirst: true},
+		},
+		{
+			name: "invalid bool treated as false",
+			url:  "/v1/repos/test/tree?path=/src&all=garbage&dirs_only=nope",
+			want: store.TreeRequest{Repo: "test", Path: "/src"},
+		},
+		{
+			name: "invalid depth returns error",
+			url:  "/v1/repos/test/tree?path=/src&depth=abc",
+			want: store.TreeRequest{}, // won't match; we check status != 200
+			expectError: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := &fakeAdapter{}
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+
+			NewHandler(adapter).ServeHTTP(rec, req)
+
+			if tt.expectError {
+				if rec.Code == http.StatusOK {
+					t.Fatal("expected error status, got 200")
+				}
+				return
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			got := adapter.treeReq
+			if got != tt.want {
+				t.Fatalf("tree req = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }

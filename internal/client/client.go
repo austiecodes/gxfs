@@ -30,6 +30,18 @@ func New(baseURL string) *Client {
 func (c *Client) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
 	var resp store.LSResponse
 	q := url.Values{"path": {req.Path}}
+	if req.Sort != "" {
+		q.Set("sort", req.Sort)
+	}
+	if req.Reverse {
+		q.Set("reverse", "true")
+	}
+	if req.Recursive {
+		q.Set("recursive", "true")
+	}
+	if req.All {
+		q.Set("all", "true")
+	}
 	if err := c.get(ctx, req.Repo, "ls", q, &resp); err != nil {
 		return nil, err
 	}
@@ -41,6 +53,24 @@ func (c *Client) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeRe
 	q := url.Values{"path": {req.Path}}
 	if req.Depth > 0 {
 		q.Set("depth", strconv.Itoa(req.Depth))
+	}
+	if req.All {
+		q.Set("all", "true")
+	}
+	if req.DirsOnly {
+		q.Set("dirs_only", "true")
+	}
+	if req.FullPath {
+		q.Set("full_path", "true")
+	}
+	if req.ShowSize {
+		q.Set("show_size", "true")
+	}
+	if req.Sort != "" {
+		q.Set("sort", req.Sort)
+	}
+	if req.DirsFirst {
+		q.Set("dirs_first", "true")
 	}
 	if err := c.get(ctx, req.Repo, "tree", q, &resp); err != nil {
 		return nil, err
@@ -66,6 +96,33 @@ func (c *Client) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepRe
 	if req.Regex {
 		q.Set("regex", "true")
 	}
+	if req.CaseInsensitive {
+		q.Set("case_insensitive", "true")
+	}
+	if req.Invert {
+		q.Set("invert", "true")
+	}
+	if req.WholeWord {
+		q.Set("whole_word", "true")
+	}
+	if req.WholeLine {
+		q.Set("whole_line", "true")
+	}
+	if req.ContextBefore > 0 {
+		q.Set("context_before", strconv.Itoa(req.ContextBefore))
+	}
+	if req.ContextAfter > 0 {
+		q.Set("context_after", strconv.Itoa(req.ContextAfter))
+	}
+	if req.All {
+		q.Set("all", "true")
+	}
+	if req.Include != "" {
+		q.Set("include", req.Include)
+	}
+	if req.Exclude != "" {
+		q.Set("exclude", req.Exclude)
+	}
 	if err := c.get(ctx, req.Repo, "grep", q, &resp); err != nil {
 		return nil, err
 	}
@@ -74,9 +131,24 @@ func (c *Client) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepRe
 
 func (c *Client) Find(ctx context.Context, req store.FindRequest) (*store.FindResponse, error) {
 	var resp store.FindResponse
-	q := url.Values{
-		"path": {req.Path},
-		"name": {req.Name},
+	q := url.Values{"path": {req.Path}}
+	if req.Name != "" {
+		q.Set("name", req.Name)
+	}
+	if req.Type != "" {
+		q.Set("type", req.Type)
+	}
+	if req.MaxDepth > 0 {
+		q.Set("maxdepth", strconv.Itoa(req.MaxDepth))
+	}
+	if req.MinDepth > 0 {
+		q.Set("mindepth", strconv.Itoa(req.MinDepth))
+	}
+	if req.All {
+		q.Set("all", "true")
+	}
+	if req.IName != "" {
+		q.Set("iname", req.IName)
 	}
 	if err := c.get(ctx, req.Repo, "find", q, &resp); err != nil {
 		return nil, err
