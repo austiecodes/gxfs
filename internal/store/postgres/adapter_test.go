@@ -8,57 +8,63 @@ import (
 
 var _ store.Adapter = (*Adapter)(nil)
 
-func TestListFilesSQLQuotesIdentifiers(t *testing.T) {
-	sql, err := ListFilesSQL(Config{
-		Schema: "public",
+func TestListNodesSQLJoinsRepoNodes(t *testing.T) {
+	sql, err := ListNodesSQL(Config{
+		Schema:         "public",
+		NodesTable:     "vfs_nodes",
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
 		Files: FileTableConfig{
-			Table:         "vfs_files",
-			PathColumn:    "path",
-			ContentColumn: "content",
-			SizeColumn:    "size",
-			MTimeColumn:   "updated_at",
+			PathColumn:  "path",
+			KindColumn:  "kind",
+			SizeColumn:  "size",
+			MTimeColumn: "updated_at",
 		},
 	})
 	if err != nil {
-		t.Fatalf("ListFilesSQL() error = %v", err)
+		t.Fatalf("ListNodesSQL() error = %v", err)
 	}
 
-	want := `select "path", "content", "size", "updated_at" from "public"."vfs_files" order by "path"`
+	want := `select n."path", n."kind", n."size", n."updated_at" from "public"."vfs_nodes" n join "public"."vfs_repo_nodes" r on n."path" = r."path" where r.repo = $1 order by n."path"`
 	if sql != want {
-		t.Fatalf("ListFilesSQL() = %q, want %q", sql, want)
+		t.Fatalf("ListNodesSQL() = %q, want %q", sql, want)
 	}
 }
 
-func TestListFilesSQLUsesNullableMTimeWhenUnconfigured(t *testing.T) {
-	sql, err := ListFilesSQL(Config{
-		Schema: "public",
+func TestListNodesSQLUsesNullableMTimeWhenUnconfigured(t *testing.T) {
+	sql, err := ListNodesSQL(Config{
+		Schema:         "public",
+		NodesTable:     "vfs_nodes",
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
 		Files: FileTableConfig{
-			Table:         "vfs_files",
-			PathColumn:    "path",
-			ContentColumn: "content",
-			SizeColumn:    "size",
+			PathColumn: "path",
+			KindColumn: "kind",
+			SizeColumn: "size",
 		},
 	})
 	if err != nil {
-		t.Fatalf("ListFilesSQL() error = %v", err)
+		t.Fatalf("ListNodesSQL() error = %v", err)
 	}
 
-	want := `select "path", "content", "size", null::timestamptz from "public"."vfs_files" order by "path"`
+	want := `select n."path", n."kind", n."size", n.null::timestamptz from "public"."vfs_nodes" n join "public"."vfs_repo_nodes" r on n."path" = r."path" where r.repo = $1 order by n."path"`
 	if sql != want {
-		t.Fatalf("ListFilesSQL() = %q, want %q", sql, want)
+		t.Fatalf("ListNodesSQL() = %q, want %q", sql, want)
 	}
 }
 
-func TestListFilesSQLRejectsUnsafeIdentifier(t *testing.T) {
-	_, err := ListFilesSQL(Config{
-		Schema: "public",
+func TestListNodesSQLRejectsUnsafeIdentifier(t *testing.T) {
+	_, err := ListNodesSQL(Config{
+		Schema:         "public",
+		NodesTable:     `vfs_nodes; drop table users;`,
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
 		Files: FileTableConfig{
-			Table:         `vfs_files; drop table users;`,
-			PathColumn:    "path",
-			ContentColumn: "content",
+			PathColumn: "path",
+			KindColumn: "kind",
 		},
 	})
 	if err == nil {
-		t.Fatal("ListFilesSQL() error = nil, want unsafe identifier rejection")
+		t.Fatal("ListNodesSQL() error = nil, want unsafe identifier rejection")
 	}
 }

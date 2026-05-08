@@ -100,3 +100,28 @@ func (a *Adapter) Stat(_ context.Context, req store.StatRequest) (*store.StatRes
 	}
 	return &store.StatResponse{Node: node}, nil
 }
+
+func (a *Adapter) Put(_ context.Context, req store.PutRequest) (*store.PutResponse, error) {
+	a.tree.Put(req.Path, req.Content)
+	node, err := a.tree.Stat(req.Path)
+	if err != nil {
+		return nil, err
+	}
+	return &store.PutResponse{Node: node}, nil
+}
+
+func (a *Adapter) Delete(_ context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
+	if err := a.tree.Delete(req.Path); err != nil {
+		return nil, err
+	}
+	return &store.DeleteResponse{}, nil
+}
+
+func (a *Adapter) Edit(_ context.Context, req store.EditRequest) (*store.EditResponse, error) {
+	replaced, err := a.tree.Edit(req.Path, req.Old, req.New, req.All)
+	if err != nil {
+		return nil, err
+	}
+	content, _ := a.tree.Cat(req.Path)
+	return &store.EditResponse{Path: req.Path, Replaced: replaced, Content: content}, nil
+}

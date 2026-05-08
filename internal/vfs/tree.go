@@ -66,7 +66,9 @@ func New(files []File) (*Tree, error) {
 			Meta:    file.Meta,
 		}
 		tree.children[path.Dir(filePath)] = appendChild(tree.children[path.Dir(filePath)], filePath)
-		tree.content[filePath] = file.Content
+		if file.Content != "" {
+			tree.content[filePath] = file.Content
+		}
 	}
 
 	for parent := range tree.children {
@@ -232,12 +234,28 @@ func (t *Tree) Cat(p string) (string, error) {
 	filePath := cleanPath(p)
 	node, ok := t.nodes[filePath]
 	if !ok {
-		return "", fmt.Errorf("path not found: %s", filePath)
+		return "", fmt.Errorf("%w: %s", store.ErrNotFound, filePath)
 	}
 	if node.Kind == KindDir {
-		return "", fmt.Errorf("is a directory: %s", filePath)
+		return "", fmt.Errorf("%w: %s", store.ErrIsDir, filePath)
 	}
-	return t.content[filePath], nil
+	if content, loaded := t.content[filePath]; loaded {
+		return content, nil
+	}
+	return "", fmt.Errorf("%w: %s", store.ErrContentNotReady, filePath)
+}
+
+func (t *Tree) HasContent(p string) bool {
+	filePath := cleanPath(p)
+	_, ok := t.content[filePath]
+	return ok
+}
+
+func (t *Tree) SetContent(p, content string) {
+	filePath := cleanPath(p)
+	if _, ok := t.nodes[filePath]; ok {
+		t.content[filePath] = content
+	}
 }
 
 type GrepOptions struct {
@@ -378,9 +396,131 @@ func (t *Tree) Stat(p string) (Node, error) {
 	nodePath := cleanPath(p)
 	node, ok := t.nodes[nodePath]
 	if !ok {
-		return Node{}, fmt.Errorf("path not found: %s", nodePath)
+		return Node{}, fmt.Errorf("%w: %s", store.ErrNotFound, nodePath)
 	}
 	return node, nil
+}
+
+func (t *Tree) Put(p, content string) {
+	filePath, err := cleanFilePath(p)
+	if err != nil {
+		return
+	}
+
+	t.addParents(path.Dir(filePath))
+
+	size := int64(len(content))
+	now := time.Now().UTC().Format(time.RFC3339)
+	t.nodes[filePath] = Node{
+		Path:    filePath,
+		Name:    path.Base(filePath),
+		Kind:    KindFile,
+		Size:    size,
+		ModTime: now,
+	}
+	t.content[filePath] = content
+
+	dir := path.Dir(filePath)
+	children := t.children[dir]
+	if !contains(children, filePath) {
+		t.children[dir] = appendChild(children, filePath)
+		sort.Slice(t.children[dir], func(i, j int) bool {
+			return t.nodes[t.children[dir][i]].Name < t.nodes[t.children[dir][j]].Name
+		})
+	}
+}
+
+func (t *Tree) Delete(p string) error {
+	nodePath := cleanPath(p)
+	if nodePath == "/" {
+		return store.ErrCannotDeleteRoot
+	}
+	node, ok := t.nodes[nodePath]
+	if !ok {
+		return fmt.Errorf("%w: %s", store.ErrNotFound, nodePath)
+	}
+
+	if node.Kind == KindDir {
+		for _, child := range t.children[nodePath] {
+			t.deleteRecursive(child)
+		}
+		delete(t.children, nodePath)
+	}
+	delete(t.nodes, nodePath)
+	delete(t.content, nodePath)
+
+	t.removeFromParent(nodePath)
+	return nil
+}
+
+func (t *Tree) Edit(p, old, newStr string, all bool) (int, error) {
+	if old == "" {
+		return 0, store.ErrEmptyOld
+	}
+
+	content, err := t.Cat(p)
+	if err != nil {
+		return 0, err
+	}
+
+	var replaced int
+	if all {
+		replaced = strings.Count(content, old)
+		content = strings.ReplaceAll(content, old, newStr)
+	} else {
+		replaced = strings.Count(content, old)
+		if replaced == 0 {
+			return 0, store.ErrOldNotFound
+		}
+		replaced = 1
+		content = strings.Replace(content, old, newStr, 1)
+	}
+
+	if replaced == 0 {
+		return 0, store.ErrOldNotFound
+	}
+
+	t.Put(p, content)
+	return replaced, nil
+}
+
+func (t *Tree) deleteRecursive(p string) {
+	node := t.nodes[p]
+	if node.Kind == KindDir {
+		for _, child := range t.children[p] {
+			t.deleteRecursive(child)
+		}
+		delete(t.children, p)
+	}
+	delete(t.nodes, p)
+	delete(t.content, p)
+}
+
+func (t *Tree) removeFromParent(p string) {
+	parent := path.Dir(p)
+	children := t.children[parent]
+	for i, c := range children {
+		if c == p {
+			t.children[parent] = append(children[:i], children[i+1:]...)
+			break
+		}
+	}
+	if len(t.children[parent]) == 0 && parent != "/" {
+		if _, ok := t.nodes[parent]; ok && t.nodes[parent].Kind == KindDir {
+			delete(t.children, parent)
+			t.removeFromParent(parent)
+			delete(t.nodes, parent)
+		}
+	}
+}
+
+func contains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *Tree) addParents(dir string) {
@@ -403,10 +543,10 @@ func (t *Tree) mustDir(p string) (Node, error) {
 	nodePath := cleanPath(p)
 	node, ok := t.nodes[nodePath]
 	if !ok {
-		return Node{}, fmt.Errorf("path not found: %s", nodePath)
+		return Node{}, fmt.Errorf("%w: %s", store.ErrNotFound, nodePath)
 	}
 	if node.Kind != KindDir {
-		return Node{}, fmt.Errorf("not a directory: %s", nodePath)
+		return Node{}, fmt.Errorf("%w: %s", store.ErrNotDir, nodePath)
 	}
 	return node, nil
 }

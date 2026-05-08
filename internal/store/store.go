@@ -1,6 +1,19 @@
 package store
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var (
+	ErrNotFound      = errors.New("path not found")
+	ErrIsDir         = errors.New("is a directory")
+	ErrNotDir        = errors.New("not a directory")
+	ErrContentNotReady = errors.New("content not loaded")
+	ErrEmptyOld      = errors.New("old string cannot be empty")
+	ErrOldNotFound   = errors.New("old string not found")
+	ErrCannotDeleteRoot = errors.New("cannot delete root")
+)
 
 type Node struct {
 	Path    string            `json:"path"`
@@ -127,6 +140,37 @@ type Statter interface {
 	Stat(context.Context, StatRequest) (*StatResponse, error)
 }
 
+type PutRequest struct {
+	Repo    string
+	Path    string
+	Content string
+}
+
+type PutResponse struct {
+	Node Node `json:"node"`
+}
+
+type DeleteRequest struct {
+	Repo string
+	Path string
+}
+
+type DeleteResponse struct{}
+
+type EditRequest struct {
+	Repo string
+	Path string
+	Old  string
+	New  string
+	All  bool
+}
+
+type EditResponse struct {
+	Path     string `json:"path"`
+	Replaced int    `json:"replaced"`
+	Content  string `json:"content"`
+}
+
 type Adapter interface {
 	Lister
 	Treer
@@ -134,4 +178,19 @@ type Adapter interface {
 	Grepper
 	Finder
 	Statter
+	Writer
+	Editor
+}
+
+type Writer interface {
+	Put(context.Context, PutRequest) (*PutResponse, error)
+	Delete(context.Context, DeleteRequest) (*DeleteResponse, error)
+}
+
+type Editor interface {
+	Edit(context.Context, EditRequest) (*EditResponse, error)
+}
+
+type CacheInvalidator interface {
+	Invalidate()
 }

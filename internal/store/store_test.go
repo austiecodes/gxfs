@@ -33,6 +33,18 @@ func (fakeAdapter) Stat(context.Context, store.StatRequest) (*store.StatResponse
 	return &store.StatResponse{}, nil
 }
 
+func (fakeAdapter) Put(context.Context, store.PutRequest) (*store.PutResponse, error) {
+	return &store.PutResponse{}, nil
+}
+
+func (fakeAdapter) Delete(context.Context, store.DeleteRequest) (*store.DeleteResponse, error) {
+	return &store.DeleteResponse{}, nil
+}
+
+func (fakeAdapter) Edit(context.Context, store.EditRequest) (*store.EditResponse, error) {
+	return nil, nil
+}
+
 var _ store.Adapter = fakeAdapter{}
 
 func TestCapabilityRequestTypesCarryRepoAndPath(t *testing.T) {
