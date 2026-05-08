@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,11 +14,13 @@ import (
 )
 
 func NewHandler(adapter store.Adapter) http.Handler {
-	return &handler{adapter: adapter}
+	inv, _ := adapter.(store.CacheInvalidator)
+	return &handler{adapter: adapter, invalidator: inv}
 }
 
 type handler struct {
-	adapter store.Adapter
+	adapter     store.Adapter
+	invalidator store.CacheInvalidator
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -26,21 +30,43 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodDelete && r.URL.Path == "/v1/cache" {
+		if h.invalidator != nil {
+			h.invalidator.Invalidate()
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	repo, op, ok := parsePath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	resp, err := h.dispatch(r, repo, op)
+	var resp any
+	var err error
+
+	switch r.Method {
+	case http.MethodGet:
+		resp, err = h.dispatchRead(r, repo, op)
+	case http.MethodPut:
+		resp, err = h.dispatchPut(r, repo, op)
+	case http.MethodDelete:
+		resp, err = h.dispatchDelete(r, repo, op)
+	default:
+		writeJSONErrorCode(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeJSONError(w, err)
 		return
 	}
 	writeJSON(w, resp)
 }
 
-func (h *handler) dispatch(r *http.Request, repo, op string) (any, error) {
+func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 	q := r.URL.Query()
 	switch op {
 	case "ls":
@@ -112,6 +138,53 @@ func (h *handler) dispatch(r *http.Request, repo, op string) (any, error) {
 	}
 }
 
+func (h *handler) dispatchPut(r *http.Request, repo, op string) (any, error) {
+	q := r.URL.Query()
+	switch op {
+	case "write":
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read body: %w", err)
+		}
+		return h.adapter.Put(r.Context(), store.PutRequest{
+			Repo:    repo,
+			Path:    queryPath(q),
+			Content: string(body),
+		})
+	case "edit":
+		var editReq struct {
+			Old  string `json:"old"`
+			New  string `json:"new"`
+			All  bool   `json:"all"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&editReq); err != nil {
+			return nil, fmt.Errorf("decode edit body: %w", err)
+		}
+		return h.adapter.Edit(r.Context(), store.EditRequest{
+			Repo: repo,
+			Path: queryPath(q),
+			Old:  editReq.Old,
+			New:  editReq.New,
+			All:  editReq.All,
+		})
+	default:
+		return nil, fmt.Errorf("unknown operation: %s", op)
+	}
+}
+
+func (h *handler) dispatchDelete(r *http.Request, repo, op string) (any, error) {
+	q := r.URL.Query()
+	switch op {
+	case "delete":
+		return h.adapter.Delete(r.Context(), store.DeleteRequest{
+			Repo: repo,
+			Path: queryPath(q),
+		})
+	default:
+		return nil, fmt.Errorf("unknown operation: %s", op)
+	}
+}
+
 func parsePath(p string) (repo string, op string, ok bool) {
 	rest := strings.TrimPrefix(p, "/v1/repos/")
 	if rest == p {
@@ -167,4 +240,34 @@ func queryBoolOr(q url.Values, key string) bool {
 func writeJSON(w http.ResponseWriter, resp any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func writeJSONError(w http.ResponseWriter, err error) {
+	status, code := mapError(err)
+	writeJSONErrorCode(w, status, code, err.Error())
+}
+
+func writeJSONErrorCode(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]string{
+			"code":    code,
+			"message": message,
+		},
+	})
+}
+
+func mapError(err error) (int, string) {
+	switch {
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrOldNotFound):
+		return http.StatusNotFound, "NOT_FOUND"
+	case errors.Is(err, store.ErrIsDir), errors.Is(err, store.ErrNotDir),
+		errors.Is(err, store.ErrEmptyOld), errors.Is(err, store.ErrCannotDeleteRoot):
+		return http.StatusBadRequest, "BAD_REQUEST"
+	case errors.Is(err, store.ErrContentNotReady):
+		return http.StatusNotFound, "CONTENT_NOT_READY"
+	default:
+		return http.StatusInternalServerError, "INTERNAL_ERROR"
+	}
 }

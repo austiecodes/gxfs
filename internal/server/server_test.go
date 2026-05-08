@@ -45,6 +45,18 @@ func (f *fakeAdapter) Stat(context.Context, store.StatRequest) (*store.StatRespo
 	return &store.StatResponse{Node: store.Node{Path: "/docs", Name: "docs", Kind: "dir"}}, nil
 }
 
+func (f *fakeAdapter) Put(_ context.Context, req store.PutRequest) (*store.PutResponse, error) {
+	return &store.PutResponse{Node: store.Node{Path: req.Path, Name: req.Path, Kind: "file"}}, nil
+}
+
+func (f *fakeAdapter) Delete(_ context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
+	return &store.DeleteResponse{}, nil
+}
+
+func (f *fakeAdapter) Edit(context.Context, store.EditRequest) (*store.EditResponse, error) {
+	return nil, nil
+}
+
 func TestHandlerRoutesLS(t *testing.T) {
 	adapter := &fakeAdapter{}
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/ls?path=/docs", nil)

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -165,6 +166,33 @@ func (c *Client) Stat(ctx context.Context, req store.StatRequest) (*store.StatRe
 	return &resp, nil
 }
 
+func (c *Client) Put(ctx context.Context, req store.PutRequest) (*store.PutResponse, error) {
+	var resp store.PutResponse
+	q := url.Values{"path": {req.Path}}
+	if err := c.put(ctx, req.Repo, "write", q, req.Content, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) Delete(ctx context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
+	q := url.Values{"path": {req.Path}}
+	if err := c.delete(ctx, req.Repo, q); err != nil {
+		return nil, err
+	}
+	return &store.DeleteResponse{}, nil
+}
+
+func (c *Client) Edit(ctx context.Context, req store.EditRequest) (*store.EditResponse, error) {
+	var resp store.EditResponse
+	q := url.Values{"path": {req.Path}}
+	body, _ := json.Marshal(map[string]any{"old": req.Old, "new": req.New, "all": req.All})
+	if err := c.putJSON(ctx, req.Repo, "edit", q, body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) get(ctx context.Context, repo, op string, q url.Values, out any) error {
 	endpoint, err := c.url(repo, op, q)
 	if err != nil {
@@ -175,6 +203,51 @@ func (c *Client) get(ctx context.Context, repo, op string, q url.Values, out any
 	if err != nil {
 		return fmt.Errorf("build %s request: %w", op, err)
 	}
+	return c.do(req, op, out)
+}
+
+func (c *Client) put(ctx context.Context, repo, op string, q url.Values, body string, out any) error {
+	endpoint, err := c.url(repo, op, q)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build %s request: %w", op, err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	return c.do(req, op, out)
+}
+
+func (c *Client) putJSON(ctx context.Context, repo, op string, q url.Values, body []byte, out any) error {
+	endpoint, err := c.url(repo, op, q)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build %s request: %w", op, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.do(req, op, out)
+}
+
+func (c *Client) delete(ctx context.Context, repo string, q url.Values) error {
+	endpoint, err := c.url(repo, "delete", q)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("build delete request: %w", err)
+	}
+	return c.do(req, "delete", nil)
+}
+
+func (c *Client) do(req *http.Request, op string, out any) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("call %s: %w", op, err)
@@ -183,10 +256,21 @@ func (c *Client) get(ctx context.Context, repo, op string, q url.Values, out any
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(resp.Body)
+		var errResp struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
+			return fmt.Errorf("%s failed: status %d: %s", op, resp.StatusCode, errResp.Error.Message)
+		}
 		return fmt.Errorf("%s failed: status %d: %s", op, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("decode %s response: %w", op, err)
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return fmt.Errorf("decode %s response: %w", op, err)
+		}
 	}
 	return nil
 }
