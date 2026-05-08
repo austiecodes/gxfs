@@ -41,9 +41,9 @@ gxfs CLI  ──HTTP──>  gxfs-server  ──>  store.Adapter
                                           └─ postgres (生产，pgxpool)
 ```
 
-- **CLI** (`cmd/gxfs`) — Cobra 命令行，读 `gxfs.toml` 配置，通过 HTTP client 调 server。不感知存储细节。
-- **Server** (`cmd/gxfs-server`) — go-zero HTTP 服务，加载 `gxfs-server.toml`，持有 store adapter，提供 `/v1/repos/{repo}/{op}` API。
-- **Store 边界** — `internal/store/store.go` 定义 6 个 capability interface（Lister/Treer/Catter/Grepper/Finder/Statter），组合为 `store.Adapter`。每个 adapter 必须包含 `var _ store.Adapter = (*Adapter)(nil)` 编译期断言。
+- **CLI** (`cmd/gxfs`) — Cobra 命令行，读 `.gxfs/settings.toml` 配置，通过 HTTP client 调 server。不感知存储细节。
+- **Server** (`cmd/gxfs-server`) — go-zero HTTP 服务，加载 `conf/server.toml`，持有 store adapter，提供 `/v1/repos/{repo}/{op}` API。
+- **Store 边界** — `internal/store/store.go` 定义 capability interface（Lister/Treer/Catter/Grepper/Finder/Statter/Writer），组合为 `store.Adapter`。每个 adapter 必须包含 `var _ store.Adapter = (*Adapter)(nil)` 编译期断言。
 - **VFS Tree** (`internal/vfs/tree.go`) — 内存树，自动合成父目录，提供 LS/Tree/Cat/Grep/Find/Stat 操作。
 - **Client** (`internal/client/client.go`) — HTTP client，实现 `store.Adapter`，URL 格式为 `/v1/repos/{repo}/{op}?path=...`。
 - **Config** (`internal/config/config.go`) — TOML 配置，CLI config 禁止包含 backend 凭证，server config 持有存储连接信息。环境变量自动展开。
@@ -51,6 +51,7 @@ gxfs CLI  ──HTTP──>  gxfs-server  ──>  store.Adapter
 ## 关键约定
 
 - 接口只在真正的多态边界定义（store adapter），其余用 concrete struct。
-- 所有 adapter 都惰性构建 vfs tree（postgres adapter 通过 `sync.Mutex` 缓存）。
+- Postgres adapter 惰性构建 vfs tree：元数据（`vfs_nodes`）一次性加载，content（`vfs_content`）按需延迟加载并缓存。
+- DB schema：`vfs_nodes`(path PK) + `vfs_content`(path PK) + `vfs_repo_nodes`(repo, path) 多对多映射，doc 存一份，多 repo 共享。
 - `grep` 默认纯文本子串匹配，`-E` 开启正则。
 - CLI 不直连数据库，所有操作经 server HTTP API。
