@@ -691,6 +691,17 @@ func TestGrepContextDoesNotOverrideExplicit(t *testing.T) {
 	}
 }
 
+func TestGrepContextDoesNotOverrideExplicitZero(t *testing.T) {
+	c := &fakeClient{grepMatches: []store.Match{}}
+	executeWithClient(t, c, "grep", "-C", "2", "-A", "0", "match")
+	if c.grepReq.ContextBefore != 2 {
+		t.Fatalf("grep -C2 -A0 request = %+v, want ContextBefore=2", c.grepReq)
+	}
+	if c.grepReq.ContextAfter != 0 {
+		t.Fatalf("grep -C2 -A0 request = %+v, want ContextAfter=0 (explicit A wins)", c.grepReq)
+	}
+}
+
 func TestGrepAllFiles(t *testing.T) {
 	c := &fakeClient{grepMatches: multiFileMatches()}
 	executeWithClient(t, c, "grep", "-a", "GXFS")
@@ -1168,5 +1179,12 @@ func TestFindNameAndINameBothSet(t *testing.T) {
 	}
 	if c.findReq.IName != "*.MD" {
 		t.Fatalf("find --name --iname request = %+v, want IName=*.MD", c.findReq)
+	}
+}
+
+func TestWantsHelpIgnoresHelpSubstringInArgument(t *testing.T) {
+	args := []string{"grep", "pattern", "some --help"}
+	if wantsHelp(args) {
+		t.Fatalf("wantsHelp(%v) = true, want false", args)
 	}
 }

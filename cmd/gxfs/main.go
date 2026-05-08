@@ -256,10 +256,10 @@ func newGrepCommand(adapter store.Adapter, repo string) *cobra.Command {
 			before := contextBefore
 			after := contextAfter
 			if context > 0 {
-				if before == 0 {
+				if !cmd.Flags().Changed("before-context") {
 					before = context
 				}
-				if after == 0 {
+				if !cmd.Flags().Changed("after-context") {
 					after = context
 				}
 			}
@@ -547,7 +547,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func wantsHelp(args []string) bool {
 	for _, arg := range args {
-		if arg == "help" || arg == "--help" || arg == "-h" || strings.HasSuffix(arg, " --help") {
+		if arg == "help" || arg == "--help" || arg == "-h" {
 			return true
 		}
 	}
