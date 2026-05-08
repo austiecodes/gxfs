@@ -29,7 +29,7 @@ func ListFilesSQL(cfg Config) (string, error) {
 		}
 	}
 
-	mtimeExpr := "''"
+	mtimeExpr := "null::timestamptz"
 	if cfg.Files.MTimeColumn != "" {
 		mtimeExpr, err = quoteIdent(cfg.Files.MTimeColumn)
 		if err != nil {

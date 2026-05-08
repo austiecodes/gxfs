@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"gxfs/internal/store"
@@ -189,11 +190,13 @@ func (a *Adapter) loadTree(ctx context.Context) (*vfs.Tree, error) {
 	var files []vfs.File
 	for rows.Next() {
 		var file vfs.File
-		var mtime time.Time
+		var mtime pgtype.Timestamptz
 		if err := rows.Scan(&file.Path, &file.Content, &file.Size, &mtime); err != nil {
 			return nil, fmt.Errorf("scan postgres file: %w", err)
 		}
-		file.ModTime = mtime.UTC().Format(time.RFC3339)
+		if mtime.Valid {
+			file.ModTime = mtime.Time.UTC().Format(time.RFC3339)
+		}
 		files = append(files, file)
 	}
 	if err := rows.Err(); err != nil {

@@ -29,6 +29,26 @@ func TestListFilesSQLQuotesIdentifiers(t *testing.T) {
 	}
 }
 
+func TestListFilesSQLUsesNullableMTimeWhenUnconfigured(t *testing.T) {
+	sql, err := ListFilesSQL(Config{
+		Schema: "public",
+		Files: FileTableConfig{
+			Table:         "vfs_files",
+			PathColumn:    "path",
+			ContentColumn: "content",
+			SizeColumn:    "size",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListFilesSQL() error = %v", err)
+	}
+
+	want := `select "path", "content", "size", null::timestamptz from "public"."vfs_files" order by "path"`
+	if sql != want {
+		t.Fatalf("ListFilesSQL() = %q, want %q", sql, want)
+	}
+}
+
 func TestListFilesSQLRejectsUnsafeIdentifier(t *testing.T) {
 	_, err := ListFilesSQL(Config{
 		Schema: "public",
