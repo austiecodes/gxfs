@@ -8,9 +8,9 @@ import (
 )
 
 type CLIConfig struct {
-	Project string    `toml:"project"`
-	Server  ServerRef `toml:"server"`
-	Mount   Mount     `toml:"mount"`
+	Repo   string    `toml:"repo"`
+	Server ServerRef `toml:"server"`
+	Mount  Mount     `toml:"mount"`
 }
 
 type ServerRef struct {
@@ -38,17 +38,20 @@ type BackendConfig struct {
 }
 
 type PostgresConfig struct {
-	DSN    string              `toml:"dsn"`
-	Schema string              `toml:"schema"`
-	Files  PostgresFileMapping `toml:"files"`
+	DSN             string              `toml:"dsn"`
+	Schema          string              `toml:"schema"`
+	NodesTable      string              `toml:"nodes_table"`
+	ContentTable    string              `toml:"content_table"`
+	RepoNodesTable  string              `toml:"repo_nodes_table"`
+	Files           PostgresFileMapping `toml:"files"`
+	CacheTTL        string              `toml:"cache_ttl"`
 }
 
 type PostgresFileMapping struct {
-	Table         string `toml:"table"`
-	PathColumn    string `toml:"path_column"`
-	ContentColumn string `toml:"content_column"`
-	SizeColumn    string `toml:"size_column"`
-	MTimeColumn   string `toml:"mtime_column"`
+	PathColumn  string `toml:"path_column"`
+	KindColumn  string `toml:"kind_column"`
+	SizeColumn  string `toml:"size_column"`
+	MTimeColumn string `toml:"mtime_column"`
 }
 
 func LoadCLI(path string) (CLIConfig, error) {
@@ -69,8 +72,8 @@ func LoadCLI(path string) (CLIConfig, error) {
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return CLIConfig{}, fmt.Errorf("parse cli config: %w", err)
 	}
-	if cfg.Project == "" {
-		return CLIConfig{}, fmt.Errorf("project is required")
+	if cfg.Repo == "" {
+		return CLIConfig{}, fmt.Errorf("repo is required")
 	}
 	if cfg.Server.Addr == "" {
 		return CLIConfig{}, fmt.Errorf("server.addr is required")

@@ -109,6 +109,18 @@ func (f *fakeClient) Stat(context.Context, store.StatRequest) (*store.StatRespon
 	return &store.StatResponse{Node: node}, nil
 }
 
+func (f *fakeClient) Put(_ context.Context, req store.PutRequest) (*store.PutResponse, error) {
+	return &store.PutResponse{Node: store.Node{Path: req.Path, Name: req.Path, Kind: "file"}}, nil
+}
+
+func (f *fakeClient) Delete(_ context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
+	return &store.DeleteResponse{}, nil
+}
+
+func (f *fakeClient) Edit(context.Context, store.EditRequest) (*store.EditResponse, error) {
+	return nil, nil
+}
+
 func execute(t *testing.T, args ...string) (string, *fakeClient) {
 	t.Helper()
 

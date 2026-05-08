@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zeromicro/go-zero/rest"
 
@@ -53,15 +54,26 @@ func adapterFromServerConfig(ctx context.Context, cfg config.ServerConfig) (stor
 
 func postgresConfigFromRepo(repo config.RepoConfig) postgres.Config {
 	files := repo.Backend.Postgres.Files
+	pg := repo.Backend.Postgres
+
+	var cacheTTL time.Duration
+	if pg.CacheTTL != "" {
+		cacheTTL, _ = time.ParseDuration(pg.CacheTTL)
+	}
+
 	return postgres.Config{
-		DSN:    repo.Backend.Postgres.DSN,
-		Schema: repo.Backend.Postgres.Schema,
+		DSN:            pg.DSN,
+		Schema:         pg.Schema,
+		Repo:           repo.Name,
+		NodesTable:     defaultString(pg.NodesTable, "vfs_nodes"),
+		ContentTable:   defaultString(pg.ContentTable, "vfs_content"),
+		RepoNodesTable: defaultString(pg.RepoNodesTable, "vfs_repo_nodes"),
+		CacheTTL:       cacheTTL,
 		Files: postgres.FileTableConfig{
-			Table:         defaultString(files.Table, "vfs_files"),
-			PathColumn:    defaultString(files.PathColumn, "path"),
-			ContentColumn: defaultString(files.ContentColumn, "content"),
-			SizeColumn:    defaultString(files.SizeColumn, "size"),
-			MTimeColumn:   defaultString(files.MTimeColumn, "updated_at"),
+			PathColumn:  defaultString(files.PathColumn, "path"),
+			KindColumn:  defaultString(files.KindColumn, "kind"),
+			SizeColumn:  defaultString(files.SizeColumn, "size"),
+			MTimeColumn: defaultString(files.MTimeColumn, "updated_at"),
 		},
 	}
 }
@@ -76,7 +88,7 @@ func defaultString(value, fallback string) string {
 func main() {
 	path := os.Getenv("GXFS_SERVER_CONFIG")
 	if path == "" {
-		path = "gxfs-server.toml"
+		path = "conf/server.toml"
 	}
 	cfg, err := config.LoadServer(path)
 	if err != nil {
@@ -101,6 +113,9 @@ func main() {
 	defer srv.Stop()
 
 	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/healthz", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/cache", Handler: handler.ServeHTTP})
 	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodPut, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
 	srv.Start()
 }

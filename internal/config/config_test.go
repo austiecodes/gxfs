@@ -17,32 +17,32 @@ func writeConfig(t *testing.T, name, content string) string {
 }
 
 func TestLoadCLIConfig(t *testing.T) {
-	path := writeConfig(t, "gxfs.toml", `
-project = "gxfs"
+	path := writeConfig(t, "settings.toml", `
+repo = "gxfs"
 
 [server]
 addr = "http://127.0.0.1:7635"
 
 [mount]
 include = ["/go", "/docs"]
-exclude = ["vendor/**", "java-reference/**"]
+exclude = ["vendor/**", "generated/**"]
 `)
 
 	cfg, err := LoadCLI(path)
 	if err != nil {
 		t.Fatalf("LoadCLI() error = %v", err)
 	}
-	if cfg.Project != "gxfs" || cfg.Server.Addr != "http://127.0.0.1:7635" {
-		t.Fatalf("LoadCLI() = %+v, want project and server", cfg)
+	if cfg.Repo != "gxfs" || cfg.Server.Addr != "http://127.0.0.1:7635" {
+		t.Fatalf("LoadCLI() = %+v, want repo and server", cfg)
 	}
-	if len(cfg.Mount.Include) != 2 || cfg.Mount.Exclude[1] != "java-reference/**" {
+	if len(cfg.Mount.Include) != 2 || cfg.Mount.Exclude[1] != "generated/**" {
 		t.Fatalf("LoadCLI().Mount = %+v, want include/exclude", cfg.Mount)
 	}
 }
 
 func TestLoadCLIRejectsBackendConfig(t *testing.T) {
-	path := writeConfig(t, "gxfs.toml", `
-project = "gxfs"
+	path := writeConfig(t, "settings.toml", `
+repo = "gxfs"
 
 [server]
 addr = "http://127.0.0.1:7635"
@@ -103,11 +103,12 @@ type = "postgres"
 [repos.backend.postgres]
 dsn = "postgres://localhost/gxfs"
 schema = "public"
+nodes_table = "my_nodes"
+content_table = "my_content"
 
 [repos.backend.postgres.files]
-table = "knowledge_files"
 path_column = "file_path"
-content_column = "body"
+kind_column = "node_type"
 size_column = "byte_size"
 mtime_column = "changed_at"
 `)
@@ -116,10 +117,13 @@ mtime_column = "changed_at"
 	if err != nil {
 		t.Fatalf("LoadServer() error = %v", err)
 	}
-	files := cfg.Repos[0].Backend.Postgres.Files
-	if files.Table != "knowledge_files" || files.PathColumn != "file_path" ||
-		files.ContentColumn != "body" || files.SizeColumn != "byte_size" ||
-		files.MTimeColumn != "changed_at" {
+	pg := cfg.Repos[0].Backend.Postgres
+	if pg.NodesTable != "my_nodes" || pg.ContentTable != "my_content" {
+		t.Fatalf("postgres tables = %q/%q, want my_nodes/my_content", pg.NodesTable, pg.ContentTable)
+	}
+	files := pg.Files
+	if files.PathColumn != "file_path" || files.KindColumn != "node_type" ||
+		files.SizeColumn != "byte_size" || files.MTimeColumn != "changed_at" {
 		t.Fatalf("postgres files = %+v, want custom mapping", files)
 	}
 }

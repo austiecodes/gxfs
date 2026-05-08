@@ -27,6 +27,10 @@ func newRootCommand(adapter store.Adapter, repo string) *cobra.Command {
 	cmd.AddCommand(newGrepCommand(adapter, repo))
 	cmd.AddCommand(newFindCommand(adapter, repo))
 	cmd.AddCommand(newStatCommand(adapter, repo))
+	cmd.AddCommand(newWriteCommand(adapter, repo))
+	cmd.AddCommand(newEditCommand(adapter, repo))
+	cmd.AddCommand(newDeleteCommand(adapter, repo))
+	cmd.AddCommand(newInitCommand())
 	cmd.AddCommand(newConfigCommand(repo))
 	return cmd
 }
@@ -483,6 +487,179 @@ func formatMeta(meta map[string]string) string {
 	return strings.Join(pairs, ", ")
 }
 
+func newWriteCommand(adapter store.Adapter, repo string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "write <path> [content]",
+		Short: "Write content to a VFS file",
+		Long:  "Write content to a VFS file, creating parent directories as needed.\nIf content is not provided as an argument, reads from stdin.",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := args[0]
+			var content string
+			if len(args) == 2 {
+				content = args[1]
+			} else {
+				data, err := io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return fmt.Errorf("read stdin: %w", err)
+				}
+				content = string(data)
+			}
+
+			resp, err := adapter.Put(cmd.Context(), store.PutRequest{
+				Repo:    repo,
+				Path:    path,
+				Content: content,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s (%d bytes)\n", resp.Node.Path, resp.Node.Size)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newDeleteCommand(adapter store.Adapter, repo string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "delete <path>",
+		Short: "Delete a VFS file or directory",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := adapter.Delete(cmd.Context(), store.DeleteRequest{
+				Repo: repo,
+				Path: args[0],
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "deleted %s\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newEditCommand(adapter store.Adapter, repo string) *cobra.Command {
+	var old, newStr string
+	var all bool
+
+	cmd := &cobra.Command{
+		Use:   "edit <path> --old <text> --new <text> [--all]",
+		Short: "Replace text in a VFS file",
+		Long:  "Replace occurrences of old text with new text in a VFS file.\nBy default replaces only the first occurrence. Use --all to replace all.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := adapter.Edit(cmd.Context(), store.EditRequest{
+				Repo: repo,
+				Path: args[0],
+				Old:  old,
+				New:  newStr,
+				All:  all,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "edited %s (%d replacement%s)\n", resp.Path, resp.Replaced, plural(resp.Replaced))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&old, "old", "", "text to find (required)")
+	cmd.Flags().StringVar(&newStr, "new", "", "replacement text (required)")
+	cmd.Flags().BoolVar(&all, "all", false, "replace all occurrences")
+	cmd.MarkFlagRequired("old")
+	cmd.MarkFlagRequired("new")
+	return cmd
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func newInitCommand() *cobra.Command {
+	var claude bool
+
+	cmd := &cobra.Command{
+		Use:   "init [path]",
+		Short: "Initialize .gxfs config in a repo",
+		Long:  "Initialize .gxfs/settings.toml in the target directory.\nWith --claude, also appends GXFS usage instructions to CLAUDE.md.",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) == 1 {
+				dir = args[0]
+			}
+
+			gxfsDir := dir + "/.gxfs"
+			settingsPath := gxfsDir + "/settings.toml"
+
+			if _, err := os.Stat(settingsPath); err == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s already exists, skipping\n", settingsPath)
+			} else {
+				if err := os.MkdirAll(gxfsDir, 0o755); err != nil {
+					return fmt.Errorf("create %s: %w", gxfsDir, err)
+				}
+				if err := os.WriteFile(settingsPath, []byte(initSettingsToml), 0o644); err != nil {
+					return fmt.Errorf("write %s: %w", settingsPath, err)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", settingsPath)
+			}
+
+			if claude {
+				claudeMdPath := dir + "/CLAUDE.md"
+				data, _ := os.ReadFile(claudeMdPath)
+				if strings.Contains(string(data), "## GXFS") {
+					fmt.Fprintf(cmd.OutOrStdout(), "CLAUDE.md already contains GXFS section, skipping\n")
+				} else {
+					content := string(data)
+					if content != "" && !strings.HasSuffix(content, "\n") {
+						content += "\n"
+					}
+					content += "\n" + claudeMdAppendix + "\n"
+					if err := os.WriteFile(claudeMdPath, []byte(content), 0o644); err != nil {
+						return fmt.Errorf("write %s: %w", claudeMdPath, err)
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "appended GXFS usage to %s\n", claudeMdPath)
+				}
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "initialized %s\n", gxfsDir)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&claude, "claude", false, "append GXFS usage to CLAUDE.md")
+	return cmd
+}
+
+const initSettingsToml = `repo = "github.com/user/repo"
+
+[server]
+addr = "http://127.0.0.1:7635"
+
+[mount]
+include = ["/"]
+`
+
+const claudeMdAppendix = `## GXFS
+
+Browse and edit shared docs via gxfs CLI (backed by PostgreSQL).
+
+- ` + "`gxfs ls /docs`" + ` — list directory
+- ` + "`gxfs tree /docs -L 3`" + ` — tree view
+- ` + "`gxfs cat /docs/foo.md`" + ` — read file
+- ` + "`gxfs grep pattern /docs`" + ` — search content
+- ` + "`gxfs find / --name \"*.md\"`" + ` — find by name
+- ` + "`gxfs stat /docs/foo.md`" + ` — file metadata
+- ` + "`gxfs write /docs/foo.md \"content\"`" + ` — write/create file (overwrite)
+- ` + "`gxfs write /docs/foo.md`" + ` — write from stdin
+- ` + "`gxfs delete /docs/foo.md`" + ` — delete file or directory
+
+Written docs are shared across all repos that reference the same path.`
+
 func newConfigCommand(repo string) *cobra.Command {
 	configCmd := &cobra.Command{
 		Use:   "config",
@@ -492,7 +669,7 @@ func newConfigCommand(repo string) *cobra.Command {
 		Use:   "doctor",
 		Short: "Check resolved GXFS CLI configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintf(cmd.OutOrStdout(), "Project: %s\n", repo)
+			fmt.Fprintf(cmd.OutOrStdout(), "Repo: %s\n", repo)
 			return nil
 		},
 	})
@@ -525,7 +702,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	path := os.Getenv("GXFS_CONFIG")
 	if path == "" {
-		path = "gxfs.toml"
+		path = ".gxfs/settings.toml"
 	}
 	cfg, err := config.LoadCLI(path)
 	if err != nil {
@@ -533,7 +710,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	cmd := newRootCommand(client.New(cfg.Server.Addr), cfg.Project)
+	cmd := newRootCommand(client.New(cfg.Server.Addr), cfg.Repo)
 	cmd.SetArgs(args)
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)

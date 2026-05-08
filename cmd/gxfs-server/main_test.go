@@ -45,9 +45,10 @@ func TestPostgresConfigFromRepoDefaultsFileTable(t *testing.T) {
 	if cfg.DSN != "postgres://localhost/gxfs" || cfg.Schema != "public" {
 		t.Fatalf("postgres config = %+v, want dsn/schema", cfg)
 	}
-	if cfg.Files.Table != "vfs_files" || cfg.Files.PathColumn != "path" ||
-		cfg.Files.ContentColumn != "content" || cfg.Files.SizeColumn != "size" ||
-		cfg.Files.MTimeColumn != "updated_at" {
-		t.Fatalf("files config = %+v, want default file table mapping", cfg.Files)
+	if cfg.NodesTable != "vfs_nodes" || cfg.ContentTable != "vfs_content" ||
+		cfg.RepoNodesTable != "vfs_repo_nodes" ||
+		cfg.Files.PathColumn != "path" || cfg.Files.KindColumn != "kind" ||
+		cfg.Files.SizeColumn != "size" || cfg.Files.MTimeColumn != "updated_at" {
+		t.Fatalf("config = %+v, want default table mapping", cfg)
 	}
 }
