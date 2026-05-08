@@ -34,12 +34,14 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
 
 	serverPort := freePort(t)
-	serverConfig := filepath.Join(tmp, "gxfs-server.toml")
+	serverConfig := filepath.Join(tmp, "conf", "server.toml")
+	os.MkdirAll(filepath.Join(tmp, "conf"), 0o755)
 	writeFile(t, serverConfig, serverConfigText(serverPort, pgPort))
 
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
 
-	cliConfig := filepath.Join(tmp, "gxfs.toml")
+	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
+	os.MkdirAll(filepath.Join(tmp, ".gxfs"), 0o755)
 	writeFile(t, cliConfig, cliConfigText(serverPort))
 
 	tests := []struct {
@@ -50,7 +52,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		{
 			name: "config doctor reads cli config",
 			args: []string{"config", "doctor"},
-			want: "Project: gxfs\n",
+			want: "Repo: e2e-test\n",
 		},
 		{
 			name: "ls lists root through server and postgres",
@@ -102,6 +104,59 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 			}
 		})
 	}
+
+	// Write/Edit/Delete tests (sequential, build on each other)
+	t.Run("write creates new file", func(t *testing.T) {
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-write.md", "hello world")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/test-write.md")
+		if got != "hello world" {
+			t.Fatalf("cat after write = %q, want %q", got, "hello world")
+		}
+	})
+
+	t.Run("write creates parent dirs", func(t *testing.T) {
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/deep/nested/dir/file.txt", "deep content")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/deep/nested")
+		if got != "dir/\n" {
+			t.Fatalf("ls after deep write = %q, want %q", got, "dir/\n")
+		}
+	})
+
+	t.Run("edit replaces first occurrence", func(t *testing.T) {
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-edit.md", "hello world\nhello go\n")
+		runCLI(t, repoRoot, cliPath, cliConfig, "edit", "/test-edit.md", "--old", "hello", "--new", "hi")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/test-edit.md")
+		if got != "hi world\nhello go\n" {
+			t.Fatalf("edit first = %q, want %q", got, "hi world\nhello go\n")
+		}
+	})
+
+	t.Run("edit all replaces all occurrences", func(t *testing.T) {
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-edit-all.md", "aaa bbb aaa\n")
+		runCLI(t, repoRoot, cliPath, cliConfig, "edit", "/test-edit-all.md", "--old", "aaa", "--new", "ccc", "--all")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/test-edit-all.md")
+		if got != "ccc bbb ccc\n" {
+			t.Fatalf("edit all = %q, want %q", got, "ccc bbb ccc\n")
+		}
+	})
+
+	t.Run("delete removes file", func(t *testing.T) {
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-del.md", "to be deleted")
+		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/test-del.md")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/")
+		if strings.Contains(got, "test-del.md") {
+			t.Fatalf("file still visible after delete: %q", got)
+		}
+	})
+
+	t.Run("delete removes directory recursively", func(t *testing.T) {
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-dir/child.txt", "child")
+		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/test-dir")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/")
+		if strings.Contains(got, "test-dir") {
+			t.Fatalf("dir still visible after recursive delete: %q", got)
+		}
+	})
 }
 
 func repositoryRoot(t *testing.T) string {
@@ -188,19 +243,50 @@ func seedPostgres(t *testing.T, containerName string) {
 	t.Helper()
 
 	const sql = `
-create table vfs_files (
+create table vfs_nodes (
 	path text primary key,
-	content text not null,
-	size bigint not null,
-	updated_at timestamptz not null
+	kind text not null default 'file',
+	size bigint not null default 0,
+	updated_at timestamptz not null default now()
 );
 
-insert into vfs_files(path, content, size, updated_at) values
-	('/README.md', 'GXFS root readme' || chr(10), 17, '2026-01-01T00:00:00Z'),
-	('/docs/readme.md', '# GXFS Docs' || chr(10) || 'This document mentions Adapter.' || chr(10), 42, '2026-01-02T00:00:00Z'),
-	('/docs/api/reference.md', 'API reference' || chr(10), 14, '2026-01-04T00:00:00Z'),
-	('/docs/.secret.md', 'hidden docs' || chr(10), 12, '2026-01-05T00:00:00Z'),
-	('/src/main.go', 'package main' || chr(10) || 'func main() {}' || chr(10), 28, '2026-01-03T00:00:00Z');
+create table vfs_content (
+	path text primary key references vfs_nodes(path) on delete cascade,
+	content text not null default ''
+);
+
+create table vfs_repo_nodes (
+	repo text not null,
+	path text not null references vfs_nodes(path) on delete cascade,
+	primary key (repo, path)
+);
+
+insert into vfs_nodes(path, kind, size, updated_at) values
+	('/docs', 'dir', 0, '2026-01-01T00:00:00Z'),
+	('/docs/api', 'dir', 0, '2026-01-01T00:00:00Z'),
+	('/src', 'dir', 0, '2026-01-01T00:00:00Z'),
+	('/README.md', 'file', 17, '2026-01-01T00:00:00Z'),
+	('/docs/readme.md', 'file', 42, '2026-01-02T00:00:00Z'),
+	('/docs/api/reference.md', 'file', 14, '2026-01-04T00:00:00Z'),
+	('/docs/.secret.md', 'file', 12, '2026-01-05T00:00:00Z'),
+	('/src/main.go', 'file', 28, '2026-01-03T00:00:00Z');
+
+insert into vfs_content(path, content) values
+	('/README.md', 'GXFS root readme' || chr(10)),
+	('/docs/readme.md', '# GXFS Docs' || chr(10) || 'This document mentions Adapter.' || chr(10)),
+	('/docs/api/reference.md', 'API reference' || chr(10)),
+	('/docs/.secret.md', 'hidden docs' || chr(10)),
+	('/src/main.go', 'package main' || chr(10) || 'func main() {}' || chr(10));
+
+insert into vfs_repo_nodes(repo, path) values
+	('e2e-test', '/docs'),
+	('e2e-test', '/docs/api'),
+	('e2e-test', '/src'),
+	('e2e-test', '/README.md'),
+	('e2e-test', '/docs/readme.md'),
+	('e2e-test', '/docs/api/reference.md'),
+	('e2e-test', '/docs/.secret.md'),
+	('e2e-test', '/src/main.go');
 `
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -323,7 +409,7 @@ func serverConfigText(serverPort, pgPort int) string {
 	return fmt.Sprintf(`addr = "127.0.0.1:%d"
 
 [[repos]]
-name = "gxfs"
+name = "e2e-test"
 
 [repos.backend]
 type = "postgres"
@@ -331,18 +417,20 @@ type = "postgres"
 [repos.backend.postgres]
 dsn = %q
 schema = "public"
+nodes_table = "vfs_nodes"
+content_table = "vfs_content"
+repo_nodes_table = "vfs_repo_nodes"
 
 [repos.backend.postgres.files]
-table = "vfs_files"
 path_column = "path"
-content_column = "content"
+kind_column = "kind"
 size_column = "size"
 mtime_column = "updated_at"
 `, serverPort, dsn)
 }
 
 func cliConfigText(serverPort int) string {
-	return fmt.Sprintf(`project = "gxfs"
+	return fmt.Sprintf(`repo = "e2e-test"
 
 [server]
 addr = "http://127.0.0.1:%d"
