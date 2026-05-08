@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gxfs/internal/store"
 )
@@ -155,6 +156,14 @@ func compareField(a, b Node, field string) (less, equal bool) {
 		if a.ModTime == b.ModTime {
 			return false, true
 		}
+		if at, aok := parseModTime(a.ModTime); aok {
+			if bt, bok := parseModTime(b.ModTime); bok {
+				if at.Equal(bt) {
+					return false, true
+				}
+				return at.Before(bt), false
+			}
+		}
 		return a.ModTime < b.ModTime, false
 	default:
 		if a.Name == b.Name {
@@ -162,6 +171,17 @@ func compareField(a, b Node, field string) (less, equal bool) {
 		}
 		return a.Name < b.Name, false
 	}
+}
+
+func parseModTime(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 func isHidden(name string) bool {

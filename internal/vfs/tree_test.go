@@ -178,6 +178,27 @@ func TestLSSortByMtime(t *testing.T) {
 	}
 }
 
+func TestLSSortByMtimeParsesRFC3339Offsets(t *testing.T) {
+	tree, err := New([]File{
+		{Path: "/later.txt", Content: "later", ModTime: "2026-01-01T00:30:00Z"},
+		{Path: "/earlier.txt", Content: "earlier", ModTime: "2026-01-01T08:00:00+08:00"},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	nodes, err := tree.LS("/", LSOptions{Sort: "mtime"})
+	if err != nil {
+		t.Fatalf("LS() error = %v", err)
+	}
+
+	got := nodeNames(nodes)
+	want := []string{"earlier.txt", "later.txt"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("names = %v, want %v", got, want)
+	}
+}
+
 func TestLSReverse(t *testing.T) {
 	tree := newLSOptionsTree(t)
 
