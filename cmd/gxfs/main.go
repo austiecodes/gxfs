@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"github.com/spf13/cobra"
 
@@ -667,6 +670,9 @@ const initDocsPath = "/docs"
 const gxfsInstructionsStart = "<!-- GXFS_START -->"
 const gxfsInstructionsEnd = "<!-- GXFS_END -->"
 
+//go:embed instructions/agents.md
+var gxfsInstructionsTemplate string
+
 func instructionTargetPath(dir, agent string) (string, error) {
 	switch strings.ToLower(agent) {
 	case "", "agent", "agents":
@@ -693,7 +699,11 @@ func upsertInstructions(target, docsPath string) (string, error) {
 		return "", fmt.Errorf("read %s: %w", target, err)
 	}
 
-	content := replaceMarkedBlock(string(data), gxfsInstructions(docsPath))
+	block, err := renderGXFSInstructions(docsPath)
+	if err != nil {
+		return "", err
+	}
+	content := replaceMarkedBlock(string(data), block)
 	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("write %s: %w", target, err)
 	}
@@ -726,24 +736,21 @@ func replaceMarkedBlock(content, block string) string {
 	return content
 }
 
-func gxfsInstructions(docsPath string) string {
-	return gxfsInstructionsStart + `
-## GXFS
+func renderGXFSInstructions(docsPath string) (string, error) {
+	tmpl, err := template.New("gxfs-instructions").Option("missingkey=error").Parse(gxfsInstructionsTemplate)
+	if err != nil {
+		return "", fmt.Errorf("parse GXFS instructions template: %w", err)
+	}
 
-Use gxfs CLI to browse and update this project's shared internal documentation. Treat gxfs like a virtual ` + "`" + docsPath + "`" + ` directory; prefer it over scanning local files when you need project docs.
-
-- ` + "`gxfs ls " + docsPath + "`" + ` — list docs
-- ` + "`gxfs tree " + docsPath + " -L 3`" + ` — inspect doc structure
-- ` + "`gxfs cat " + docsPath + "/foo.md`" + ` — read a doc
-- ` + "`gxfs grep \"pattern\" " + docsPath + "`" + ` — search docs
-- ` + "`gxfs find / --name \"*.md\"`" + ` — find by name
-- ` + "`gxfs stat " + docsPath + "/foo.md`" + ` — file metadata
-- ` + "`gxfs write " + docsPath + "/foo.md \"content\"`" + ` — create or overwrite a doc
-- ` + "`gxfs edit " + docsPath + "/foo.md --old \"text\" --new \"text\"`" + ` — update text in a doc
-- ` + "`gxfs delete " + docsPath + "/foo.md`" + ` — delete a doc
-
-The docs root defaults to ` + "`" + docsPath + "`" + ` and can be changed in ` + "`.gxfs/settings.toml`" + ` under ` + "`[docs].path`" + `.
-` + gxfsInstructionsEnd
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, struct {
+		DocsPath string
+	}{
+		DocsPath: docsPath,
+	}); err != nil {
+		return "", fmt.Errorf("render GXFS instructions template: %w", err)
+	}
+	return out.String(), nil
 }
 
 func newConfigCommand(repo string) *cobra.Command {
