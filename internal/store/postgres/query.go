@@ -27,22 +27,24 @@ func ListNodesSQL(cfg Config) (string, error) {
 
 	sizeExpr := "0"
 	if cfg.Files.SizeColumn != "" {
-		sizeExpr, err = quoteIdent(cfg.Files.SizeColumn)
+		sizeCol, err := quoteIdent(cfg.Files.SizeColumn)
 		if err != nil {
 			return "", fmt.Errorf("size column: %w", err)
 		}
+		sizeExpr = "n." + sizeCol
 	}
 
 	mtimeExpr := "null::timestamptz"
 	if cfg.Files.MTimeColumn != "" {
-		mtimeExpr, err = quoteIdent(cfg.Files.MTimeColumn)
+		mtimeCol, err := quoteIdent(cfg.Files.MTimeColumn)
 		if err != nil {
 			return "", fmt.Errorf("mtime column: %w", err)
 		}
+		mtimeExpr = "n." + mtimeCol
 	}
 
 	return fmt.Sprintf(
-		"select n.%s, n.%s, n.%s, n.%s from %s n join %s r on n.%s = r.%s where r.repo = $1 order by n.%s",
+		"select n.%s, n.%s, %s, %s from %s n join %s r on n.%s = r.%s where r.repo = $1 order by n.%s",
 		pathCol, kindCol, sizeExpr, mtimeExpr,
 		nodesTable, mappingTable, pathCol, pathCol, pathCol,
 	), nil
@@ -53,7 +55,11 @@ func LoadContentSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("select content from %s where path = $1", table), nil
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	return fmt.Sprintf("select content from %s where %s = $1", table, pathCol), nil
 }
 
 func LoadContentUnderSQL(cfg Config) (string, error) {
@@ -61,7 +67,11 @@ func LoadContentUnderSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("select path, content from %s where path like $1 order by path", table), nil
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	return fmt.Sprintf("select %s, content from %s where %s like $1 order by %s", pathCol, table, pathCol, pathCol), nil
 }
 
 func UpsertNodeSQL(cfg Config) (string, error) {
@@ -97,7 +107,11 @@ func UpsertContentSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "insert into " + table + "(path, content) values($1, $2) on conflict(path) do update set content = excluded.content", nil
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	return fmt.Sprintf("insert into %s(%s, content) values($1, $2) on conflict(%s) do update set content = excluded.content", table, pathCol, pathCol), nil
 }
 
 func UpsertRepoNodeSQL(cfg Config) (string, error) {
@@ -105,7 +119,11 @@ func UpsertRepoNodeSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "insert into " + table + "(repo, path) values($1, $2) on conflict do nothing", nil
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	return fmt.Sprintf("insert into %s(repo, %s) values($1, $2) on conflict do nothing", table, pathCol), nil
 }
 
 func DeleteRepoNodeSQL(cfg Config) (string, error) {
@@ -113,7 +131,11 @@ func DeleteRepoNodeSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "delete from " + table + " where repo = $1 and path = $2", nil
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	return fmt.Sprintf("delete from %s where repo = $1 and %s = $2", table, pathCol), nil
 }
 
 func CleanOrphanNodeSQL(cfg Config) (string, error) {
@@ -125,9 +147,13 @@ func CleanOrphanNodeSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
 	return fmt.Sprintf(
-		"delete from %s where path = $1 and not exists (select 1 from %s where path = $1)",
-		nodesTable, mappingTable,
+		"delete from %s where %s = $1 and not exists (select 1 from %s where %s = $1)",
+		nodesTable, pathCol, mappingTable, pathCol,
 	), nil
 }
 

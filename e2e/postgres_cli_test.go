@@ -159,6 +159,39 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 	})
 }
 
+func TestGXFSPostgresAutoMigratesEmptyDatabase(t *testing.T) {
+	requireDocker(t)
+
+	repoRoot := repositoryRoot(t)
+	tmp := t.TempDir()
+
+	pgPort := freePort(t)
+	containerName := fmt.Sprintf("gxfs-e2e-migrate-%d-%d", os.Getpid(), time.Now().UnixNano())
+	startPostgres(t, containerName, pgPort)
+
+	cliPath := filepath.Join(tmp, "gxfs")
+	serverPath := filepath.Join(tmp, "gxfs-server")
+	buildBinary(t, repoRoot, cliPath, "./cmd/gxfs")
+	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
+
+	serverPort := freePort(t)
+	serverConfig := filepath.Join(tmp, "conf", "server.toml")
+	os.MkdirAll(filepath.Join(tmp, "conf"), 0o755)
+	writeFile(t, serverConfig, serverConfigText(serverPort, pgPort))
+
+	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
+
+	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
+	os.MkdirAll(filepath.Join(tmp, ".gxfs"), 0o755)
+	writeFile(t, cliConfig, cliConfigText(serverPort))
+
+	runCLI(t, repoRoot, cliPath, cliConfig, "write", "/auto/migrated.md", "created by migration")
+	got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/auto/migrated.md")
+	if got != "created by migration" {
+		t.Fatalf("cat after auto-migrated write = %q, want %q", got, "created by migration")
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 

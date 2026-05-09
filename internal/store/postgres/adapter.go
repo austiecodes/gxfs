@@ -16,14 +16,14 @@ import (
 )
 
 type Config struct {
-	DSN             string
-	Schema          string
-	Repo            string
-	NodesTable      string
-	ContentTable    string
-	RepoNodesTable  string
-	Files           FileTableConfig
-	CacheTTL        time.Duration
+	DSN            string
+	Schema         string
+	Repo           string
+	NodesTable     string
+	ContentTable   string
+	RepoNodesTable string
+	Files          FileTableConfig
+	CacheTTL       time.Duration
 }
 
 type FileTableConfig struct {
@@ -37,10 +37,10 @@ type Adapter struct {
 	pool *pgxpool.Pool
 	cfg  Config
 
-	mu          sync.RWMutex
-	cachedTree  *vfs.Tree
+	mu           sync.RWMutex
+	cachedTree   *vfs.Tree
 	treeLoadedAt time.Time
-	contentMu   sync.Mutex
+	contentMu    sync.Mutex
 }
 
 var _ store.Adapter = (*Adapter)(nil)
@@ -54,7 +54,12 @@ func Connect(ctx context.Context, cfg Config) (*Adapter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}
-	return New(pool, cfg), nil
+	adapter := New(pool, cfg)
+	if err := adapter.ensureSchema(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("migrate postgres schema: %w", err)
+	}
+	return adapter, nil
 }
 
 func (a *Adapter) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
@@ -344,6 +349,19 @@ func (a *Adapter) Invalidate() {
 	defer a.mu.Unlock()
 	a.cachedTree = nil
 	a.treeLoadedAt = time.Time{}
+}
+
+func (a *Adapter) ensureSchema(ctx context.Context) error {
+	statements, err := SchemaSQL(a.cfg)
+	if err != nil {
+		return err
+	}
+	for _, statement := range statements {
+		if _, err := a.pool.Exec(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *Adapter) treeFor(ctx context.Context) (*vfs.Tree, error) {

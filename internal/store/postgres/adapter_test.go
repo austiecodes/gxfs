@@ -47,7 +47,7 @@ func TestListNodesSQLUsesNullableMTimeWhenUnconfigured(t *testing.T) {
 		t.Fatalf("ListNodesSQL() error = %v", err)
 	}
 
-	want := `select n."path", n."kind", n."size", n.null::timestamptz from "public"."vfs_nodes" n join "public"."vfs_repo_nodes" r on n."path" = r."path" where r.repo = $1 order by n."path"`
+	want := `select n."path", n."kind", n."size", null::timestamptz from "public"."vfs_nodes" n join "public"."vfs_repo_nodes" r on n."path" = r."path" where r.repo = $1 order by n."path"`
 	if sql != want {
 		t.Fatalf("ListNodesSQL() = %q, want %q", sql, want)
 	}
@@ -66,5 +66,86 @@ func TestListNodesSQLRejectsUnsafeIdentifier(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("ListNodesSQL() error = nil, want unsafe identifier rejection")
+	}
+}
+
+func TestContentQueriesUseConfiguredPathColumn(t *testing.T) {
+	cfg := Config{
+		Schema:         "public",
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
+		Files: FileTableConfig{
+			PathColumn: "file_path",
+		},
+	}
+
+	load, err := LoadContentSQL(cfg)
+	if err != nil {
+		t.Fatalf("LoadContentSQL() error = %v", err)
+	}
+	if want := `select content from "public"."vfs_content" where "file_path" = $1`; load != want {
+		t.Fatalf("LoadContentSQL() = %q, want %q", load, want)
+	}
+
+	upsert, err := UpsertContentSQL(cfg)
+	if err != nil {
+		t.Fatalf("UpsertContentSQL() error = %v", err)
+	}
+	if want := `insert into "public"."vfs_content"("file_path", content) values($1, $2) on conflict("file_path") do update set content = excluded.content`; upsert != want {
+		t.Fatalf("UpsertContentSQL() = %q, want %q", upsert, want)
+	}
+
+	repo, err := UpsertRepoNodeSQL(cfg)
+	if err != nil {
+		t.Fatalf("UpsertRepoNodeSQL() error = %v", err)
+	}
+	if want := `insert into "public"."vfs_repo_nodes"(repo, "file_path") values($1, $2) on conflict do nothing`; repo != want {
+		t.Fatalf("UpsertRepoNodeSQL() = %q, want %q", repo, want)
+	}
+}
+
+func TestSchemaSQLCreatesConfiguredTables(t *testing.T) {
+	statements, err := SchemaSQL(Config{
+		Schema:         "public",
+		NodesTable:     "vfs_nodes",
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
+		Files: FileTableConfig{
+			PathColumn:  "path",
+			KindColumn:  "kind",
+			SizeColumn:  "size",
+			MTimeColumn: "updated_at",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SchemaSQL() error = %v", err)
+	}
+
+	want := []string{
+		`create schema if not exists "public"`,
+		`create table if not exists "public"."vfs_nodes" (
+    "path" text primary key,
+    "kind" text not null default 'file',
+    "size" bigint not null default 0,
+    "updated_at" timestamptz not null default now(),
+    check ("kind" in ('file', 'dir'))
+)`,
+		`create table if not exists "public"."vfs_content" (
+    "path" text primary key references "public"."vfs_nodes"("path") on delete cascade,
+    content text not null default ''
+)`,
+		`create table if not exists "public"."vfs_repo_nodes" (
+    repo text not null,
+    "path" text not null references "public"."vfs_nodes"("path") on delete cascade,
+    primary key (repo, "path")
+)`,
+	}
+	if len(statements) != len(want) {
+		t.Fatalf("SchemaSQL() len = %d, want %d: %v", len(statements), len(want), statements)
+	}
+	for i := range want {
+		if statements[i] != want[i] {
+			t.Fatalf("SchemaSQL()[%d] = %q, want %q", i, statements[i], want[i])
+		}
 	}
 }
