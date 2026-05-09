@@ -26,6 +26,9 @@ addr = "http://127.0.0.1:7635"
 [mount]
 include = ["/go", "/docs"]
 exclude = ["vendor/**", "generated/**"]
+
+[docs]
+path = "/internal-docs"
 `)
 
 	cfg, err := LoadCLI(path)
@@ -37,6 +40,26 @@ exclude = ["vendor/**", "generated/**"]
 	}
 	if len(cfg.Mount.Include) != 2 || cfg.Mount.Exclude[1] != "generated/**" {
 		t.Fatalf("LoadCLI().Mount = %+v, want include/exclude", cfg.Mount)
+	}
+	if cfg.Docs.Path != "/internal-docs" {
+		t.Fatalf("LoadCLI().Docs.Path = %q, want /internal-docs", cfg.Docs.Path)
+	}
+}
+
+func TestLoadCLIConfigDefaultsDocsPath(t *testing.T) {
+	path := writeConfig(t, "settings.toml", `
+repo = "gxfs"
+
+[server]
+addr = "http://127.0.0.1:7635"
+`)
+
+	cfg, err := LoadCLI(path)
+	if err != nil {
+		t.Fatalf("LoadCLI() error = %v", err)
+	}
+	if cfg.Docs.Path != "/docs" {
+		t.Fatalf("LoadCLI().Docs.Path = %q, want /docs", cfg.Docs.Path)
 	}
 }
 

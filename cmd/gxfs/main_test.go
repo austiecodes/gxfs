@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -260,16 +262,16 @@ func TestFormatLSLine(t *testing.T) {
 			want: "readme.md",
 		},
 		{
-			name:     "long dir no flags",
-			node:     store.Node{Name: "docs", Kind: "dir", ModTime: "2025-01-01"},
-			long:     true,
-			want:     "drwx         -  2025-01-01  docs",
+			name: "long dir no flags",
+			node: store.Node{Name: "docs", Kind: "dir", ModTime: "2025-01-01"},
+			long: true,
+			want: "drwx         -  2025-01-01  docs",
 		},
 		{
-			name:     "long file no flags",
-			node:     store.Node{Name: "readme.md", Kind: "file", Size: 4096, ModTime: "2025-01-02"},
-			long:     true,
-			want:     "-rw-      4096  2025-01-02  readme.md",
+			name: "long file no flags",
+			node: store.Node{Name: "readme.md", Kind: "file", Size: 4096, ModTime: "2025-01-02"},
+			long: true,
+			want: "-rw-      4096  2025-01-02  readme.md",
 		},
 		{
 			name:     "long dir with classify",
@@ -1199,4 +1201,131 @@ func TestWantsHelpIgnoresHelpSubstringInArgument(t *testing.T) {
 	if wantsHelp(args) {
 		t.Fatalf("wantsHelp(%v) = true, want false", args)
 	}
+}
+
+func executeInit(t *testing.T, args ...string) string {
+	t.Helper()
+
+	cmd := newInitCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(args)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init %v error = %v", args, err)
+	}
+	return out.String()
+}
+
+func TestInitWritesSettingsAndAgentsInstructions(t *testing.T) {
+	dir := t.TempDir()
+	got := executeInit(t, dir)
+
+	settings := readTextFile(t, filepath.Join(dir, ".gxfs", "settings.toml"))
+	if !strings.Contains(settings, "[docs]\npath = \"/docs\"") {
+		t.Fatalf("settings.toml = %q, want docs path", settings)
+	}
+
+	agents := readTextFile(t, filepath.Join(dir, "AGENTS.md"))
+	if !strings.Contains(agents, gxfsInstructionsStart) || !strings.Contains(agents, gxfsInstructionsEnd) {
+		t.Fatalf("AGENTS.md missing GXFS markers: %q", agents)
+	}
+	if !strings.Contains(agents, "Use gxfs CLI to browse") || !strings.Contains(agents, "gxfs tree /docs -L 3") {
+		t.Fatalf("AGENTS.md missing instruction content: %q", agents)
+	}
+	if !strings.Contains(got, "updated GXFS instructions in") {
+		t.Fatalf("init output = %q, want instruction update", got)
+	}
+}
+
+func TestInitReplacesExistingInstructions(t *testing.T) {
+	dir := t.TempDir()
+	executeInit(t, dir)
+	executeInit(t, dir)
+
+	agents := readTextFile(t, filepath.Join(dir, "AGENTS.md"))
+	if got := strings.Count(agents, gxfsInstructionsStart); got != 1 {
+		t.Fatalf("GXFS start marker count = %d, want 1 in %q", got, agents)
+	}
+	if got := strings.Count(agents, gxfsInstructionsEnd); got != 1 {
+		t.Fatalf("GXFS end marker count = %d, want 1 in %q", got, agents)
+	}
+}
+
+func TestInitAgentClaudeWritesClaudeMD(t *testing.T) {
+	dir := t.TempDir()
+	executeInit(t, "--agent", "claude", dir)
+
+	claude := readTextFile(t, filepath.Join(dir, "CLAUDE.md"))
+	if !strings.Contains(claude, gxfsInstructionsStart) {
+		t.Fatalf("CLAUDE.md missing GXFS instructions: %q", claude)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("AGENTS.md exists after --agent claude, err=%v", err)
+	}
+}
+
+func TestInitClaudeFlagAliasesAgentClaude(t *testing.T) {
+	dir := t.TempDir()
+	executeInit(t, "--claude", dir)
+
+	claude := readTextFile(t, filepath.Join(dir, "CLAUDE.md"))
+	if !strings.Contains(claude, gxfsInstructionsStart) {
+		t.Fatalf("CLAUDE.md missing GXFS instructions: %q", claude)
+	}
+}
+
+func TestInitNoInstructionsOnlyWritesSettings(t *testing.T) {
+	dir := t.TempDir()
+	executeInit(t, "--no-instructions", dir)
+
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "settings.toml")); err != nil {
+		t.Fatalf("settings.toml stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("AGENTS.md exists after --no-instructions, err=%v", err)
+	}
+}
+
+func TestInitReportsResolvedSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	if err := os.WriteFile(claudePath, []byte("# Claude\n"), 0o644); err != nil {
+		t.Fatalf("write CLAUDE.md: %v", err)
+	}
+	if err := os.Symlink("CLAUDE.md", filepath.Join(dir, "AGENTS.md")); err != nil {
+		t.Fatalf("symlink AGENTS.md: %v", err)
+	}
+
+	got := executeInit(t, dir)
+	claude := readTextFile(t, claudePath)
+	if !strings.Contains(claude, gxfsInstructionsStart) {
+		t.Fatalf("CLAUDE.md missing GXFS instructions through symlink: %q", claude)
+	}
+	if !strings.Contains(got, "resolved to") {
+		t.Fatalf("init output = %q, want resolved symlink target", got)
+	}
+}
+
+func TestInitRejectsUnsupportedAgent(t *testing.T) {
+	dir := t.TempDir()
+	cmd := newInitCommand()
+	cmd.SetArgs([]string{"--agent", "gemini", dir})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unsupported agent") {
+		t.Fatalf("init --agent gemini error = %v, want unsupported agent", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "settings.toml")); !os.IsNotExist(err) {
+		t.Fatalf("settings.toml exists after unsupported agent, err=%v", err)
+	}
+}
+
+func readTextFile(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }

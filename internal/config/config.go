@@ -11,6 +11,7 @@ type CLIConfig struct {
 	Repo   string    `toml:"repo"`
 	Server ServerRef `toml:"server"`
 	Mount  Mount     `toml:"mount"`
+	Docs   Docs      `toml:"docs"`
 }
 
 type ServerRef struct {
@@ -20,6 +21,10 @@ type ServerRef struct {
 type Mount struct {
 	Include []string `toml:"include"`
 	Exclude []string `toml:"exclude"`
+}
+
+type Docs struct {
+	Path string `toml:"path"`
 }
 
 type ServerConfig struct {
@@ -38,13 +43,13 @@ type BackendConfig struct {
 }
 
 type PostgresConfig struct {
-	DSN             string              `toml:"dsn"`
-	Schema          string              `toml:"schema"`
-	NodesTable      string              `toml:"nodes_table"`
-	ContentTable    string              `toml:"content_table"`
-	RepoNodesTable  string              `toml:"repo_nodes_table"`
-	Files           PostgresFileMapping `toml:"files"`
-	CacheTTL        string              `toml:"cache_ttl"`
+	DSN            string              `toml:"dsn"`
+	Schema         string              `toml:"schema"`
+	NodesTable     string              `toml:"nodes_table"`
+	ContentTable   string              `toml:"content_table"`
+	RepoNodesTable string              `toml:"repo_nodes_table"`
+	Files          PostgresFileMapping `toml:"files"`
+	CacheTTL       string              `toml:"cache_ttl"`
 }
 
 type PostgresFileMapping struct {
@@ -80,6 +85,9 @@ func LoadCLI(path string) (CLIConfig, error) {
 	}
 	if len(cfg.Mount.Include) == 0 {
 		cfg.Mount.Include = []string{"/"}
+	}
+	if cfg.Docs.Path == "" {
+		cfg.Docs.Path = "/docs"
 	}
 	return cfg, nil
 }

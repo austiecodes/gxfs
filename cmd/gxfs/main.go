@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -582,11 +583,13 @@ func plural(n int) string {
 
 func newInitCommand() *cobra.Command {
 	var claude bool
+	var agent string
+	var noInstructions bool
 
 	cmd := &cobra.Command{
 		Use:   "init [path]",
 		Short: "Initialize .gxfs config in a repo",
-		Long:  "Initialize .gxfs/settings.toml in the target directory.\nWith --claude, also appends GXFS usage instructions to CLAUDE.md.",
+		Long:  "Initialize .gxfs/settings.toml in the target directory and inject GXFS usage instructions into AGENTS.md by default.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -594,8 +597,24 @@ func newInitCommand() *cobra.Command {
 				dir = args[0]
 			}
 
-			gxfsDir := dir + "/.gxfs"
-			settingsPath := gxfsDir + "/settings.toml"
+			var target string
+			if !noInstructions {
+				agent = strings.ToLower(agent)
+				if claude {
+					if agent != "" && agent != "claude" {
+						return fmt.Errorf("--claude cannot be combined with --agent %s", agent)
+					}
+					agent = "claude"
+				}
+				var err error
+				target, err = instructionTargetPath(dir, agent)
+				if err != nil {
+					return err
+				}
+			}
+
+			gxfsDir := filepath.Join(dir, ".gxfs")
+			settingsPath := filepath.Join(gxfsDir, "settings.toml")
 
 			if _, err := os.Stat(settingsPath); err == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s already exists, skipping\n", settingsPath)
@@ -609,21 +628,15 @@ func newInitCommand() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", settingsPath)
 			}
 
-			if claude {
-				claudeMdPath := dir + "/CLAUDE.md"
-				data, _ := os.ReadFile(claudeMdPath)
-				if strings.Contains(string(data), "## GXFS") {
-					fmt.Fprintf(cmd.OutOrStdout(), "CLAUDE.md already contains GXFS section, skipping\n")
+			if !noInstructions {
+				actual, err := upsertInstructions(target, initDocsPath)
+				if err != nil {
+					return err
+				}
+				if actual != target {
+					fmt.Fprintf(cmd.OutOrStdout(), "updated GXFS instructions in %s (resolved to %s)\n", target, actual)
 				} else {
-					content := string(data)
-					if content != "" && !strings.HasSuffix(content, "\n") {
-						content += "\n"
-					}
-					content += "\n" + claudeMdAppendix + "\n"
-					if err := os.WriteFile(claudeMdPath, []byte(content), 0o644); err != nil {
-						return fmt.Errorf("write %s: %w", claudeMdPath, err)
-					}
-					fmt.Fprintf(cmd.OutOrStdout(), "appended GXFS usage to %s\n", claudeMdPath)
+					fmt.Fprintf(cmd.OutOrStdout(), "updated GXFS instructions in %s\n", target)
 				}
 			}
 
@@ -631,7 +644,9 @@ func newInitCommand() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&claude, "claude", false, "append GXFS usage to CLAUDE.md")
+	cmd.Flags().StringVar(&agent, "agent", "", "agent instructions target: agents or claude")
+	cmd.Flags().BoolVar(&claude, "claude", false, "append GXFS usage to CLAUDE.md (alias for --agent claude)")
+	cmd.Flags().BoolVar(&noInstructions, "no-instructions", false, "only create .gxfs config, without writing agent instructions")
 	return cmd
 }
 
@@ -642,23 +657,94 @@ addr = "http://127.0.0.1:7635"
 
 [mount]
 include = ["/"]
+
+[docs]
+path = "/docs"
 `
 
-const claudeMdAppendix = `## GXFS
+const initDocsPath = "/docs"
 
-Browse and edit shared docs via gxfs CLI (backed by PostgreSQL).
+const gxfsInstructionsStart = "<!-- GXFS_START -->"
+const gxfsInstructionsEnd = "<!-- GXFS_END -->"
 
-- ` + "`gxfs ls /docs`" + ` — list directory
-- ` + "`gxfs tree /docs -L 3`" + ` — tree view
-- ` + "`gxfs cat /docs/foo.md`" + ` — read file
-- ` + "`gxfs grep pattern /docs`" + ` — search content
+func instructionTargetPath(dir, agent string) (string, error) {
+	switch strings.ToLower(agent) {
+	case "", "agent", "agents":
+		return filepath.Join(dir, "AGENTS.md"), nil
+	case "claude":
+		return filepath.Join(dir, "CLAUDE.md"), nil
+	default:
+		return "", fmt.Errorf("unsupported agent %q: supported agents are agents and claude", agent)
+	}
+}
+
+func upsertInstructions(target, docsPath string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("create %s: %w", filepath.Dir(target), err)
+	}
+
+	actual := target
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+		actual = resolved
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("read %s: %w", target, err)
+	}
+
+	content := replaceMarkedBlock(string(data), gxfsInstructions(docsPath))
+	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write %s: %w", target, err)
+	}
+	return actual, nil
+}
+
+func replaceMarkedBlock(content, block string) string {
+	start := strings.Index(content, gxfsInstructionsStart)
+	end := strings.Index(content, gxfsInstructionsEnd)
+	if start >= 0 && end >= start {
+		end += len(gxfsInstructionsEnd)
+		next := content[end:]
+		if strings.HasPrefix(next, "\n") {
+			next = next[1:]
+		}
+		content = content[:start] + strings.TrimSpace(block) + "\n" + next
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		return content
+	}
+
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if content != "" {
+		content += "\n"
+	}
+	content += strings.TrimSpace(block) + "\n"
+	return content
+}
+
+func gxfsInstructions(docsPath string) string {
+	return gxfsInstructionsStart + `
+## GXFS
+
+Use gxfs CLI to browse and update this project's shared internal documentation. Treat gxfs like a virtual ` + "`" + docsPath + "`" + ` directory; prefer it over scanning local files when you need project docs.
+
+- ` + "`gxfs ls " + docsPath + "`" + ` — list docs
+- ` + "`gxfs tree " + docsPath + " -L 3`" + ` — inspect doc structure
+- ` + "`gxfs cat " + docsPath + "/foo.md`" + ` — read a doc
+- ` + "`gxfs grep \"pattern\" " + docsPath + "`" + ` — search docs
 - ` + "`gxfs find / --name \"*.md\"`" + ` — find by name
-- ` + "`gxfs stat /docs/foo.md`" + ` — file metadata
-- ` + "`gxfs write /docs/foo.md \"content\"`" + ` — write/create file (overwrite)
-- ` + "`gxfs write /docs/foo.md`" + ` — write from stdin
-- ` + "`gxfs delete /docs/foo.md`" + ` — delete file or directory
+- ` + "`gxfs stat " + docsPath + "/foo.md`" + ` — file metadata
+- ` + "`gxfs write " + docsPath + "/foo.md \"content\"`" + ` — create or overwrite a doc
+- ` + "`gxfs edit " + docsPath + "/foo.md --old \"text\" --new \"text\"`" + ` — update text in a doc
+- ` + "`gxfs delete " + docsPath + "/foo.md`" + ` — delete a doc
 
-Written docs are shared across all repos that reference the same path.`
+The docs root defaults to ` + "`" + docsPath + "`" + ` and can be changed in ` + "`.gxfs/settings.toml`" + ` under ` + "`[docs].path`" + `.
+` + gxfsInstructionsEnd
+}
 
 func newConfigCommand(repo string) *cobra.Command {
 	configCmd := &cobra.Command{
