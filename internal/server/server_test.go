@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"gxfs/internal/store"
@@ -419,5 +420,27 @@ func TestHandlerRoutesTreeParams(t *testing.T) {
 				t.Fatalf("tree req = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+type readOnlyAdapter struct {
+	fakeAdapter
+}
+
+func (a *readOnlyAdapter) Put(context.Context, store.PutRequest) (*store.PutResponse, error) {
+	return nil, store.ErrReadOnlyMount
+}
+
+func TestHandlerMapsReadOnlyMountErrorToForbidden(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/gxfs/write?path=/docs/readme.md", strings.NewReader("hello"))
+	rec := httptest.NewRecorder()
+
+	NewHandler(&readOnlyAdapter{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"FORBIDDEN"`) {
+		t.Fatalf("body = %q, want FORBIDDEN code", rec.Body.String())
 	}
 }

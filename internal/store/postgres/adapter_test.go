@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"testing"
+	"time"
 
 	"gxfs/internal/store"
 )
@@ -147,5 +148,25 @@ func TestSchemaSQLCreatesConfiguredTables(t *testing.T) {
 		if statements[i] != want[i] {
 			t.Fatalf("SchemaSQL()[%d] = %q, want %q", i, statements[i], want[i])
 		}
+	}
+}
+
+func TestAdapterCacheTTLZeroDoesNotExpire(t *testing.T) {
+	adapter := &Adapter{}
+	adapter.treeLoadedAt = time.Now().Add(-24 * time.Hour)
+	adapter.cfg.CacheTTL = 0
+
+	if adapter.expired() {
+		t.Fatal("expired() = true, want false when CacheTTL is zero")
+	}
+}
+
+func TestAdapterCacheTTLPositiveExpires(t *testing.T) {
+	adapter := &Adapter{}
+	adapter.treeLoadedAt = time.Now().Add(-2 * time.Minute)
+	adapter.cfg.CacheTTL = time.Minute
+
+	if !adapter.expired() {
+		t.Fatal("expired() = false, want true when cache is older than TTL")
 	}
 }

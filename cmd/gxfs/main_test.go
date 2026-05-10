@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -347,6 +350,147 @@ func TestRunHelpDoesNotRequireConfig(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "GXFS gives agents Unix-like commands") {
 		t.Fatalf("help output = %q, want GXFS help", stdout.String())
+	}
+}
+
+func TestRunInitDoesNotRequireConfig(t *testing.T) {
+	t.Setenv("GXFS_CONFIG", "/path/that/does/not/exist")
+	dir := t.TempDir()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"init", dir, "--no-instructions"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(init) code = %d, stderr = %q", code, stderr.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "settings.toml")); err != nil {
+		t.Fatalf("settings.toml stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "mounts.toml")); err != nil {
+		t.Fatalf("mounts.toml stat error = %v", err)
+	}
+}
+
+func TestRunConfigDoctorStillRequiresConfig(t *testing.T) {
+	t.Setenv("GXFS_CONFIG", "/path/that/does/not/exist")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"config", "doctor"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("run(config doctor) code = %d, want failure; stdout = %q", code, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "read config") {
+		t.Fatalf("stderr = %q, want read config error", stderr.String())
+	}
+}
+
+func TestRunUsesMountsForRemotePathResolution(t *testing.T) {
+	dir := t.TempDir()
+	gxfsDir := filepath.Join(dir, ".gxfs")
+	if err := os.MkdirAll(gxfsDir, 0o755); err != nil {
+		t.Fatalf("mkdir .gxfs: %v", err)
+	}
+
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Query().Get("path")
+		if r.URL.Path != "/v1/repos/gxfs/stat" {
+			t.Fatalf("request path = %q, want /v1/repos/gxfs/stat", r.URL.Path)
+		}
+		if err := json.NewEncoder(w).Encode(store.StatResponse{
+			Node: store.Node{Path: "/remote-docs/readme.md", Name: "readme.md", Kind: "file", Size: 7},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	settings := `version = 1
+repo = "gxfs"
+
+[server]
+addr = "` + server.URL + `"
+
+[docs]
+path = "docs"
+`
+	if err := os.WriteFile(filepath.Join(gxfsDir, "settings.toml"), []byte(settings), 0o644); err != nil {
+		t.Fatalf("write settings.toml: %v", err)
+	}
+
+	mounts := `version = 1
+
+[[mounts]]
+local = "docs"
+remote = "repo://self/remote-docs"
+mode = "writable"
+source = "default"
+`
+	if err := os.WriteFile(filepath.Join(gxfsDir, "mounts.toml"), []byte(mounts), 0o644); err != nil {
+		t.Fatalf("write mounts.toml: %v", err)
+	}
+
+	t.Setenv("GXFS_CONFIG", filepath.Join(gxfsDir, "settings.toml"))
+	t.Chdir(dir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"stat", "-f", "docs/readme.md"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(stat) code = %d, stderr = %q", code, stderr.String())
+	}
+	if gotPath != "/remote-docs/readme.md" {
+		t.Fatalf("remote path = %q, want /remote-docs/readme.md", gotPath)
+	}
+	if !strings.Contains(stdout.String(), "/docs/readme.md\tfile\t7") {
+		t.Fatalf("stdout = %q, want localized stat output", stdout.String())
+	}
+}
+
+func TestRunFallsBackToDefaultMountWhenMountsFileMissing(t *testing.T) {
+	dir := t.TempDir()
+	gxfsDir := filepath.Join(dir, ".gxfs")
+	if err := os.MkdirAll(gxfsDir, 0o755); err != nil {
+		t.Fatalf("mkdir .gxfs: %v", err)
+	}
+
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Query().Get("path")
+		if err := json.NewEncoder(w).Encode(store.StatResponse{
+			Node: store.Node{Path: "/docs/readme.md", Name: "readme.md", Kind: "file", Size: 7},
+		}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	settings := `version = 1
+repo = "gxfs"
+
+[server]
+addr = "` + server.URL + `"
+
+[docs]
+path = "docs"
+`
+	if err := os.WriteFile(filepath.Join(gxfsDir, "settings.toml"), []byte(settings), 0o644); err != nil {
+		t.Fatalf("write settings.toml: %v", err)
+	}
+
+	t.Setenv("GXFS_CONFIG", filepath.Join(gxfsDir, "settings.toml"))
+	t.Chdir(dir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"stat", "-f", "docs/readme.md"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(stat) code = %d, stderr = %q", code, stderr.String())
+	}
+	if gotPath != "/docs/readme.md" {
+		t.Fatalf("remote path = %q, want /docs/readme.md", gotPath)
 	}
 }
 
@@ -1222,15 +1366,35 @@ func TestInitWritesSettingsAndAgentsInstructions(t *testing.T) {
 	got := executeInit(t, dir)
 
 	settings := readTextFile(t, filepath.Join(dir, ".gxfs", "settings.toml"))
-	if !strings.Contains(settings, "[docs]\npath = \"/docs\"") {
+	if !strings.Contains(settings, "version = 1") {
+		t.Fatalf("settings.toml = %q, want version", settings)
+	}
+	if !strings.Contains(settings, "[docs]\npath = \"docs\"") {
 		t.Fatalf("settings.toml = %q, want docs path", settings)
+	}
+	if !strings.Contains(settings, "[auth]\nmode = \"bearer\"\ntoken_env = \"GXFS_TOKEN\"") {
+		t.Fatalf("settings.toml = %q, want auth block", settings)
+	}
+	if !strings.Contains(settings, "[cache]\nmetadata_ttl = \"5m\"\ncontent_ttl = \"24h\"\nmaterialize = \"explicit\"") {
+		t.Fatalf("settings.toml = %q, want cache block", settings)
+	}
+
+	mounts := readTextFile(t, filepath.Join(dir, ".gxfs", "mounts.toml"))
+	if !strings.Contains(mounts, "version = 1") {
+		t.Fatalf("mounts.toml = %q, want version", mounts)
+	}
+	if !strings.Contains(mounts, "local = \"docs\"") || !strings.Contains(mounts, "remote = \"repo://self/docs\"") {
+		t.Fatalf("mounts.toml = %q, want default docs mount", mounts)
+	}
+	if !strings.Contains(mounts, "mode = \"writable\"") || !strings.Contains(mounts, "source = \"default\"") {
+		t.Fatalf("mounts.toml = %q, want writable default mount", mounts)
 	}
 
 	agents := readTextFile(t, filepath.Join(dir, "AGENTS.md"))
 	if !strings.Contains(agents, gxfsInstructionsStart) || !strings.Contains(agents, gxfsInstructionsEnd) {
 		t.Fatalf("AGENTS.md missing GXFS markers: %q", agents)
 	}
-	if !strings.Contains(agents, "Use gxfs CLI to browse") || !strings.Contains(agents, "gxfs tree /docs -L 3") {
+	if !strings.Contains(agents, "Use gxfs CLI to browse") || !strings.Contains(agents, "gxfs tree docs -L 3") {
 		t.Fatalf("AGENTS.md missing instruction content: %q", agents)
 	}
 	if !strings.Contains(got, "updated GXFS instructions in") {
@@ -1282,8 +1446,51 @@ func TestInitNoInstructionsOnlyWritesSettings(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "settings.toml")); err != nil {
 		t.Fatalf("settings.toml stat error = %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "mounts.toml")); err != nil {
+		t.Fatalf("mounts.toml stat error = %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
 		t.Fatalf("AGENTS.md exists after --no-instructions, err=%v", err)
+	}
+}
+
+func TestInitWritesSettingsAndMountsTemplatesFromFlags(t *testing.T) {
+	dir := t.TempDir()
+	executeInit(t,
+		"--no-instructions",
+		"--repo", "github.com/acme/project",
+		"--server", "https://gxfs.example.com",
+		"--docs", "knowledge",
+		"--auth", "bearer",
+		dir,
+	)
+
+	settings := readTextFile(t, filepath.Join(dir, ".gxfs", "settings.toml"))
+	for _, want := range []string{
+		`version = 1`,
+		`repo = "github.com/acme/project"`,
+		`addr = "https://gxfs.example.com"`,
+		`mode = "bearer"`,
+		`token_env = "GXFS_TOKEN"`,
+		`path = "knowledge"`,
+		`materialize = "explicit"`,
+	} {
+		if !strings.Contains(settings, want) {
+			t.Fatalf("settings.toml = %q, missing %q", settings, want)
+		}
+	}
+
+	mounts := readTextFile(t, filepath.Join(dir, ".gxfs", "mounts.toml"))
+	for _, want := range []string{
+		`version = 1`,
+		`local = "knowledge"`,
+		`remote = "repo://self/knowledge"`,
+		`mode = "writable"`,
+		`source = "default"`,
+	} {
+		if !strings.Contains(mounts, want) {
+			t.Fatalf("mounts.toml = %q, missing %q", mounts, want)
+		}
 	}
 }
 

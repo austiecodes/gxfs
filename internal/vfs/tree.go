@@ -80,6 +80,54 @@ func New(files []File) (*Tree, error) {
 	return tree, nil
 }
 
+func NewFromNodes(nodes []Node) (*Tree, error) {
+	tree := &Tree{
+		nodes: map[string]Node{
+			"/": {Path: "/", Name: "/", Kind: KindDir},
+		},
+		children: make(map[string][]string),
+		content:  make(map[string]string),
+	}
+
+	for _, node := range nodes {
+		nodePath := cleanPath(node.Path)
+		if nodePath == "/" {
+			continue
+		}
+
+		switch node.Kind {
+		case KindDir:
+			tree.addParents(nodePath)
+			parent := path.Dir(nodePath)
+			if !contains(tree.children[parent], nodePath) {
+				tree.children[parent] = appendChild(tree.children[parent], nodePath)
+			}
+		case KindFile:
+			tree.addParents(path.Dir(nodePath))
+			parent := path.Dir(nodePath)
+			if !contains(tree.children[parent], nodePath) {
+				tree.children[parent] = appendChild(tree.children[parent], nodePath)
+			}
+		default:
+			return nil, fmt.Errorf("unsupported node kind %q for %s", node.Kind, nodePath)
+		}
+
+		if node.Name == "" {
+			node.Name = path.Base(nodePath)
+		}
+		node.Path = nodePath
+		tree.nodes[nodePath] = node
+	}
+
+	for parent := range tree.children {
+		sort.Slice(tree.children[parent], func(i, j int) bool {
+			return tree.nodes[tree.children[parent][i]].Name < tree.nodes[tree.children[parent][j]].Name
+		})
+	}
+
+	return tree, nil
+}
+
 type LSOptions struct {
 	Sort      string
 	Reverse   bool

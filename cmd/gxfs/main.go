@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -15,6 +18,7 @@ import (
 
 	"gxfs/internal/client"
 	"gxfs/internal/config"
+	mountadapter "gxfs/internal/mount"
 	"gxfs/internal/store"
 )
 
@@ -588,16 +592,33 @@ func newInitCommand() *cobra.Command {
 	var claude bool
 	var agent string
 	var noInstructions bool
+	var repoName string
+	var serverAddr string
+	var docsPath string
+	var authMode string
+
+	repoName = "github.com/user/repo"
+	serverAddr = "http://127.0.0.1:7635"
+	docsPath = "docs"
+	authMode = "bearer"
 
 	cmd := &cobra.Command{
 		Use:   "init [path]",
 		Short: "Initialize .gxfs config in a repo",
-		Long:  "Initialize .gxfs/settings.toml in the target directory and inject GXFS usage instructions into AGENTS.md by default.",
+		Long:  "Initialize .gxfs/settings.toml and .gxfs/mounts.toml in the target directory and inject GXFS usage instructions into AGENTS.md by default.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
 			if len(args) == 1 {
 				dir = args[0]
+			}
+
+			if authMode != "bearer" && authMode != "none" {
+				return fmt.Errorf("unsupported auth mode %q: use bearer or none", authMode)
+			}
+			docsPath = cleanLocalDocsPath(docsPath)
+			if docsPath == "" {
+				return fmt.Errorf("--docs cannot be empty")
 			}
 
 			var target string
@@ -618,6 +639,13 @@ func newInitCommand() *cobra.Command {
 
 			gxfsDir := filepath.Join(dir, ".gxfs")
 			settingsPath := filepath.Join(gxfsDir, "settings.toml")
+			mountsPath := filepath.Join(gxfsDir, "mounts.toml")
+			templateData := initTemplateData{
+				Repo:       repoName,
+				ServerAddr: serverAddr,
+				DocsPath:   docsPath,
+				AuthMode:   authMode,
+			}
 
 			if _, err := os.Stat(settingsPath); err == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s already exists, skipping\n", settingsPath)
@@ -625,14 +653,34 @@ func newInitCommand() *cobra.Command {
 				if err := os.MkdirAll(gxfsDir, 0o755); err != nil {
 					return fmt.Errorf("create %s: %w", gxfsDir, err)
 				}
-				if err := os.WriteFile(settingsPath, []byte(initSettingsToml), 0o644); err != nil {
+				settingsContent, err := renderInitTemplate("settings", initSettingsTomlTemplate, templateData)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(settingsPath, []byte(settingsContent), 0o644); err != nil {
 					return fmt.Errorf("write %s: %w", settingsPath, err)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", settingsPath)
 			}
 
+			if _, err := os.Stat(mountsPath); err == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s already exists, skipping\n", mountsPath)
+			} else {
+				if err := os.MkdirAll(gxfsDir, 0o755); err != nil {
+					return fmt.Errorf("create %s: %w", gxfsDir, err)
+				}
+				mountsContent, err := renderInitTemplate("mounts", initMountsTomlTemplate, templateData)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(mountsPath, []byte(mountsContent), 0o644); err != nil {
+					return fmt.Errorf("write %s: %w", mountsPath, err)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", mountsPath)
+			}
+
 			if !noInstructions {
-				actual, err := upsertInstructions(target, initDocsPath)
+				actual, err := upsertInstructions(target, docsPath)
 				if err != nil {
 					return err
 				}
@@ -650,22 +698,47 @@ func newInitCommand() *cobra.Command {
 	cmd.Flags().StringVar(&agent, "agent", "", "agent instructions target: agents or claude")
 	cmd.Flags().BoolVar(&claude, "claude", false, "append GXFS usage to CLAUDE.md (alias for --agent claude)")
 	cmd.Flags().BoolVar(&noInstructions, "no-instructions", false, "only create .gxfs config, without writing agent instructions")
+	cmd.Flags().StringVar(&repoName, "repo", repoName, "logical repository name")
+	cmd.Flags().StringVar(&serverAddr, "server", serverAddr, "gxfs-server base URL")
+	cmd.Flags().StringVar(&docsPath, "docs", docsPath, "local docs root")
+	cmd.Flags().StringVar(&authMode, "auth", authMode, "auth mode: bearer or none")
 	return cmd
 }
 
-const initSettingsToml = `repo = "github.com/user/repo"
+type initTemplateData struct {
+	Repo       string
+	ServerAddr string
+	DocsPath   string
+	AuthMode   string
+}
+
+const initSettingsTomlTemplate = `version = 1
+repo = "{{ .Repo }}"
 
 [server]
-addr = "http://127.0.0.1:7635"
+addr = "{{ .ServerAddr }}"
 
-[mount]
-include = ["/"]
+[auth]
+mode = "{{ .AuthMode }}"
+token_env = "GXFS_TOKEN"
 
 [docs]
-path = "/docs"
+path = "{{ .DocsPath }}"
+
+[cache]
+metadata_ttl = "5m"
+content_ttl = "24h"
+materialize = "explicit"
 `
 
-const initDocsPath = "/docs"
+const initMountsTomlTemplate = `version = 1
+
+[[mounts]]
+local = "{{ .DocsPath }}"
+remote = "repo://self/{{ .DocsPath }}"
+mode = "writable"
+source = "default"
+`
 
 const gxfsInstructionsStart = "<!-- GXFS_START -->"
 const gxfsInstructionsEnd = "<!-- GXFS_END -->"
@@ -753,6 +826,19 @@ func renderGXFSInstructions(docsPath string) (string, error) {
 	return out.String(), nil
 }
 
+func renderInitTemplate(name, raw string, data initTemplateData) (string, error) {
+	tmpl, err := template.New(name).Option("missingkey=error").Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse %s template: %w", name, err)
+	}
+
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, data); err != nil {
+		return "", fmt.Errorf("render %s template: %w", name, err)
+	}
+	return out.String(), nil
+}
+
 func newConfigCommand(repo string) *cobra.Command {
 	configCmd := &cobra.Command{
 		Use:   "config",
@@ -781,7 +867,7 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if wantsHelp(args) {
+	if isConfigFreeCommand(args) {
 		cmd := newRootCommand(nil, "")
 		cmd.SetArgs(args)
 		cmd.SetOut(stdout)
@@ -803,7 +889,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	cmd := newRootCommand(client.New(cfg.Server.Addr), cfg.Repo)
+	adapter, err := loadRuntimeAdapter(cfg, path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	cmd := newRootCommand(adapter, cfg.Repo)
 	cmd.SetArgs(args)
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
@@ -815,6 +907,32 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func isConfigFreeCommand(args []string) bool {
+	if wantsHelp(args) {
+		return true
+	}
+	return len(args) > 0 && args[0] == "init"
+}
+
+func loadRuntimeAdapter(cfg config.CLIConfig, settingsPath string) (store.Adapter, error) {
+	mountsPath := filepath.Join(filepath.Dir(settingsPath), "mounts.toml")
+	mountsCfg, err := config.LoadMounts(mountsPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			mountsCfg = config.DefaultMounts(cfg)
+		} else {
+			return nil, err
+		}
+	}
+
+	resolver, err := mountadapter.NewResolver(cfg.Repo, mountsCfg.Mounts)
+	if err != nil {
+		return nil, err
+	}
+
+	return mountadapter.NewAdapter(client.New(cfg.Server.Addr), resolver), nil
+}
+
 func wantsHelp(args []string) bool {
 	for _, arg := range args {
 		if arg == "help" || arg == "--help" || arg == "-h" {
@@ -822,4 +940,13 @@ func wantsHelp(args []string) bool {
 		}
 	}
 	return false
+}
+
+func cleanLocalDocsPath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.Trim(p, "/")
+	if p == "" || p == "." {
+		return ""
+	}
+	return filepath.ToSlash(path.Clean(p))
 }

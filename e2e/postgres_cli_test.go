@@ -41,8 +41,10 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
 
 	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
+	cliMounts := filepath.Join(tmp, ".gxfs", "mounts.toml")
 	os.MkdirAll(filepath.Join(tmp, ".gxfs"), 0o755)
 	writeFile(t, cliConfig, cliConfigText(serverPort))
+	writeFile(t, cliMounts, cliMountsText())
 
 	tests := []struct {
 		name string
@@ -57,7 +59,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		{
 			name: "ls lists root through server and postgres",
 			args: []string{"ls", "/"},
-			want: "README.md\ndocs/\nsrc/\n",
+			want: "docs/\n",
 		},
 		{
 			name: "ls hides hidden files by default",
@@ -82,12 +84,12 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		{
 			name: "find walks the synthesized tree",
 			args: []string{"find", "/", "--name", "*.md"},
-			want: "/README.md\n/docs/api/reference.md\n/docs/readme.md\n",
+			want: "/docs/api/reference.md\n/docs/readme.md\n",
 		},
 		{
 			name: "tree renders through the backend",
 			args: []string{"tree", "/", "-L", "2"},
-			want: "/\n  README.md\n  docs/\n    api/\n    readme.md\n  src/\n    main.go\n",
+			want: "/\n  docs/\n    api/\n    readme.md\n",
 		},
 		{
 			name: "stat returns file metadata",
@@ -107,52 +109,52 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 
 	// Write/Edit/Delete tests (sequential, build on each other)
 	t.Run("write creates new file", func(t *testing.T) {
-		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-write.md", "hello world")
-		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/test-write.md")
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/test-write.md", "hello world")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/docs/test-write.md")
 		if got != "hello world" {
 			t.Fatalf("cat after write = %q, want %q", got, "hello world")
 		}
 	})
 
 	t.Run("write creates parent dirs", func(t *testing.T) {
-		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/deep/nested/dir/file.txt", "deep content")
-		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/deep/nested")
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/deep/nested/dir/file.txt", "deep content")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/docs/deep/nested")
 		if got != "dir/\n" {
 			t.Fatalf("ls after deep write = %q, want %q", got, "dir/\n")
 		}
 	})
 
 	t.Run("edit replaces first occurrence", func(t *testing.T) {
-		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-edit.md", "hello world\nhello go\n")
-		runCLI(t, repoRoot, cliPath, cliConfig, "edit", "/test-edit.md", "--old", "hello", "--new", "hi")
-		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/test-edit.md")
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/test-edit.md", "hello world\nhello go\n")
+		runCLI(t, repoRoot, cliPath, cliConfig, "edit", "/docs/test-edit.md", "--old", "hello", "--new", "hi")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/docs/test-edit.md")
 		if got != "hi world\nhello go\n" {
 			t.Fatalf("edit first = %q, want %q", got, "hi world\nhello go\n")
 		}
 	})
 
 	t.Run("edit all replaces all occurrences", func(t *testing.T) {
-		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-edit-all.md", "aaa bbb aaa\n")
-		runCLI(t, repoRoot, cliPath, cliConfig, "edit", "/test-edit-all.md", "--old", "aaa", "--new", "ccc", "--all")
-		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/test-edit-all.md")
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/test-edit-all.md", "aaa bbb aaa\n")
+		runCLI(t, repoRoot, cliPath, cliConfig, "edit", "/docs/test-edit-all.md", "--old", "aaa", "--new", "ccc", "--all")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/docs/test-edit-all.md")
 		if got != "ccc bbb ccc\n" {
 			t.Fatalf("edit all = %q, want %q", got, "ccc bbb ccc\n")
 		}
 	})
 
 	t.Run("delete removes file", func(t *testing.T) {
-		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-del.md", "to be deleted")
-		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/test-del.md")
-		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/")
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/test-del.md", "to be deleted")
+		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/docs/test-del.md")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/docs")
 		if strings.Contains(got, "test-del.md") {
 			t.Fatalf("file still visible after delete: %q", got)
 		}
 	})
 
 	t.Run("delete removes directory recursively", func(t *testing.T) {
-		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/test-dir/child.txt", "child")
-		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/test-dir")
-		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/")
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/test-dir/child.txt", "child")
+		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/docs/test-dir")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/docs")
 		if strings.Contains(got, "test-dir") {
 			t.Fatalf("dir still visible after recursive delete: %q", got)
 		}
@@ -182,11 +184,13 @@ func TestGXFSPostgresAutoMigratesEmptyDatabase(t *testing.T) {
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
 
 	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
+	cliMounts := filepath.Join(tmp, ".gxfs", "mounts.toml")
 	os.MkdirAll(filepath.Join(tmp, ".gxfs"), 0o755)
 	writeFile(t, cliConfig, cliConfigText(serverPort))
+	writeFile(t, cliMounts, cliMountsText())
 
-	runCLI(t, repoRoot, cliPath, cliConfig, "write", "/auto/migrated.md", "created by migration")
-	got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/auto/migrated.md")
+	runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/auto/migrated.md", "created by migration")
+	got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/docs/auto/migrated.md")
 	if got != "created by migration" {
 		t.Fatalf("cat after auto-migrated write = %q, want %q", got, "created by migration")
 	}
@@ -464,14 +468,25 @@ mtime_column = "updated_at"
 
 func cliConfigText(serverPort int) string {
 	return fmt.Sprintf(`repo = "e2e-test"
+version = 1
 
 [server]
 addr = "http://127.0.0.1:%d"
 
-[mount]
-include = ["/"]
-exclude = []
+[docs]
+path = "docs"
 `, serverPort)
+}
+
+func cliMountsText() string {
+	return `version = 1
+
+[[mounts]]
+local = "docs"
+remote = "repo://self/docs"
+mode = "writable"
+source = "default"
+`
 }
 
 func freePort(t *testing.T) int {

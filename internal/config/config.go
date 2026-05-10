@@ -3,15 +3,19 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
 type CLIConfig struct {
-	Repo   string    `toml:"repo"`
-	Server ServerRef `toml:"server"`
-	Mount  Mount     `toml:"mount"`
-	Docs   Docs      `toml:"docs"`
+	Version int       `toml:"version"`
+	Repo    string    `toml:"repo"`
+	Server  ServerRef `toml:"server"`
+	Mount   Mount     `toml:"mount"`
+	Docs    Docs      `toml:"docs"`
+	Auth    Auth      `toml:"auth"`
+	Cache   Cache     `toml:"cache"`
 }
 
 type ServerRef struct {
@@ -25,6 +29,29 @@ type Mount struct {
 
 type Docs struct {
 	Path string `toml:"path"`
+}
+
+type Auth struct {
+	Mode     string `toml:"mode"`
+	TokenEnv string `toml:"token_env"`
+}
+
+type Cache struct {
+	MetadataTTL string `toml:"metadata_ttl"`
+	ContentTTL  string `toml:"content_ttl"`
+	Materialize string `toml:"materialize"`
+}
+
+type MountsConfig struct {
+	Version int           `toml:"version"`
+	Mounts  []MountConfig `toml:"mounts"`
+}
+
+type MountConfig struct {
+	Local  string `toml:"local"`
+	Remote string `toml:"remote"`
+	Mode   string `toml:"mode"`
+	Source string `toml:"source"`
 }
 
 type ServerConfig struct {
@@ -83,13 +110,86 @@ func LoadCLI(path string) (CLIConfig, error) {
 	if cfg.Server.Addr == "" {
 		return CLIConfig{}, fmt.Errorf("server.addr is required")
 	}
+	if cfg.Version == 0 {
+		cfg.Version = 1
+	}
+	if cfg.Auth.Mode == "" {
+		cfg.Auth.Mode = "none"
+	}
+	if cfg.Auth.Mode != "none" && cfg.Auth.Mode != "bearer" {
+		return CLIConfig{}, fmt.Errorf("unsupported auth.mode %q", cfg.Auth.Mode)
+	}
+	if cfg.Auth.Mode == "bearer" && cfg.Auth.TokenEnv == "" {
+		cfg.Auth.TokenEnv = "GXFS_TOKEN"
+	}
+	if cfg.Cache.MetadataTTL == "" {
+		cfg.Cache.MetadataTTL = "5m"
+	}
+	if cfg.Cache.ContentTTL == "" {
+		cfg.Cache.ContentTTL = "24h"
+	}
+	if cfg.Cache.Materialize == "" {
+		cfg.Cache.Materialize = "explicit"
+	}
 	if len(cfg.Mount.Include) == 0 {
 		cfg.Mount.Include = []string{"/"}
 	}
+	cfg.Docs.Path = cleanLocalPath(cfg.Docs.Path)
 	if cfg.Docs.Path == "" {
-		cfg.Docs.Path = "/docs"
+		cfg.Docs.Path = "docs"
 	}
 	return cfg, nil
+}
+
+func LoadMounts(path string) (MountsConfig, error) {
+	data, err := readExpanded(path)
+	if err != nil {
+		return MountsConfig{}, err
+	}
+
+	var cfg MountsConfig
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return MountsConfig{}, fmt.Errorf("parse mounts config: %w", err)
+	}
+	if cfg.Version == 0 {
+		cfg.Version = 1
+	}
+	for i := range cfg.Mounts {
+		m := &cfg.Mounts[i]
+		m.Local = cleanLocalPath(m.Local)
+		if m.Local == "" {
+			return MountsConfig{}, fmt.Errorf("mounts[%d].local is required", i)
+		}
+		if m.Remote == "" {
+			return MountsConfig{}, fmt.Errorf("mounts[%d].remote is required", i)
+		}
+		if m.Mode == "" {
+			m.Mode = "readonly"
+		}
+		if m.Mode != "readonly" && m.Mode != "writable" {
+			return MountsConfig{}, fmt.Errorf("mounts[%d].mode must be readonly or writable", i)
+		}
+		if m.Source == "" {
+			m.Source = "manual"
+		}
+	}
+	return cfg, nil
+}
+
+func DefaultMounts(cfg CLIConfig) MountsConfig {
+	docsPath := cleanLocalPath(cfg.Docs.Path)
+	if docsPath == "" {
+		docsPath = "docs"
+	}
+	return MountsConfig{
+		Version: 1,
+		Mounts: []MountConfig{{
+			Local:  docsPath,
+			Remote: "repo://self/" + docsPath,
+			Mode:   "writable",
+			Source: "default",
+		}},
+	}
 }
 
 func LoadServer(path string) (ServerConfig, error) {
@@ -122,4 +222,13 @@ func readExpanded(path string) ([]byte, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	return []byte(os.ExpandEnv(string(data))), nil
+}
+
+func cleanLocalPath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.Trim(p, "/")
+	if p == "" || p == "." {
+		return ""
+	}
+	return p
 }

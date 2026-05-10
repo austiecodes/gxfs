@@ -262,6 +262,8 @@ func mapError(err error) (int, string) {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrOldNotFound):
 		return http.StatusNotFound, "NOT_FOUND"
+	case errors.Is(err, store.ErrReadOnlyMount):
+		return http.StatusForbidden, "FORBIDDEN"
 	case errors.Is(err, store.ErrIsDir), errors.Is(err, store.ErrNotDir),
 		errors.Is(err, store.ErrEmptyOld), errors.Is(err, store.ErrCannotDeleteRoot):
 		return http.StatusBadRequest, "BAD_REQUEST"

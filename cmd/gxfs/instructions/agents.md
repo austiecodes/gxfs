@@ -2,6 +2,7 @@
 ## GXFS
 
 Use gxfs CLI to browse and update this project's shared internal documentation. Treat gxfs like a virtual `{{ .DocsPath }}` directory; prefer it over scanning local files when you need project docs.
+Mounted remote docs are declared in `.gxfs/mounts.toml`; use `gxfs tree {{ .DocsPath }} -L 3` before reading specific files.
 
 - `gxfs ls {{ .DocsPath }}` - list docs
 - `gxfs tree {{ .DocsPath }} -L 3` - inspect doc structure

@@ -6,12 +6,13 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("path not found")
-	ErrIsDir         = errors.New("is a directory")
-	ErrNotDir        = errors.New("not a directory")
+	ErrNotFound        = errors.New("path not found")
+	ErrIsDir           = errors.New("is a directory")
+	ErrNotDir          = errors.New("not a directory")
 	ErrContentNotReady = errors.New("content not loaded")
-	ErrEmptyOld      = errors.New("old string cannot be empty")
-	ErrOldNotFound   = errors.New("old string not found")
+	ErrEmptyOld        = errors.New("old string cannot be empty")
+	ErrOldNotFound     = errors.New("old string not found")
+	ErrReadOnlyMount   = errors.New("read-only mount")
 	ErrCannotDeleteRoot = errors.New("cannot delete root")
 )
 

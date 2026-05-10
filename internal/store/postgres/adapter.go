@@ -67,6 +67,8 @@ func (a *Adapter) LS(ctx context.Context, req store.LSRequest) (*store.LSRespons
 	if err != nil {
 		return nil, err
 	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	opts := vfs.LSOptions{
 		Sort:      req.Sort,
 		Reverse:   req.Reverse,
@@ -85,6 +87,8 @@ func (a *Adapter) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeR
 	if err != nil {
 		return nil, err
 	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	root, err := tree.Stat(req.Path)
 	if err != nil {
 		return nil, err
@@ -112,6 +116,8 @@ func (a *Adapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResp
 	if err := a.ensureContent(ctx, tree, req.Path); err != nil {
 		return nil, err
 	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	content, err := tree.Cat(req.Path)
 	if err != nil {
 		return nil, err
@@ -127,6 +133,8 @@ func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepR
 	if err := a.ensureContentUnder(ctx, tree, req.Path); err != nil {
 		return nil, err
 	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	opts := vfs.GrepOptions{
 		CaseInsensitive: req.CaseInsensitive,
 		Invert:          req.Invert,
@@ -150,6 +158,8 @@ func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindR
 	if err != nil {
 		return nil, err
 	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	opts := vfs.FindOptions{
 		Type:     req.Type,
 		MaxDepth: req.MaxDepth,
@@ -169,6 +179,8 @@ func (a *Adapter) Stat(ctx context.Context, req store.StatRequest) (*store.StatR
 	if err != nil {
 		return nil, err
 	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	node, err := tree.Stat(req.Path)
 	if err != nil {
 		return nil, err
@@ -224,12 +236,14 @@ func (a *Adapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditR
 		return nil, err
 	}
 
+	a.mu.Lock()
 	replaced, err := tree.Edit(req.Path, req.Old, req.New, req.All)
 	if err != nil {
+		a.mu.Unlock()
 		return nil, err
 	}
-
 	content, _ := tree.Cat(req.Path)
+	a.mu.Unlock()
 	if err := a.writeBackPut(ctx, store.PutRequest{Path: req.Path, Content: content}); err != nil {
 		return nil, err
 	}
@@ -393,6 +407,9 @@ func (a *Adapter) treeFor(ctx context.Context) (*vfs.Tree, error) {
 }
 
 func (a *Adapter) expired() bool {
+	if a.cfg.CacheTTL <= 0 {
+		return false
+	}
 	return time.Since(a.treeLoadedAt) >= a.cfg.CacheTTL
 }
 
@@ -455,7 +472,9 @@ func (a *Adapter) ensureContent(ctx context.Context, tree *vfs.Tree, path string
 	if err := a.pool.QueryRow(ctx, query, path).Scan(&content); err != nil {
 		return fmt.Errorf("load content for %s: %w", path, err)
 	}
+	a.mu.Lock()
 	tree.SetContent(path, content)
+	a.mu.Unlock()
 	return nil
 }
 
@@ -480,12 +499,22 @@ func (a *Adapter) ensureContentUnder(ctx context.Context, tree *vfs.Tree, rootPa
 	}
 	defer rows.Close()
 
+	loaded := make(map[string]string)
 	for rows.Next() {
 		var path, content string
 		if err := rows.Scan(&path, &content); err != nil {
 			return fmt.Errorf("scan content: %w", err)
 		}
+		loaded[path] = content
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	for path, content := range loaded {
 		tree.SetContent(path, content)
 	}
-	return rows.Err()
+	a.mu.Unlock()
+	return nil
 }
