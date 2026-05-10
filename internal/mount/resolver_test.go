@@ -2,6 +2,7 @@ package mount
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"gxfs/internal/config"
@@ -69,6 +70,18 @@ func TestResolverRejectsUnsupportedRemoteForPhaseOne(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("NewResolver() error = nil, want unsupported collection remote")
+	}
+}
+
+func TestResolverRejectsRepoSelfWithoutPath(t *testing.T) {
+	_, err := NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs", Remote: "repo://self", Mode: "writable"},
+	})
+	if err == nil {
+		t.Fatal("NewResolver() error = nil, want error for repo://self without path")
+	}
+	if !strings.Contains(err.Error(), "needs a path after self/") {
+		t.Fatalf("error = %q, want hint about self/ path", err.Error())
 	}
 }
 

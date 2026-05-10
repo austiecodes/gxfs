@@ -242,7 +242,11 @@ func (a *Adapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditR
 		a.mu.Unlock()
 		return nil, err
 	}
-	content, _ := tree.Cat(req.Path)
+	content, catErr := tree.Cat(req.Path)
+	if catErr != nil {
+		a.mu.Unlock()
+		return nil, catErr
+	}
 	a.mu.Unlock()
 	if err := a.writeBackPut(ctx, store.PutRequest{Path: req.Path, Content: content}); err != nil {
 		return nil, err

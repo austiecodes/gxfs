@@ -142,6 +142,23 @@ mode = "jwt"
 	}
 }
 
+func TestLoadCLIRejectsUnsupportedMaterialize(t *testing.T) {
+	path := writeConfig(t, "settings.toml", `
+repo = "gxfs"
+
+[server]
+addr = "http://127.0.0.1:7635"
+
+[cache]
+materialize = "instant"
+`)
+
+	_, err := LoadCLI(path)
+	if err == nil {
+		t.Fatal("LoadCLI() error = nil, want materialize rejection")
+	}
+}
+
 func TestLoadMountsConfig(t *testing.T) {
 	path := writeConfig(t, "mounts.toml", `
 version = 1

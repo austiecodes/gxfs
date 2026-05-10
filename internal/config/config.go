@@ -131,6 +131,9 @@ func LoadCLI(path string) (CLIConfig, error) {
 	if cfg.Cache.Materialize == "" {
 		cfg.Cache.Materialize = "explicit"
 	}
+	if cfg.Cache.Materialize != "explicit" && cfg.Cache.Materialize != "auto" {
+		return CLIConfig{}, fmt.Errorf("unsupported cache.materialize %q: use explicit or auto", cfg.Cache.Materialize)
+	}
 	if len(cfg.Mount.Include) == 0 {
 		cfg.Mount.Include = []string{"/"}
 	}

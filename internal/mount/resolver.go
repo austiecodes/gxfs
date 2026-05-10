@@ -157,6 +157,8 @@ func (r *Resolver) ToLocal(remoteRepo, remotePath string) (string, bool) {
 func parseRemote(currentRepo, raw string) (string, string, error) {
 	const selfPrefix = "repo://self/"
 	switch {
+	case raw == "repo://self":
+		return "", "", fmt.Errorf("remote %q needs a path after self/ (e.g. repo://self/docs)", raw)
 	case strings.HasPrefix(raw, selfPrefix):
 		remoteRoot := cleanRemote(strings.TrimPrefix(raw, selfPrefix))
 		if remoteRoot == "/" {

@@ -96,13 +96,7 @@ func NewFromNodes(nodes []Node) (*Tree, error) {
 		}
 
 		switch node.Kind {
-		case KindDir:
-			tree.addParents(nodePath)
-			parent := path.Dir(nodePath)
-			if !contains(tree.children[parent], nodePath) {
-				tree.children[parent] = appendChild(tree.children[parent], nodePath)
-			}
-		case KindFile:
+		case KindDir, KindFile:
 			tree.addParents(path.Dir(nodePath))
 			parent := path.Dir(nodePath)
 			if !contains(tree.children[parent], nodePath) {

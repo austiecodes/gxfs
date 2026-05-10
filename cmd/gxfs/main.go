@@ -618,7 +618,7 @@ func newInitCommand() *cobra.Command {
 			}
 			docsPath = cleanLocalDocsPath(docsPath)
 			if docsPath == "" {
-				return fmt.Errorf("--docs cannot be empty")
+				docsPath = "docs"
 			}
 
 			var target string
