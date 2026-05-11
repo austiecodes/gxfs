@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -87,4 +88,43 @@ func Upsert(existing Manifest, entries []Entry) Manifest {
 		return existing.Entries[i].Local < existing.Entries[j].Local
 	})
 	return existing
+}
+
+func ReplaceUnder(existing Manifest, root string, entries []Entry) Manifest {
+	if existing.Version == 0 {
+		existing.Version = 1
+	}
+
+	root = cleanManifestPath(root)
+	next := existing.Entries[:0]
+	for _, entry := range existing.Entries {
+		if !isUnder(entry.Local, root) {
+			next = append(next, entry)
+		}
+	}
+	existing.Entries = append(next, entries...)
+	existing.GeneratedAt = time.Now().UTC()
+	sort.Slice(existing.Entries, func(i, j int) bool {
+		return existing.Entries[i].Local < existing.Entries[j].Local
+	})
+	return existing
+}
+
+func cleanManifestPath(p string) string {
+	p = filepath.ToSlash(filepath.Clean(p))
+	p = strings.TrimPrefix(p, "./")
+	p = strings.Trim(p, "/")
+	if p == "." {
+		return ""
+	}
+	return p
+}
+
+func isUnder(local, root string) bool {
+	local = cleanManifestPath(local)
+	root = cleanManifestPath(root)
+	if root == "" {
+		return true
+	}
+	return local == root || strings.HasPrefix(local, root+"/")
 }

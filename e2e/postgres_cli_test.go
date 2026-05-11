@@ -190,6 +190,35 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 			t.Fatalf("manifest missing synced entry: %s", manifest)
 		}
 	})
+
+	t.Run("sync pull materializes remote docs and writes manifest", func(t *testing.T) {
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/pull/a.md", "pulled alpha")
+
+		projectDir := filepath.Join(tmp, "pull-project")
+		if err := os.MkdirAll(filepath.Join(projectDir, ".gxfs"), 0o755); err != nil {
+			t.Fatalf("mkdir pull project config: %v", err)
+		}
+		pullConfig := filepath.Join(projectDir, ".gxfs", "settings.toml")
+		pullMounts := filepath.Join(projectDir, ".gxfs", "mounts.toml")
+		writeFile(t, pullConfig, cliConfigText(serverPort))
+		writeFile(t, pullMounts, cliMountsText())
+
+		got := runCLIInDir(t, projectDir, cliPath, pullConfig, "sync", "pull", "docs/pull", "--materialize")
+		if !strings.Contains(got, "pulled 1 file") || !strings.Contains(got, "materialized 1 file") {
+			t.Fatalf("sync pull output = %q, want pulled/materialized count", got)
+		}
+		materialized := readFile(t, filepath.Join(projectDir, "docs", "pull", "a.md"))
+		if materialized != "pulled alpha" {
+			t.Fatalf("materialized file = %q, want pulled alpha", materialized)
+		}
+		manifest, err := os.ReadFile(filepath.Join(projectDir, ".gxfs", "manifest.toml"))
+		if err != nil {
+			t.Fatalf("read manifest: %v", err)
+		}
+		if !strings.Contains(string(manifest), `local = 'docs/pull/a.md'`) || !strings.Contains(string(manifest), `materialized = true`) {
+			t.Fatalf("manifest missing materialized pull entry: %s", manifest)
+		}
+	})
 }
 
 func TestGXFSPostgresAutoMigratesEmptyDatabase(t *testing.T) {
@@ -475,6 +504,16 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }
 
 func serverConfigText(serverPort, pgPort int) string {

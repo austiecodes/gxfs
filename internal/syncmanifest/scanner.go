@@ -75,14 +75,18 @@ func readLocalFile(root, filePath string) (LocalFile, error) {
 	if err != nil {
 		return LocalFile{}, err
 	}
-	sum := sha256.Sum256(data)
 	return LocalFile{
 		LocalPath:   localPath,
 		Content:     string(data),
-		ContentHash: fmt.Sprintf("sha256:%x", sum),
+		ContentHash: HashContent(string(data)),
 		Size:        info.Size(),
 		MTime:       info.ModTime().UTC(),
 	}, nil
+}
+
+func HashContent(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("sha256:%x", sum)
 }
 
 func localPath(root, filePath string) (string, error) {

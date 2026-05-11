@@ -180,6 +180,8 @@ Sync local docs into GXFS:
 
 ```bash
 gxfs sync push docs
+gxfs sync pull docs
+gxfs sync pull docs --materialize
 gxfs sync push docs --manifest .gxfs/manifest.toml
 ```
 
@@ -297,6 +299,19 @@ write API, and updates `.gxfs/manifest.toml`.
 
 Phase 2A/2B stores client-computed `sha256:<hex>` hashes, file size, and mtime
 in the manifest. It does not change the server API or database schema.
+
+`gxfs sync pull <local-path>`
+
+Reads remote GXFS docs under the given path and updates `.gxfs/manifest.toml`.
+By default it only refreshes the manifest; it does not write local files.
+
+- `--manifest`: custom manifest path. Defaults to `.gxfs/manifest.toml`.
+- `--materialize`: write pulled docs to local files.
+- `--force-local`: resolve conflicts by pushing local content back to GXFS.
+- `--force-remote`: resolve conflicts by accepting remote content locally.
+
+Conflict detection compares the manifest's last synced hash with current local
+and remote hashes. If both changed, pull fails unless one force flag is used.
 
 ## Agent Usage
 

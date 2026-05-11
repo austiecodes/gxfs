@@ -60,6 +60,22 @@ func TestManifestSaveLoadAndUpsert(t *testing.T) {
 	}
 }
 
+func TestReplaceUnderRefreshesOnlyRequestedRoot(t *testing.T) {
+	manifest := Manifest{Entries: []Entry{
+		{Local: "docs/old.md", ContentHash: "sha256:old"},
+		{Local: "docs/nested/old.md", ContentHash: "sha256:nested"},
+		{Local: "other/keep.md", ContentHash: "sha256:keep"},
+	}}
+
+	got := ReplaceUnder(manifest, "docs", []Entry{{Local: "docs/new.md", ContentHash: "sha256:new"}})
+	if len(got.Entries) != 2 {
+		t.Fatalf("Entries len = %d, want 2: %+v", len(got.Entries), got.Entries)
+	}
+	if got.Entries[0].Local != "docs/new.md" || got.Entries[1].Local != "other/keep.md" {
+		t.Fatalf("Entries after replace = %+v, want docs/new.md and other/keep.md", got.Entries)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

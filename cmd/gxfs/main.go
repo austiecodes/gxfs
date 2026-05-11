@@ -597,6 +597,7 @@ func newSyncCommand(adapter store.Adapter, repo string) *cobra.Command {
 		Short: "Synchronize local docs with GXFS",
 	}
 	syncCmd.AddCommand(newSyncPushCommand(adapter, repo))
+	syncCmd.AddCommand(newSyncPullCommand(adapter, repo))
 	return syncCmd
 }
 
@@ -664,6 +665,243 @@ func cleanSyncMount(root string) string {
 		return ""
 	}
 	return root
+}
+
+func newSyncPullCommand(adapter store.Adapter, repo string) *cobra.Command {
+	var manifestPath string
+	var materialize bool
+	var forceLocal bool
+	var forceRemote bool
+	cmd := &cobra.Command{
+		Use:   "pull <local-path>",
+		Short: "Pull GXFS docs into the local sync manifest",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if forceLocal && forceRemote {
+				return fmt.Errorf("--force-local and --force-remote are mutually exclusive")
+			}
+			root := args[0]
+			if manifestPath == "" {
+				manifestPath = filepath.Join(".gxfs", "manifest.toml")
+			}
+
+			manifest := syncmanifest.Manifest{}
+			if existing, err := syncmanifest.Load(manifestPath); err == nil {
+				manifest = existing
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			existingByLocal := manifestEntriesByLocal(manifest)
+
+			remoteFiles, err := collectRemoteFiles(cmd.Context(), adapter, repo, root)
+			if err != nil {
+				return err
+			}
+
+			entries := make([]syncmanifest.Entry, 0, len(remoteFiles))
+			materialized := 0
+			forcePushed := 0
+			for _, remote := range remoteFiles {
+				existing, hasExisting := existingByLocal[remote.LocalPath]
+				local, localExists, err := readLocalSyncFile(remote.LocalPath)
+				if err != nil {
+					return err
+				}
+
+				remoteChanged := !hasExisting || existing.ContentHash != remote.ContentHash
+				localChanged := localExists && hasExisting && local.ContentHash != existing.ContentHash
+				untrackedLocalConflict := materialize && localExists && !hasExisting && local.ContentHash != remote.ContentHash
+
+				if localChanged && remoteChanged {
+					if forceLocal {
+						entry, err := pushLocalConflict(cmd.Context(), adapter, repo, local, remote, root)
+						if err != nil {
+							return err
+						}
+						entries = append(entries, entry)
+						forcePushed++
+						continue
+					}
+					if !forceRemote {
+						return fmt.Errorf("conflict on %s: local and remote both changed (use --force-local or --force-remote)", remote.LocalPath)
+					}
+				}
+				if materialize && (localChanged || untrackedLocalConflict) && !forceRemote {
+					if forceLocal && localExists {
+						entry, err := pushLocalConflict(cmd.Context(), adapter, repo, local, remote, root)
+						if err != nil {
+							return err
+						}
+						entries = append(entries, entry)
+						forcePushed++
+						continue
+					}
+					return fmt.Errorf("local file %s has unpushed changes (use --force-local or --force-remote)", remote.LocalPath)
+				}
+
+				entry := remote.toManifestEntry(root, materialize && (!localChanged || forceRemote))
+				if materialize {
+					if err := writeMaterializedFile(remote.LocalPath, remote.Content); err != nil {
+						return err
+					}
+					materialized++
+					entry.Materialized = true
+				} else if localExists && local.ContentHash == remote.ContentHash {
+					entry.Materialized = true
+				}
+				entries = append(entries, entry)
+			}
+
+			manifest = syncmanifest.ReplaceUnder(manifest, root, entries)
+			if err := syncmanifest.Save(manifestPath, manifest); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "pulled %d file%s from %s\n", len(remoteFiles), plural(len(remoteFiles)), root)
+			if materialize {
+				fmt.Fprintf(cmd.OutOrStdout(), "materialized %d file%s under %s\n", materialized, plural(materialized), root)
+			}
+			if forcePushed > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "pushed %d local file%s to resolve conflicts\n", forcePushed, plural(forcePushed))
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "updated %s\n", manifestPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&manifestPath, "manifest", "", "manifest path (default .gxfs/manifest.toml)")
+	cmd.Flags().BoolVar(&materialize, "materialize", false, "write pulled docs to local files")
+	cmd.Flags().BoolVar(&forceLocal, "force-local", false, "resolve conflicts by pushing local content")
+	cmd.Flags().BoolVar(&forceRemote, "force-remote", false, "resolve conflicts by accepting remote content")
+	return cmd
+}
+
+type remoteSyncFile struct {
+	LocalPath   string
+	RemotePath  string
+	Content     string
+	ContentHash string
+	Size        int64
+	MTime       string
+}
+
+type localSyncFile struct {
+	LocalPath   string
+	Content     string
+	ContentHash string
+	Size        int64
+	MTime       time.Time
+}
+
+func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root string) ([]remoteSyncFile, error) {
+	stat, err := adapter.Stat(ctx, store.StatRequest{Repo: repo, Path: root})
+	if err != nil {
+		return nil, err
+	}
+
+	nodes := []store.Node{stat.Node}
+	if stat.Node.Kind == "dir" {
+		resp, err := adapter.LS(ctx, store.LSRequest{Repo: repo, Path: root, Recursive: true, All: true})
+		if err != nil {
+			return nil, err
+		}
+		nodes = resp.Nodes
+	}
+
+	files := make([]remoteSyncFile, 0, len(nodes))
+	for _, node := range nodes {
+		if node.Kind != "file" {
+			continue
+		}
+		cat, err := adapter.Cat(ctx, store.CatRequest{Repo: repo, Path: node.Path})
+		if err != nil {
+			return nil, err
+		}
+		localPath := strings.Trim(strings.TrimPrefix(filepath.ToSlash(node.Path), "./"), "/")
+		files = append(files, remoteSyncFile{
+			LocalPath:   localPath,
+			RemotePath:  node.Path,
+			Content:     cat.Content,
+			ContentHash: syncmanifest.HashContent(cat.Content),
+			Size:        int64(len(cat.Content)),
+			MTime:       node.ModTime,
+		})
+	}
+	return files, nil
+}
+
+func (f remoteSyncFile) toManifestEntry(root string, materialized bool) syncmanifest.Entry {
+	return syncmanifest.Entry{
+		Local:        f.LocalPath,
+		RemoteDoc:    "repo://self/" + strings.Trim(f.RemotePath, "/"),
+		Mount:        cleanSyncMount(root),
+		ContentHash:  f.ContentHash,
+		Size:         f.Size,
+		MTime:        f.MTime,
+		Materialized: materialized,
+	}
+}
+
+func manifestEntriesByLocal(manifest syncmanifest.Manifest) map[string]syncmanifest.Entry {
+	entries := make(map[string]syncmanifest.Entry, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		entries[entry.Local] = entry
+	}
+	return entries
+}
+
+func readLocalSyncFile(localPath string) (localSyncFile, bool, error) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return localSyncFile{}, false, nil
+		}
+		return localSyncFile{}, false, fmt.Errorf("stat %s: %w", localPath, err)
+	}
+	if info.IsDir() {
+		return localSyncFile{}, false, nil
+	}
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		return localSyncFile{}, false, fmt.Errorf("read %s: %w", localPath, err)
+	}
+	content := string(data)
+	return localSyncFile{
+		LocalPath:   localPath,
+		Content:     content,
+		ContentHash: syncmanifest.HashContent(content),
+		Size:        info.Size(),
+		MTime:       info.ModTime().UTC(),
+	}, true, nil
+}
+
+func pushLocalConflict(ctx context.Context, adapter store.Adapter, repo string, local localSyncFile, remote remoteSyncFile, root string) (syncmanifest.Entry, error) {
+	resp, err := adapter.Put(ctx, store.PutRequest{
+		Repo:    repo,
+		Path:    remote.LocalPath,
+		Content: local.Content,
+	})
+	if err != nil {
+		return syncmanifest.Entry{}, err
+	}
+	return syncmanifest.Entry{
+		Local:        local.LocalPath,
+		RemoteDoc:    "repo://self/" + strings.Trim(resp.Node.Path, "/"),
+		Mount:        cleanSyncMount(root),
+		ContentHash:  local.ContentHash,
+		Size:         local.Size,
+		MTime:        local.MTime.Format(time.RFC3339),
+		Materialized: true,
+	}, nil
+}
+
+func writeMaterializedFile(localPath, content string) error {
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(localPath), err)
+	}
+	if err := os.WriteFile(localPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", localPath, err)
+	}
+	return nil
 }
 
 func newInitCommand() *cobra.Command {

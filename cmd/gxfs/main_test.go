@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +29,8 @@ type fakeClient struct {
 	findNodes   []store.Node
 	treeReq     store.TreeRequest
 	treeText    string
+	catReqs     []store.CatRequest
+	catContents map[string]string
 	putReqs     []store.PutRequest
 }
 
@@ -80,6 +84,10 @@ func (f *fakeClient) Tree(_ context.Context, req store.TreeRequest) (*store.Tree
 }
 
 func (f *fakeClient) Cat(_ context.Context, req store.CatRequest) (*store.CatResponse, error) {
+	f.catReqs = append(f.catReqs, req)
+	if f.catContents != nil {
+		return &store.CatResponse{Path: req.Path, Content: f.catContents[req.Path]}, nil
+	}
 	content := f.catContent
 	if content == "" {
 		content = "# Readme\n"
@@ -173,6 +181,16 @@ func executeWithClient(t *testing.T, client *fakeClient, args ...string) string 
 		t.Fatalf("Execute(%v) error = %v", args, err)
 	}
 	return out.String()
+}
+
+func executeWithClientErr(client *fakeClient, args ...string) (string, error) {
+	cmd := newRootCommand(client, "gxfs")
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return out.String(), err
 }
 
 func TestLSOutputMarksDirectories(t *testing.T) {
@@ -1377,6 +1395,119 @@ func TestSyncPushUploadsFilesAndWritesManifest(t *testing.T) {
 	}
 	if !strings.Contains(manifest, `content_hash = 'sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8'`) {
 		t.Fatalf("manifest missing alpha hash: %s", manifest)
+	}
+}
+
+func TestSyncPullUpdatesManifestWithoutMaterializing(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/docs/a.md", Name: "a.md", Kind: "file", Size: 5, ModTime: "2026-05-12T00:00:00Z"},
+		},
+		catContents: map[string]string{"/docs/a.md": "alpha"},
+	}
+
+	got := executeWithClient(t, client, "sync", "pull", "docs", "--manifest", manifestPath)
+	if !strings.Contains(got, "pulled 1 file") || !strings.Contains(got, "updated "+manifestPath) {
+		t.Fatalf("sync pull output = %q, want pull count and manifest path", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "docs", "a.md")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("materialized file stat error = %v, want not exist", err)
+	}
+
+	manifest := readTextFile(t, manifestPath)
+	if !strings.Contains(manifest, `local = 'docs/a.md'`) || !strings.Contains(manifest, `materialized = false`) {
+		t.Fatalf("manifest missing non-materialized pull entry: %s", manifest)
+	}
+	if !strings.Contains(manifest, `content_hash = 'sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8'`) {
+		t.Fatalf("manifest missing remote hash: %s", manifest)
+	}
+}
+
+func TestSyncPullMaterializesRemoteFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/docs/nested/a.md", Name: "a.md", Kind: "file", Size: 5, ModTime: "2026-05-12T00:00:00Z"},
+		},
+		catContents: map[string]string{"/docs/nested/a.md": "alpha"},
+	}
+
+	got := executeWithClient(t, client, "sync", "pull", "docs", "--materialize", "--manifest", manifestPath)
+	if !strings.Contains(got, "materialized 1 file") {
+		t.Fatalf("sync pull output = %q, want materialized count", got)
+	}
+	if got := readTextFile(t, filepath.Join(dir, "docs", "nested", "a.md")); got != "alpha" {
+		t.Fatalf("materialized content = %q, want alpha", got)
+	}
+}
+
+func TestSyncPullDetectsBothChangedConflict(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	writeTestFile(t, filepath.Join(dir, "docs", "a.md"), "local")
+	writeTestFile(t, manifestPath, `version = 1
+
+[[entries]]
+local = 'docs/a.md'
+remote_doc = 'repo://self/docs/a.md'
+mount = 'docs'
+content_hash = 'sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8'
+size = 5
+mtime = '2026-05-12T00:00:00Z'
+materialized = true
+`)
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/docs/a.md", Name: "a.md", Kind: "file", Size: 6, ModTime: "2026-05-12T00:01:00Z"},
+		},
+		catContents: map[string]string{"/docs/a.md": "remote"},
+	}
+
+	_, err := executeWithClientErr(client, "sync", "pull", "docs", "--manifest", manifestPath)
+	if err == nil || !strings.Contains(err.Error(), "local and remote both changed") {
+		t.Fatalf("sync pull conflict error = %v, want both-changed conflict", err)
+	}
+}
+
+func TestSyncPullForceLocalPushesConflict(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	writeTestFile(t, filepath.Join(dir, "docs", "a.md"), "local")
+	writeTestFile(t, manifestPath, `version = 1
+
+[[entries]]
+local = 'docs/a.md'
+remote_doc = 'repo://self/docs/a.md'
+mount = 'docs'
+content_hash = 'sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8'
+size = 5
+mtime = '2026-05-12T00:00:00Z'
+materialized = true
+`)
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/docs/a.md", Name: "a.md", Kind: "file", Size: 6, ModTime: "2026-05-12T00:01:00Z"},
+		},
+		catContents: map[string]string{"/docs/a.md": "remote"},
+	}
+
+	got := executeWithClient(t, client, "sync", "pull", "docs", "--force-local", "--manifest", manifestPath)
+	if len(client.putReqs) != 1 || client.putReqs[0].Path != "docs/a.md" || client.putReqs[0].Content != "local" {
+		t.Fatalf("force-local Put requests = %+v, want local upload", client.putReqs)
+	}
+	if !strings.Contains(got, "pushed 1 local file") {
+		t.Fatalf("sync pull force-local output = %q, want pushed conflict count", got)
 	}
 }
 
