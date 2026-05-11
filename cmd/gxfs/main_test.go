@@ -27,6 +27,7 @@ type fakeClient struct {
 	findNodes   []store.Node
 	treeReq     store.TreeRequest
 	treeText    string
+	putReqs     []store.PutRequest
 }
 
 func defaultLSNodes() []store.Node {
@@ -115,7 +116,8 @@ func (f *fakeClient) Stat(context.Context, store.StatRequest) (*store.StatRespon
 }
 
 func (f *fakeClient) Put(_ context.Context, req store.PutRequest) (*store.PutResponse, error) {
-	return &store.PutResponse{Node: store.Node{Path: req.Path, Name: req.Path, Kind: "file"}}, nil
+	f.putReqs = append(f.putReqs, req)
+	return &store.PutResponse{Node: store.Node{Path: req.Path, Name: filepath.Base(req.Path), Kind: "file", Size: int64(len(req.Content))}}, nil
 }
 
 func (f *fakeClient) Delete(_ context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
@@ -1347,6 +1349,37 @@ func TestWantsHelpIgnoresHelpSubstringInArgument(t *testing.T) {
 	}
 }
 
+func TestSyncPushUploadsFilesAndWritesManifest(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "docs", "a.md"), "alpha")
+	writeTestFile(t, filepath.Join(dir, "docs", "nested", "b.md"), "bravo")
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	client := &fakeClient{}
+
+	got := executeWithClient(t, client, "sync", "push", "docs", "--manifest", manifestPath)
+	if len(client.putReqs) != 2 {
+		t.Fatalf("Put requests = %d, want 2: %+v", len(client.putReqs), client.putReqs)
+	}
+	if client.putReqs[0].Path != "docs/a.md" || client.putReqs[0].Content != "alpha" {
+		t.Fatalf("first Put request = %+v, want docs/a.md alpha", client.putReqs[0])
+	}
+	if client.putReqs[1].Path != "docs/nested/b.md" || client.putReqs[1].Content != "bravo" {
+		t.Fatalf("second Put request = %+v, want docs/nested/b.md bravo", client.putReqs[1])
+	}
+	if !strings.Contains(got, "pushed 2 files") || !strings.Contains(got, "updated "+manifestPath) {
+		t.Fatalf("sync push output = %q, want pushed count and manifest path", got)
+	}
+
+	manifest := readTextFile(t, manifestPath)
+	if !strings.Contains(manifest, `local = 'docs/a.md'`) || !strings.Contains(manifest, `remote_doc = 'repo://self/docs/a.md'`) {
+		t.Fatalf("manifest missing a.md entry: %s", manifest)
+	}
+	if !strings.Contains(manifest, `content_hash = 'sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8'`) {
+		t.Fatalf("manifest missing alpha hash: %s", manifest)
+	}
+}
+
 func executeInit(t *testing.T, args ...string) string {
 	t.Helper()
 
@@ -1535,4 +1568,14 @@ func readTextFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
 }

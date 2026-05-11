@@ -159,6 +159,37 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 			t.Fatalf("dir still visible after recursive delete: %q", got)
 		}
 	})
+
+	t.Run("sync push uploads local docs and writes manifest", func(t *testing.T) {
+		projectDir := filepath.Join(tmp, "sync-project")
+		if err := os.MkdirAll(filepath.Join(projectDir, ".gxfs"), 0o755); err != nil {
+			t.Fatalf("mkdir sync project config: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(projectDir, "docs", "sync"), 0o755); err != nil {
+			t.Fatalf("mkdir sync docs: %v", err)
+		}
+		syncConfig := filepath.Join(projectDir, ".gxfs", "settings.toml")
+		syncMounts := filepath.Join(projectDir, ".gxfs", "mounts.toml")
+		writeFile(t, syncConfig, cliConfigText(serverPort))
+		writeFile(t, syncMounts, cliMountsText())
+		writeFile(t, filepath.Join(projectDir, "docs", "sync", "a.md"), "synced alpha")
+
+		got := runCLIInDir(t, projectDir, cliPath, syncConfig, "sync", "push", "docs")
+		if !strings.Contains(got, "pushed 1 file") || !strings.Contains(got, "updated .gxfs/manifest.toml") {
+			t.Fatalf("sync push output = %q, want pushed count and manifest update", got)
+		}
+		cat := runCLIInDir(t, projectDir, cliPath, syncConfig, "cat", "/docs/sync/a.md")
+		if cat != "synced alpha" {
+			t.Fatalf("cat after sync push = %q, want synced alpha", cat)
+		}
+		manifest, err := os.ReadFile(filepath.Join(projectDir, ".gxfs", "manifest.toml"))
+		if err != nil {
+			t.Fatalf("read manifest: %v", err)
+		}
+		if !strings.Contains(string(manifest), `local = 'docs/sync/a.md'`) {
+			t.Fatalf("manifest missing synced entry: %s", manifest)
+		}
+	})
 }
 
 func TestGXFSPostgresAutoMigratesEmptyDatabase(t *testing.T) {
@@ -403,11 +434,16 @@ func waitForServer(t *testing.T, healthURL string, cmd *exec.Cmd, output *string
 
 func runCLI(t *testing.T, repoRoot, cliPath, configPath string, args ...string) string {
 	t.Helper()
+	return runCLIInDir(t, repoRoot, cliPath, configPath, args...)
+}
+
+func runCLIInDir(t *testing.T, dir, cliPath, configPath string, args ...string) string {
+	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	output, err := runWithEnv(ctx, repoRoot, append(os.Environ(), "GXFS_CONFIG="+configPath), nil, cliPath, args...)
+	output, err := runWithEnv(ctx, dir, append(os.Environ(), "GXFS_CONFIG="+configPath), nil, cliPath, args...)
 	if err != nil {
 		t.Fatalf("gxfs %s: %v: %s", strings.Join(args, " "), err, output)
 	}

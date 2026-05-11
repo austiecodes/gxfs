@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -20,6 +21,7 @@ import (
 	"gxfs/internal/config"
 	mountadapter "gxfs/internal/mount"
 	"gxfs/internal/store"
+	"gxfs/internal/syncmanifest"
 )
 
 func newRootCommand(adapter store.Adapter, repo string) *cobra.Command {
@@ -40,6 +42,7 @@ func newRootCommand(adapter store.Adapter, repo string) *cobra.Command {
 	cmd.AddCommand(newDeleteCommand(adapter, repo))
 	cmd.AddCommand(newInitCommand())
 	cmd.AddCommand(newConfigCommand(repo))
+	cmd.AddCommand(newSyncCommand(adapter, repo))
 	return cmd
 }
 
@@ -586,6 +589,81 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+func newSyncCommand(adapter store.Adapter, repo string) *cobra.Command {
+	syncCmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Synchronize local docs with GXFS",
+	}
+	syncCmd.AddCommand(newSyncPushCommand(adapter, repo))
+	return syncCmd
+}
+
+func newSyncPushCommand(adapter store.Adapter, repo string) *cobra.Command {
+	var manifestPath string
+	cmd := &cobra.Command{
+		Use:   "push <local-path>",
+		Short: "Push local docs into GXFS",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root := args[0]
+			files, err := syncmanifest.ScanLocal(root)
+			if err != nil {
+				return err
+			}
+
+			entries := make([]syncmanifest.Entry, 0, len(files))
+			for _, file := range files {
+				resp, err := adapter.Put(cmd.Context(), store.PutRequest{
+					Repo:    repo,
+					Path:    file.LocalPath,
+					Content: file.Content,
+				})
+				if err != nil {
+					return err
+				}
+				entries = append(entries, syncmanifest.Entry{
+					Local:        file.LocalPath,
+					RemoteDoc:    "repo://self/" + strings.Trim(resp.Node.Path, "/"),
+					Mount:        cleanSyncMount(root),
+					ContentHash:  file.ContentHash,
+					Size:         file.Size,
+					MTime:        file.MTime.Format(time.RFC3339),
+					Materialized: true,
+				})
+			}
+
+			if manifestPath == "" {
+				manifestPath = filepath.Join(".gxfs", "manifest.toml")
+			}
+			manifest := syncmanifest.Manifest{}
+			if existing, err := syncmanifest.Load(manifestPath); err == nil {
+				manifest = existing
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			manifest = syncmanifest.Upsert(manifest, entries)
+			if err := syncmanifest.Save(manifestPath, manifest); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "pushed %d file%s from %s\n", len(files), plural(len(files)), root)
+			fmt.Fprintf(cmd.OutOrStdout(), "updated %s\n", manifestPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&manifestPath, "manifest", "", "manifest path (default .gxfs/manifest.toml)")
+	return cmd
+}
+
+func cleanSyncMount(root string) string {
+	root = filepath.ToSlash(filepath.Clean(root))
+	root = strings.Trim(root, "/")
+	if root == "." {
+		return ""
+	}
+	return root
 }
 
 func newInitCommand() *cobra.Command {

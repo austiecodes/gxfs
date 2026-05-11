@@ -176,6 +176,13 @@ gxfs delete /docs/new.md
 gxfs delete /docs/old-section
 ```
 
+Sync local docs into GXFS:
+
+```bash
+gxfs sync push docs
+gxfs sync push docs --manifest .gxfs/manifest.toml
+```
+
 ## Command Reference
 
 `gxfs ls [path]`
@@ -280,6 +287,16 @@ The injected block is wrapped with:
 
 Running `gxfs init` again replaces the existing block instead of appending a
 duplicate.
+
+`gxfs sync push <local-path>`
+
+Scans a local file or directory, uploads each file through the existing GXFS
+write API, and updates `.gxfs/manifest.toml`.
+
+- `--manifest`: custom manifest path. Defaults to `.gxfs/manifest.toml`.
+
+Phase 2A/2B stores client-computed `sha256:<hex>` hashes, file size, and mtime
+in the manifest. It does not change the server API or database schema.
 
 ## Agent Usage
 
