@@ -138,6 +138,11 @@ func (a *Adapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResp
 func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
 	repo := a.repo(req.Repo)
 
+	// Verify root path exists (same as VFS grep's mustDir check).
+	if _, err := a.Stat(ctx, store.StatRequest{Repo: req.Repo, Path: req.Path}); err != nil {
+		return nil, err
+	}
+
 	// Streaming grep: SQL streams (path, content) rows for matching files,
 	// Go does line-level matching with full grep semantics.
 	query, err := StreamGrepSQL(a.cfg)
@@ -179,9 +184,7 @@ func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepR
 		re = compiled
 	}
 
-	// Build glob matchers for include/exclude.
-	includeRE := globToRegex(req.Include)
-	excludeRE := globToRegex(req.Exclude)
+	// No pre-compiled regex needed; globMatch uses path.Match on basename.
 
 	var matches []store.Match
 	for rows.Next() {
@@ -194,10 +197,7 @@ func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepR
 		if !req.All && pathHasHidden(filePath, prefix) {
 			continue
 		}
-		if includeRE != nil && !includeRE.MatchString(filePath) {
-			continue
-		}
-		if excludeRE != nil && excludeRE.MatchString(filePath) {
+		if !globMatch(filePath, req.Include, req.Exclude) {
 			continue
 		}
 
@@ -632,47 +632,6 @@ func (a *Adapter) ensureContent(ctx context.Context, tree *vfs.Tree, path string
 	return nil
 }
 
-func (a *Adapter) ensureContentUnder(ctx context.Context, tree *vfs.Tree, rootPath string) error {
-	a.contentMu.Lock()
-	defer a.contentMu.Unlock()
-
-	query, err := LoadContentUnderSQL(a.cfg)
-	if err != nil {
-		return err
-	}
-	prefix := rootPath
-	if !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
-	if rootPath == "/" {
-		prefix = "/"
-	}
-	rows, err := a.pool.Query(ctx, query, prefix+"%")
-	if err != nil {
-		return fmt.Errorf("load content under %s: %w", rootPath, err)
-	}
-	defer rows.Close()
-
-	loaded := make(map[string]string)
-	for rows.Next() {
-		var path, content string
-		if err := rows.Scan(&path, &content); err != nil {
-			return fmt.Errorf("scan content: %w", err)
-		}
-		loaded[path] = content
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	a.mu.Lock()
-	for path, content := range loaded {
-		tree.SetContent(path, content)
-	}
-	a.mu.Unlock()
-	return nil
-}
-
 // grepLineMatch implements the same matching logic as vfs.grepLineMatches.
 func grepLineMatch(line, pattern string, re *regexp.Regexp, caseInsensitive, wholeWord, wholeLine bool) bool {
 	switch {
@@ -709,35 +668,56 @@ func wholeWordMatch(line, pattern string, re *regexp.Regexp, caseInsensitive boo
 	if re != nil {
 		return re.MatchString(line)
 	}
-	target := line
-	search := pattern
 	if caseInsensitive {
-		target = strings.ToLower(target)
-		search = strings.ToLower(search)
+		return hasWholeWordSubstring(strings.ToLower(line), strings.ToLower(pattern))
 	}
-	// Simple word boundary check.
-	for _, word := range strings.Fields(target) {
-		// Strip punctuation for word comparison.
-		word = strings.TrimFunc(word, func(r rune) bool {
-			return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_')
-		})
-		if word == search {
+	return hasWholeWordSubstring(line, pattern)
+}
+
+// hasWholeWordSubstring checks if pattern exists in line with word boundaries.
+// Ported from vfs.hasWholeWordSubstring to keep semantics identical.
+func hasWholeWordSubstring(line, pattern string) bool {
+	idx := strings.Index(line, pattern)
+	for idx != -1 {
+		if isWordBoundary(line, idx) && isWordBoundary(line, idx+len(pattern)) {
 			return true
 		}
+		next := strings.Index(line[idx+1:], pattern)
+		if next == -1 {
+			return false
+		}
+		idx = idx + 1 + next
 	}
 	return false
 }
 
-// globToRegex converts a glob pattern (e.g. "*.go", "*.md") to a regex.
-// Returns nil if the pattern is empty.
-func globToRegex(glob string) *regexp.Regexp {
-	if glob == "" {
-		return nil
+func isWordBoundary(s string, pos int) bool {
+	if pos <= 0 || pos >= len(s) {
+		return true
 	}
-	escaped := regexp.QuoteMeta(glob)
-	escaped = strings.ReplaceAll(escaped, `\*`, `.*`)
-	escaped = strings.ReplaceAll(escaped, `\?`, `.`)
-	return regexp.MustCompile(`(?i)^` + escaped + `$`)
+	return !isWordChar(s[pos-1]) || !isWordChar(s[pos])
+}
+
+func isWordChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// globMatch matches a file path against include/exclude glob patterns.
+// Uses path.Base to extract the filename (same as VFS filterByGlob).
+// Returns false if include doesn't match or exclude matches.
+func globMatch(filePath, include, exclude string) bool {
+	name := path.Base(filePath)
+	if include != "" {
+		if ok, _ := path.Match(include, name); !ok {
+			return false
+		}
+	}
+	if exclude != "" {
+		if ok, _ := path.Match(exclude, name); ok {
+			return false
+		}
+	}
+	return true
 }
 
 // pathHasHidden checks if a file path has a hidden component (starting with .).
