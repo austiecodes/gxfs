@@ -19,19 +19,21 @@ import (
 )
 
 type fakeClient struct {
-	grepReq     store.GrepRequest
-	grepMatches []store.Match
-	lsNodes     []store.Node
-	statNode    *store.Node
-	catContent  string
-	lsReq       store.LSRequest
-	findReq     store.FindRequest
-	findNodes   []store.Node
-	treeReq     store.TreeRequest
-	treeText    string
-	catReqs     []store.CatRequest
-	catContents map[string]string
-	putReqs     []store.PutRequest
+	grepReq      store.GrepRequest
+	grepMatches  []store.Match
+	lsNodes      []store.Node
+	statNode     *store.Node
+	catContent   string
+	lsReq        store.LSRequest
+	findReq      store.FindRequest
+	findNodes    []store.Node
+	treeReq      store.TreeRequest
+	treeText     string
+	catReqs      []store.CatRequest
+	catContents  map[string]string
+	putReqs      []store.PutRequest
+	searchReq    store.SearchRequest
+	searchResp   *store.SearchResponse
 }
 
 func defaultLSNodes() []store.Node {
@@ -136,15 +138,24 @@ func (f *fakeClient) Edit(context.Context, store.EditRequest) (*store.EditRespon
 	return nil, nil
 }
 
-func (f *fakeClient) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
-	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
+func (f *fakeClient) Search(_ context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
+	f.searchReq = req
+	if f.searchResp != nil {
+		return f.searchResp, nil
+	}
+	return &store.SearchResponse{
+		Results: []store.SearchResult{
+			{Path: "/docs/guide.md", Rank: 0.9, Snippet: "**test** result", Size: 100, ModTime: "2026-01-01"},
+		},
+		Total: 1,
+	}, nil
 }
 
 func execute(t *testing.T, args ...string) (string, *fakeClient) {
 	t.Helper()
 
 	client := &fakeClient{}
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -160,7 +171,7 @@ func executeWithNodes(t *testing.T, nodes []store.Node, args ...string) string {
 	t.Helper()
 
 	client := &fakeClient{lsNodes: nodes}
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -175,7 +186,7 @@ func executeWithNodes(t *testing.T, nodes []store.Node, args ...string) string {
 func executeWithClient(t *testing.T, client *fakeClient, args ...string) string {
 	t.Helper()
 
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -188,7 +199,7 @@ func executeWithClient(t *testing.T, client *fakeClient, args ...string) string 
 }
 
 func executeWithClientErr(client *fakeClient, args ...string) (string, error) {
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -1197,7 +1208,7 @@ func TestFindINameAloneIsValid(t *testing.T) {
 
 func TestFindRequiresNameOrIName(t *testing.T) {
 	c := &fakeClient{findNodes: findMixedNodes()}
-	cmd := newRootCommand(c, c, "gxfs")
+	cmd := newRootCommand(c, c, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -1317,7 +1328,7 @@ func TestTreeSortByTimeDirsFirstSize(t *testing.T) {
 func executeErr(t *testing.T, args ...string) error {
 	t.Helper()
 	client := &fakeClient{}
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -2110,5 +2121,58 @@ func TestMountAddRefreshUsesCorrectRemotePath(t *testing.T) {
 	// not the local path "docs/api" or "/docs/api".
 	if client.lsReq.Path != "/api" {
 		t.Fatalf("LS request path = %q, want /api (refresh resolved through mount resolver)", client.lsReq.Path)
+	}
+}
+
+func TestSearchHumanOutput(t *testing.T) {
+	client := &fakeClient{}
+	got := executeWithClient(t, client, "search", "test query")
+	if !strings.Contains(got, "/docs/guide.md") {
+		t.Fatalf("search output missing path: %q", got)
+	}
+	if !strings.Contains(got, "rank: 0.90") {
+		t.Fatalf("search output missing rank: %q", got)
+	}
+	if !strings.Contains(got, "test result") {
+		t.Fatalf("search output missing snippet: %q", got)
+	}
+	if client.searchReq.Query != "test query" {
+		t.Fatalf("search query = %q, want 'test query'", client.searchReq.Query)
+	}
+}
+
+func TestSearchJSONOutput(t *testing.T) {
+	client := &fakeClient{}
+	got := executeWithClient(t, client, "search", "test", "--json")
+	var resp store.SearchResponse
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("unmarshal JSON: %v, body = %q", err, got)
+	}
+	if resp.Total != 1 || len(resp.Results) != 1 {
+		t.Fatalf("search JSON = %+v, want 1 result", resp)
+	}
+	if resp.Results[0].Path != "/docs/guide.md" {
+		t.Fatalf("result path = %q, want /docs/guide.md", resp.Results[0].Path)
+	}
+}
+
+func TestSearchPathAndLimitFlags(t *testing.T) {
+	client := &fakeClient{}
+	_ = executeWithClient(t, client, "search", "test", "--path", "/docs", "--limit", "5")
+	if client.searchReq.Path != "/docs" {
+		t.Fatalf("search path = %q, want /docs", client.searchReq.Path)
+	}
+	if client.searchReq.Limit != 5 {
+		t.Fatalf("search limit = %d, want 5", client.searchReq.Limit)
+	}
+}
+
+func TestSearchEmptyResults(t *testing.T) {
+	client := &fakeClient{
+		searchResp: &store.SearchResponse{Results: []store.SearchResult{}, Total: 0},
+	}
+	got := executeWithClient(t, client, "search", "nonexistent")
+	if !strings.Contains(got, "no results found") {
+		t.Fatalf("empty search output = %q, want 'no results found'", got)
 	}
 }
