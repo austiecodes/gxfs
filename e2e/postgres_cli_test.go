@@ -257,6 +257,9 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(projectDir, "docs", "materialize", "a.md")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("file after dematerialize stat error = %v, want not exist", err)
 		}
+		if _, err := os.Stat(filepath.Join(projectDir, "docs", "materialize")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("empty dir after dematerialize stat error = %v, want not exist", err)
+		}
 		manifest, err := os.ReadFile(filepath.Join(projectDir, ".gxfs", "manifest.toml"))
 		if err != nil {
 			t.Fatalf("read manifest: %v", err)

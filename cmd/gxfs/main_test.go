@@ -1511,6 +1511,27 @@ materialized = true
 	}
 }
 
+func TestSyncPullErrorsWhenLocalPathIsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	if err := os.MkdirAll(filepath.Join(dir, "docs", "a.md"), 0o755); err != nil {
+		t.Fatalf("mkdir local conflict dir: %v", err)
+	}
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/docs/a.md", Name: "a.md", Kind: "file", Size: 5, ModTime: "2026-05-12T00:00:00Z"},
+		},
+		catContents: map[string]string{"/docs/a.md": "alpha"},
+	}
+
+	_, err := executeWithClientErr(client, "sync", "pull", "docs", "--manifest", manifestPath)
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("sync pull directory conflict error = %v, want directory error", err)
+	}
+}
+
 func TestRefreshUpdatesManifestWithoutWritingFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -1565,12 +1586,12 @@ func TestDematerializeRemovesFilesAndUpdatesManifest(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
-	writeTestFile(t, filepath.Join(dir, "docs", "a.md"), "alpha")
+	writeTestFile(t, filepath.Join(dir, "docs", "nested", "a.md"), "alpha")
 	writeTestFile(t, manifestPath, `version = 1
 
 [[entries]]
-local = 'docs/a.md'
-remote_doc = 'repo://self/docs/a.md'
+local = 'docs/nested/a.md'
+remote_doc = 'repo://self/docs/nested/a.md'
 mount = 'docs'
 content_hash = 'sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8'
 size = 5
@@ -1582,11 +1603,14 @@ materialized = true
 	if !strings.Contains(got, "dematerialized 1 file") {
 		t.Fatalf("dematerialize output = %q, want dematerialized count", got)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "docs", "a.md")); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, "docs", "nested", "a.md")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("dematerialized file stat error = %v, want not exist", err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "docs", "nested")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("empty parent dir stat error = %v, want not exist", err)
+	}
 	manifest := readTextFile(t, manifestPath)
-	if !strings.Contains(manifest, `local = 'docs/a.md'`) || !strings.Contains(manifest, `materialized = false`) {
+	if !strings.Contains(manifest, `local = 'docs/nested/a.md'`) || !strings.Contains(manifest, `materialized = false`) {
 		t.Fatalf("manifest missing dematerialized entry: %s", manifest)
 	}
 }
