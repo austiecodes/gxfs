@@ -136,6 +136,10 @@ func (f *fakeClient) Edit(context.Context, store.EditRequest) (*store.EditRespon
 	return nil, nil
 }
 
+func (f *fakeClient) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
+	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
+}
+
 func execute(t *testing.T, args ...string) (string, *fakeClient) {
 	t.Helper()
 

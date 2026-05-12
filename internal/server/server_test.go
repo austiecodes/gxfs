@@ -58,6 +58,10 @@ func (f *fakeAdapter) Edit(context.Context, store.EditRequest) (*store.EditRespo
 	return nil, nil
 }
 
+func (f *fakeAdapter) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
+	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
+}
+
 func TestHandlerRoutesLS(t *testing.T) {
 	adapter := &fakeAdapter{}
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/ls?path=/docs", nil)
@@ -429,6 +433,10 @@ type readOnlyAdapter struct {
 
 func (a *readOnlyAdapter) Put(context.Context, store.PutRequest) (*store.PutResponse, error) {
 	return nil, store.ErrReadOnlyMount
+}
+
+func (a *readOnlyAdapter) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
+	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
 }
 
 func TestHandlerMapsReadOnlyMountErrorToForbidden(t *testing.T) {

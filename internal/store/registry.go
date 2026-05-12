@@ -119,6 +119,14 @@ func (r *Registry) Edit(ctx context.Context, req EditRequest) (*EditResponse, er
 	return adapter.Edit(ctx, req)
 }
 
+func (r *Registry) Search(ctx context.Context, req SearchRequest) (*SearchResponse, error) {
+	adapter, err := r.adapter(req.Repo)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.Search(ctx, req)
+}
+
 func (r *Registry) Invalidate() {
 	for _, adapter := range r.adapters {
 		if invalidator, ok := adapter.(CacheInvalidator); ok {

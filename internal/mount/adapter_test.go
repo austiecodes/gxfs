@@ -61,6 +61,10 @@ func (f *fakeStore) Edit(_ context.Context, req store.EditRequest) (*store.EditR
 	return &store.EditResponse{Path: req.Path, Replaced: 1, Content: "new"}, nil
 }
 
+func (f *fakeStore) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
+	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
+}
+
 func TestAdapterTranslatesRequestAndResponsePaths(t *testing.T) {
 	resolver, err := NewResolver("gxfs", []config.MountConfig{
 		{Local: "docs", Remote: "repo://self/remote-docs", Mode: "writable"},

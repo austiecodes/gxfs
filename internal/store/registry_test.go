@@ -54,6 +54,10 @@ func (f *registryFakeAdapter) Invalidate() {
 	f.invalidated = true
 }
 
+func (f *registryFakeAdapter) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
+	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
+}
+
 func TestRegistryRoutesByRepo(t *testing.T) {
 	alpha := &registryFakeAdapter{}
 	beta := &registryFakeAdapter{}

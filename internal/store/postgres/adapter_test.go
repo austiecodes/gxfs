@@ -140,6 +140,11 @@ func TestSchemaSQLCreatesConfiguredTables(t *testing.T) {
     "path" text not null references "public"."vfs_nodes"("path") on delete cascade,
     primary key (repo, "path")
 )`,
+		`-- Full-text search: generated tsvector column on content + GIN index
+alter table "public"."vfs_content" add column if not exists content_search tsvector
+    generated always as (to_tsvector('english', coalesce(content, ''))) stored;
+
+create index if not exists idx_content_search on "public"."vfs_content" using gin (content_search);`,
 	}
 	if len(statements) != len(want) {
 		t.Fatalf("SchemaSQL() len = %d, want %d: %v", len(statements), len(want), statements)

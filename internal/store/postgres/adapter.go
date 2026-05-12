@@ -161,6 +161,51 @@ func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepR
 	return &store.GrepResponse{Matches: matches}, nil
 }
 
+func (a *Adapter) Search(ctx context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
+	if req.Query == "" {
+		return nil, store.ErrEmptyQuery
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	repo := a.repo(req.Repo)
+	query, err := SearchSQL(a.cfg)
+	if err != nil {
+		return nil, err
+	}
+	pathFilter := req.Path
+	if pathFilter == "/" {
+		pathFilter = ""
+	}
+	rows, err := a.pool.Query(ctx, query, repo, req.Query, pathFilter, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search postgres: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.SearchResult
+	total := 0
+	for rows.Next() {
+		var r store.SearchResult
+		var mtime pgtype.Timestamptz
+		if err := rows.Scan(&r.Path, &r.Rank, &r.Snippet, &r.Size, &mtime, &total); err != nil {
+			return nil, fmt.Errorf("scan search result: %w", err)
+		}
+		if mtime.Valid {
+			r.ModTime = mtime.Time.UTC().Format(time.RFC3339)
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read search results: %w", err)
+	}
+	if results == nil {
+		results = []store.SearchResult{}
+	}
+	return &store.SearchResponse{Results: results, Total: total}, nil
+}
+
 func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindResponse, error) {
 	repo := a.repo(req.Repo)
 	tree, err := a.treeFor(ctx, repo)

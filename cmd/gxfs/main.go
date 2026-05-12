@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +41,7 @@ func newRootCommand(adapter store.Adapter, repo string) *cobra.Command {
 	cmd.AddCommand(newWriteCommand(adapter, repo))
 	cmd.AddCommand(newEditCommand(adapter, repo))
 	cmd.AddCommand(newDeleteCommand(adapter, repo))
+	cmd.AddCommand(newSearchCommand(adapter, repo))
 	cmd.AddCommand(newRefreshCommand(adapter, repo))
 	cmd.AddCommand(newMaterializeCommand(adapter, repo))
 	cmd.AddCommand(newDematerializeCommand())
@@ -553,6 +555,81 @@ func newDeleteCommand(adapter store.Adapter, repo string) *cobra.Command {
 		},
 	}
 	return cmd
+}
+
+func newSearchCommand(adapter store.Adapter, repo string) *cobra.Command {
+	var searchPath string
+	var limit int
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search documents by keyword",
+		Long:  "Search documents by keyword using full-text search.\nReturns ranked results with relevance scores and matching snippets.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resp, err := adapter.Search(cmd.Context(), store.SearchRequest{
+				Repo:  repo,
+				Query: args[0],
+				Path:  searchPath,
+				Limit: limit,
+			})
+			if err != nil {
+				return err
+			}
+			if jsonOutput {
+				return printSearchJSON(cmd, resp)
+			}
+			return printSearchHuman(cmd, resp)
+		},
+	}
+	cmd.Flags().StringVar(&searchPath, "path", "", "scope search to path prefix")
+	cmd.Flags().IntVar(&limit, "limit", 20, "max results")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output as JSON")
+	return cmd
+}
+
+func printSearchHuman(cmd *cobra.Command, resp *store.SearchResponse) error {
+	if len(resp.Results) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "no results found")
+		return nil
+	}
+	for _, r := range resp.Results {
+		sizeStr := formatSize(r.Size)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s    [rank: %.2f, %s]\n", r.Path, r.Rank, sizeStr)
+		if r.Snippet != "" {
+			snippet := strings.ReplaceAll(r.Snippet, "**", "")
+			for _, line := range strings.Split(snippet, "\n") {
+				if line != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", line)
+				}
+			}
+		}
+		fmt.Fprintln(cmd.OutOrStdout())
+	}
+	if resp.Total > len(resp.Results) {
+		fmt.Fprintf(cmd.OutOrStdout(), "... %d more results (total %d)\n", resp.Total-len(resp.Results), resp.Total)
+	}
+	return nil
+}
+
+func printSearchJSON(cmd *cobra.Command, resp *store.SearchResponse) error {
+	data, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), string(data))
+	return nil
+}
+
+func formatSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%dB", size)
+	}
+	if size < 1024*1024 {
+		return fmt.Sprintf("%.1fKB", float64(size)/1024)
+	}
+	return fmt.Sprintf("%.1fMB", float64(size)/(1024*1024))
 }
 
 func newEditCommand(adapter store.Adapter, repo string) *cobra.Command {

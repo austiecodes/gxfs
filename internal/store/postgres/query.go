@@ -157,6 +157,62 @@ func CleanOrphanNodeSQL(cfg Config) (string, error) {
 	), nil
 }
 
+func SearchSQL(cfg Config) (string, error) {
+	nodesTable, err := quoteTable(cfg.Schema, cfg.NodesTable)
+	if err != nil {
+		return "", err
+	}
+	contentTable, err := quoteTable(cfg.Schema, cfg.ContentTable)
+	if err != nil {
+		return "", err
+	}
+	mappingTable, err := quoteTable(cfg.Schema, cfg.RepoNodesTable)
+	if err != nil {
+		return "", err
+	}
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	kindCol, err := quoteIdent(cfg.Files.KindColumn)
+	if err != nil {
+		return "", fmt.Errorf("kind column: %w", err)
+	}
+	sizeExpr := "0"
+	if cfg.Files.SizeColumn != "" {
+		sizeCol, err := quoteIdent(cfg.Files.SizeColumn)
+		if err != nil {
+			return "", fmt.Errorf("size column: %w", err)
+		}
+		sizeExpr = "n." + sizeCol
+	}
+	mtimeExpr := "null::timestamptz"
+	if cfg.Files.MTimeColumn != "" {
+		mtimeCol, err := quoteIdent(cfg.Files.MTimeColumn)
+		if err != nil {
+			return "", fmt.Errorf("mtime column: %w", err)
+		}
+		mtimeExpr = "n." + mtimeCol
+	}
+	return fmt.Sprintf(
+		"select n.%s, ts_rank_cd(c.content_search, query, 32) as rank, "+
+			"ts_headline('english', c.content, query, 'StartSel=**,StopSel=**,MaxWords=50,MinWords=10') as snippet, "+
+			"%s, %s, count(*) over() as total "+
+			"from %s c "+
+			"join %s n on c.%s = n.%s "+
+			"join %s r on n.%s = r.%s, "+
+			"plainto_tsquery('english', $2) as query "+
+			"where r.repo = $1 and n.%s = 'file' and c.content_search @@ query "+
+			"and ($3 = '' or n.%s = $3 or n.%s like $3 || '/%%') "+
+			"order by rank desc limit $4",
+		pathCol, sizeExpr, mtimeExpr,
+		contentTable,
+		nodesTable, pathCol, pathCol,
+		mappingTable, pathCol, pathCol,
+		kindCol, pathCol, pathCol,
+	), nil
+}
+
 func quoteTable(schema, table string) (string, error) {
 	tableName, err := quoteIdent(table)
 	if err != nil {
