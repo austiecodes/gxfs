@@ -25,7 +25,7 @@ import (
 	"gxfs/internal/syncmanifest"
 )
 
-func newRootCommand(adapter store.Adapter, repo string) *cobra.Command {
+func newRootCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gxfs",
 		Short: "Inspect GXFS virtual filesystems",
@@ -48,7 +48,7 @@ func newRootCommand(adapter store.Adapter, repo string) *cobra.Command {
 	cmd.AddCommand(newInitCommand())
 	cmd.AddCommand(newConfigCommand(repo))
 	cmd.AddCommand(newSyncCommand(adapter, repo))
-	cmd.AddCommand(newMountCommand(adapter, repo))
+	cmd.AddCommand(newMountCommand(adapter, rawAdapter, repo))
 	return cmd
 }
 
@@ -1208,18 +1208,18 @@ func removeEmptyParents(localPath, root string) error {
 	return nil
 }
 
-func newMountCommand(adapter store.Adapter, repo string) *cobra.Command {
+func newMountCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mount",
 		Short: "Manage mount points",
 	}
-	cmd.AddCommand(newMountAddCommand(adapter, repo))
+	cmd.AddCommand(newMountAddCommand(rawAdapter, repo))
 	cmd.AddCommand(newMountRemoveCommand())
 	cmd.AddCommand(newMountListCommand())
 	return cmd
 }
 
-func newMountAddCommand(adapter store.Adapter, repo string) *cobra.Command {
+func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 	var mode string
 	var force bool
 	var noRefresh bool
@@ -1233,6 +1233,10 @@ func newMountAddCommand(adapter store.Adapter, repo string) *cobra.Command {
 			remoteRef := args[0]
 			localPath := cleanMountLocal(args[1])
 
+			if localPath == "" {
+				return fmt.Errorf("local path must be a non-empty relative path")
+			}
+
 			if !strings.HasPrefix(remoteRef, "repo://self/") {
 				return fmt.Errorf("only repo://self/<path> references are supported; got %q", remoteRef)
 			}
@@ -1245,8 +1249,9 @@ func newMountAddCommand(adapter store.Adapter, repo string) *cobra.Command {
 				return fmt.Errorf("mode must be readonly or writable, got %q", mode)
 			}
 
-			// Validate remote path exists on server
-			if _, err := adapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: remotePath}); err != nil {
+			// Use raw adapter (direct client, no mount resolver) to validate
+			// the remote path exists on the server.
+			if _, err := rawAdapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: remotePath}); err != nil {
 				return fmt.Errorf("remote path %s does not exist: %w", remoteRef, err)
 			}
 
@@ -1273,7 +1278,7 @@ func newMountAddCommand(adapter store.Adapter, repo string) *cobra.Command {
 						return err
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "replaced mount %s → %s (%s)\n", localPath, remoteRef, mode)
-					return refreshAfterMount(cmd, adapter, repo, localPath, mountsPath, noRefresh)
+					return refreshAfterMount(cmd, rawAdapter, repo, localPath, mountsPath, noRefresh)
 				}
 			}
 
@@ -1295,7 +1300,7 @@ func newMountAddCommand(adapter store.Adapter, repo string) *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "added mount %s → %s (%s)\n", localPath, remoteRef, mode)
 
-			return refreshAfterMount(cmd, adapter, repo, localPath, mountsPath, noRefresh)
+			return refreshAfterMount(cmd, rawAdapter, repo, localPath, mountsPath, noRefresh)
 		},
 	}
 	cmd.Flags().StringVar(&mode, "mode", "readonly", "mount mode: readonly or writable")
@@ -1363,7 +1368,7 @@ func newMountListCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mountsPath := defaultMountsPath()
-			mountsCfg, err := config.LoadMounts(mountsPath)
+			mountsCfg, err := loadMountsOrDefault(mountsPath)
 			if err != nil {
 				return fmt.Errorf("load mounts: %w", err)
 			}
@@ -1408,14 +1413,13 @@ func loadMountsOrDefault(mountsPath string) (config.MountsConfig, error) {
 	return mountsCfg, nil
 }
 
-func refreshAfterMount(cmd *cobra.Command, adapter store.Adapter, repo, localPath, mountsPath string, noRefresh bool) error {
+func refreshAfterMount(cmd *cobra.Command, rawAdapter store.Adapter, repo, localPath, mountsPath string, noRefresh bool) error {
 	if noRefresh {
 		return nil
 	}
 	manifestPath := defaultManifestPath("")
-	_, err := refreshManifest(cmd.Context(), adapter, repo, localPath, manifestPath, false)
-	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: refresh after mount failed: %v\n", err)
+	if _, err := refreshManifest(cmd.Context(), rawAdapter, repo, localPath, manifestPath, false); err != nil {
+		return fmt.Errorf("refresh manifest after mount: %w", err)
 	}
 	return nil
 }
@@ -1700,7 +1704,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if isConfigFreeCommand(args) {
-		cmd := newRootCommand(nil, "")
+		cmd := newRootCommand(nil, nil, "")
 		cmd.SetArgs(args)
 		cmd.SetOut(stdout)
 		cmd.SetErr(stderr)
@@ -1727,17 +1731,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	cmd := newRootCommand(adapter, cfg.Repo)
-	cmd.SetArgs(args)
-	cmd.SetOut(stdout)
-	cmd.SetErr(stderr)
-	cmd.SetContext(context.Background())
-	if err := cmd.Execute(); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		rawAdapter := client.New(cfg.Server.Addr)
+		cmd := newRootCommand(adapter, rawAdapter, cfg.Repo)
+		cmd.SetArgs(args)
+		cmd.SetOut(stdout)
+		cmd.SetErr(stderr)
+		cmd.SetContext(context.Background())
+		if err := cmd.Execute(); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 	}
-	return 0
-}
 
 func isConfigFreeCommand(args []string) bool {
 	if wantsHelp(args) {
