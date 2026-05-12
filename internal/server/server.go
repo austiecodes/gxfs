@@ -136,7 +136,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 	case "search":
 		limit, err := queryInt(q, "limit")
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %s", store.ErrInvalidParam, err)
 		}
 		return h.adapter.Search(r.Context(), store.SearchRequest{
 			Repo:  repo,
@@ -279,7 +279,8 @@ func mapError(err error) (int, string) {
 		return http.StatusForbidden, "FORBIDDEN"
 	case errors.Is(err, store.ErrIsDir), errors.Is(err, store.ErrNotDir),
 		errors.Is(err, store.ErrEmptyOld), errors.Is(err, store.ErrCannotDeleteRoot),
-		errors.Is(err, store.ErrEmptyQuery):
+		errors.Is(err, store.ErrEmptyQuery),
+		errors.Is(err, store.ErrInvalidParam):
 		return http.StatusBadRequest, "BAD_REQUEST"
 	case errors.Is(err, store.ErrContentNotReady):
 		return http.StatusNotFound, "CONTENT_NOT_READY"

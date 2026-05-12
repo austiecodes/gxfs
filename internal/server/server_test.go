@@ -539,7 +539,7 @@ func TestHandlerSearchInvalidLimit(t *testing.T) {
 
 	NewHandler(adapter).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 for invalid limit", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for invalid limit", rec.Code)
 	}
 }

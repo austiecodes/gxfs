@@ -16,6 +16,7 @@ var (
 	ErrCannotDeleteRoot = errors.New("cannot delete root")
 	ErrUnknownRepo      = errors.New("unknown repo")
 	ErrEmptyQuery       = errors.New("search query cannot be empty")
+	ErrInvalidParam     = errors.New("invalid parameter")
 )
 
 type Node struct {

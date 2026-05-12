@@ -19,21 +19,21 @@ import (
 )
 
 type fakeClient struct {
-	grepReq      store.GrepRequest
-	grepMatches  []store.Match
-	lsNodes      []store.Node
-	statNode     *store.Node
-	catContent   string
-	lsReq        store.LSRequest
-	findReq      store.FindRequest
-	findNodes    []store.Node
-	treeReq      store.TreeRequest
-	treeText     string
-	catReqs      []store.CatRequest
-	catContents  map[string]string
-	putReqs      []store.PutRequest
-	searchReq    store.SearchRequest
-	searchResp   *store.SearchResponse
+	grepReq     store.GrepRequest
+	grepMatches []store.Match
+	lsNodes     []store.Node
+	statNode    *store.Node
+	catContent  string
+	lsReq       store.LSRequest
+	findReq     store.FindRequest
+	findNodes   []store.Node
+	treeReq     store.TreeRequest
+	treeText    string
+	catReqs     []store.CatRequest
+	catContents map[string]string
+	putReqs     []store.PutRequest
+	searchReq   store.SearchRequest
+	searchResp  *store.SearchResponse
 }
 
 func defaultLSNodes() []store.Node {

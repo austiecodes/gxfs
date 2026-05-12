@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"io/fs"
 	"os"
@@ -15,8 +16,6 @@ import (
 	"strings"
 	"text/template"
 	"time"
-	"golang.org/x/sync/errgroup"
-
 
 	"github.com/spf13/cobra"
 
@@ -44,12 +43,12 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 	cmd.AddCommand(newEditCommand(adapter, repo))
 	cmd.AddCommand(newDeleteCommand(adapter, repo))
 	cmd.AddCommand(newSearchCommand(adapter, repo))
-	cmd.AddCommand(newRefreshCommand(adapter, repo, resolver))
-	cmd.AddCommand(newMaterializeCommand(adapter, repo, resolver))
+	cmd.AddCommand(newRefreshCommand(adapter, rawAdapter, repo, resolver))
+	cmd.AddCommand(newMaterializeCommand(adapter, rawAdapter, repo, resolver))
 	cmd.AddCommand(newDematerializeCommand())
 	cmd.AddCommand(newInitCommand())
 	cmd.AddCommand(newConfigCommand(repo))
-	cmd.AddCommand(newSyncCommand(adapter, repo, resolver))
+	cmd.AddCommand(newSyncCommand(adapter, rawAdapter, repo, resolver))
 	cmd.AddCommand(newMountCommand(adapter, rawAdapter, repo))
 	return cmd
 }
@@ -674,13 +673,13 @@ func plural(n int) string {
 	return "s"
 }
 
-func newSyncCommand(adapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
+func newSyncCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	syncCmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Synchronize local docs with GXFS",
 	}
 	syncCmd.AddCommand(newSyncPushCommand(adapter, repo, resolver))
-	syncCmd.AddCommand(newSyncPullCommand(adapter, repo, resolver))
+	syncCmd.AddCommand(newSyncPullCommand(adapter, rawAdapter, repo, resolver))
 	return syncCmd
 }
 
@@ -709,7 +708,7 @@ func newSyncPushCommand(adapter store.Adapter, repo string, resolver *mountadapt
 				}
 				entries = append(entries, syncmanifest.Entry{
 					Local:        file.LocalPath,
-				RemoteDoc:    resolveRemoteDoc(resolver, repo, file.LocalPath, resp.Node.Path),
+					RemoteDoc:    resolveRemoteDoc(resolver, repo, file.LocalPath, resp.Node.Path),
 					Mount:        cleanSyncMount(root),
 					ContentHash:  file.ContentHash,
 					Size:         file.Size,
@@ -761,7 +760,7 @@ func resolveRemoteDoc(resolver *mountadapter.Resolver, repo, localPath, fallback
 	}
 	return "repo://self/" + strings.Trim(fallbackPath, "/")
 }
-func newSyncPullCommand(adapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
+func newSyncPullCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	var manifestPath string
 	var materialize bool
 	var forceLocal bool
@@ -970,7 +969,6 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 	return files, nil
 }
 
-
 func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root string, manifest syncmanifest.Manifest, opts remoteSyncOptions) (remoteSyncPlan, error) {
 	remoteFiles, err := collectRemoteFiles(ctx, adapter, repo, root)
 	if err != nil {
@@ -1148,14 +1146,28 @@ func loadManifest(path string) (syncmanifest.Manifest, error) {
 	return manifest, nil
 }
 
-func refreshManifest(ctx context.Context, adapter store.Adapter, repo, root, manifestPath string, materialize bool, resolver *mountadapter.Resolver) (remoteSyncResult, error) {
+func refreshManifest(ctx context.Context, adapter, rawAdapter store.Adapter, repo, root, manifestPath string, materialize bool, resolver *mountadapter.Resolver) (remoteSyncResult, error) {
 	manifest, err := loadManifest(manifestPath)
 	if err != nil {
 		return remoteSyncResult{}, err
 	}
-	plan, err := buildRemoteSyncPlan(ctx, adapter, repo, root, manifest, remoteSyncOptions{Materialize: materialize})
-	if err != nil {
-		return remoteSyncResult{}, err
+
+	var plan remoteSyncPlan
+	if resolver != nil {
+		// Use raw adapter + resolver to get correct remote paths
+		remoteFiles, err := collectMountedRemoteFiles(ctx, rawAdapter, resolver, repo, root)
+		if err != nil {
+			return remoteSyncResult{}, err
+		}
+		plan, err = buildRemoteSyncPlanFromFiles(remoteFiles, manifest, remoteSyncOptions{Materialize: materialize}, root)
+		if err != nil {
+			return remoteSyncResult{}, err
+		}
+	} else {
+		plan, err = buildRemoteSyncPlan(ctx, adapter, repo, root, manifest, remoteSyncOptions{Materialize: materialize})
+		if err != nil {
+			return remoteSyncResult{}, err
+		}
 	}
 	result, err := applyRemoteSyncPlan(ctx, adapter, repo, root, manifestPath, manifest, plan, resolver)
 	if err != nil {
@@ -1164,7 +1176,7 @@ func refreshManifest(ctx context.Context, adapter store.Adapter, repo, root, man
 	return result, nil
 }
 
-func newRefreshCommand(adapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
+func newRefreshCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	var manifestPath string
 	cmd := &cobra.Command{
 		Use:   "refresh <path>",
@@ -1173,7 +1185,7 @@ func newRefreshCommand(adapter store.Adapter, repo string, resolver *mountadapte
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := args[0]
 			manifestPath = defaultManifestPath(manifestPath)
-			result, err := refreshManifest(cmd.Context(), adapter, repo, root, manifestPath, false, resolver)
+			result, err := refreshManifest(cmd.Context(), adapter, rawAdapter, repo, root, manifestPath, false, resolver)
 			if err != nil {
 				return err
 			}
@@ -1186,7 +1198,7 @@ func newRefreshCommand(adapter store.Adapter, repo string, resolver *mountadapte
 	return cmd
 }
 
-func newMaterializeCommand(adapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
+func newMaterializeCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	var manifestPath string
 	cmd := &cobra.Command{
 		Use:   "materialize <path>",
@@ -1195,7 +1207,7 @@ func newMaterializeCommand(adapter store.Adapter, repo string, resolver *mountad
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := args[0]
 			manifestPath = defaultManifestPath(manifestPath)
-			result, err := refreshManifest(cmd.Context(), adapter, repo, root, manifestPath, true, resolver)
+			result, err := refreshManifest(cmd.Context(), adapter, rawAdapter, repo, root, manifestPath, true, resolver)
 			if err != nil {
 				return err
 			}
@@ -1845,24 +1857,24 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-		adapter, resolver, err := loadRuntimeAdapter(cfg, path)
+	adapter, resolver, err := loadRuntimeAdapter(cfg, path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
-		rawAdapter := client.New(cfg.Server.Addr)
-		cmd := newRootCommand(adapter, rawAdapter, cfg.Repo, resolver)
-		cmd.SetArgs(args)
-		cmd.SetOut(stdout)
-		cmd.SetErr(stderr)
-		cmd.SetContext(context.Background())
-		if err := cmd.Execute(); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
+	rawAdapter := client.New(cfg.Server.Addr)
+	cmd := newRootCommand(adapter, rawAdapter, cfg.Repo, resolver)
+	cmd.SetArgs(args)
+	cmd.SetOut(stdout)
+	cmd.SetErr(stderr)
+	cmd.SetContext(context.Background())
+	if err := cmd.Execute(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
+	return 0
+}
 
 func isConfigFreeCommand(args []string) bool {
 	if wantsHelp(args) {
