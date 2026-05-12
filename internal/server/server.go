@@ -134,7 +134,10 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 	case "stat":
 		return h.adapter.Stat(r.Context(), store.StatRequest{Repo: repo, Path: queryPath(q)})
 	case "search":
-		limit, _ := queryInt(q, "limit")
+		limit, err := queryInt(q, "limit")
+		if err != nil {
+			return nil, err
+		}
 		return h.adapter.Search(r.Context(), store.SearchRequest{
 			Repo:  repo,
 			Query: q.Get("q"),

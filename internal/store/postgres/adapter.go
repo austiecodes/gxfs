@@ -162,7 +162,8 @@ func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepR
 }
 
 func (a *Adapter) Search(ctx context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
-	if req.Query == "" {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
 		return nil, store.ErrEmptyQuery
 	}
 	limit := req.Limit
@@ -170,15 +171,15 @@ func (a *Adapter) Search(ctx context.Context, req store.SearchRequest) (*store.S
 		limit = 20
 	}
 	repo := a.repo(req.Repo)
-	query, err := SearchSQL(a.cfg)
+	searchQuery, err := SearchSQL(a.cfg)
 	if err != nil {
 		return nil, err
 	}
-	pathFilter := req.Path
-	if pathFilter == "/" {
-		pathFilter = ""
+	pathFilter := ""
+	if req.Path != "" && req.Path != "/" {
+		pathFilter = path.Clean("/" + strings.TrimSpace(req.Path))
 	}
-	rows, err := a.pool.Query(ctx, query, repo, req.Query, pathFilter, limit)
+	rows, err := a.pool.Query(ctx, searchQuery, repo, query, pathFilter, limit)
 	if err != nil {
 		return nil, fmt.Errorf("search postgres: %w", err)
 	}

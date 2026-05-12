@@ -128,15 +128,15 @@ func (a *Adapter) Edit(_ context.Context, req store.EditRequest) (*store.EditRes
 }
 
 func (a *Adapter) Search(_ context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
-	if req.Query == "" {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
 		return nil, store.ErrEmptyQuery
 	}
 	limit := req.Limit
 	if limit <= 0 {
 		limit = 20
 	}
-	lower := strings.ToLower(req.Query)
-	terms := strings.Fields(lower)
+	terms := strings.Fields(strings.ToLower(query))
 
 	nodes, err := a.tree.Find(req.Path, "", vfs.FindOptions{Type: "file", All: true})
 	if err != nil {
@@ -144,6 +144,7 @@ func (a *Adapter) Search(_ context.Context, req store.SearchRequest) (*store.Sea
 	}
 
 	var results []store.SearchResult
+	total := 0
 	for _, n := range nodes {
 		content, err := a.tree.Cat(n.Path)
 		if err != nil {
@@ -160,22 +161,22 @@ func (a *Adapter) Search(_ context.Context, req store.SearchRequest) (*store.Sea
 		if !match {
 			continue
 		}
-		snippet := snippetFromContent(content, terms)
-		results = append(results, store.SearchResult{
-			Path:    n.Path,
-			Rank:    1.0,
-			Snippet: snippet,
-			Size:    n.Size,
-			ModTime: n.ModTime,
-		})
-		if len(results) >= limit {
-			break
+		total++
+		if len(results) < limit {
+			snippet := snippetFromContent(content, terms)
+			results = append(results, store.SearchResult{
+				Path:    n.Path,
+				Rank:    1.0,
+				Snippet: snippet,
+				Size:    n.Size,
+				ModTime: n.ModTime,
+			})
 		}
 	}
 	if results == nil {
 		results = []store.SearchResult{}
 	}
-	return &store.SearchResponse{Results: results, Total: len(results)}, nil
+	return &store.SearchResponse{Results: results, Total: total}, nil
 }
 
 func snippetFromContent(content string, terms []string) string {

@@ -257,9 +257,9 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(projectDir, "docs", "materialize", "a.md")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("file after dematerialize stat error = %v, want not exist", err)
 		}
-		if _, err := os.Stat(filepath.Join(projectDir, "docs", "materialize")); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("empty dir after dematerialize stat error = %v, want not exist", err)
-		}
+		// Request root "docs/materialize" is preserved (only empty parents above root are cleaned)
+		if _, err := os.Stat(filepath.Join(projectDir, "docs", "materialize")); err != nil {
+			t.Fatalf("request root dir stat error = %v, want preserved", err)
 		manifest, err := os.ReadFile(filepath.Join(projectDir, ".gxfs", "manifest.toml"))
 		if err != nil {
 			t.Fatalf("read manifest: %v", err)
