@@ -144,7 +144,7 @@ func execute(t *testing.T, args ...string) (string, *fakeClient) {
 	t.Helper()
 
 	client := &fakeClient{}
-	cmd := newRootCommand(client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs")
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -160,7 +160,7 @@ func executeWithNodes(t *testing.T, nodes []store.Node, args ...string) string {
 	t.Helper()
 
 	client := &fakeClient{lsNodes: nodes}
-	cmd := newRootCommand(client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs")
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -175,7 +175,7 @@ func executeWithNodes(t *testing.T, nodes []store.Node, args ...string) string {
 func executeWithClient(t *testing.T, client *fakeClient, args ...string) string {
 	t.Helper()
 
-	cmd := newRootCommand(client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs")
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -188,7 +188,7 @@ func executeWithClient(t *testing.T, client *fakeClient, args ...string) string 
 }
 
 func executeWithClientErr(client *fakeClient, args ...string) (string, error) {
-	cmd := newRootCommand(client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs")
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -1197,7 +1197,7 @@ func TestFindINameAloneIsValid(t *testing.T) {
 
 func TestFindRequiresNameOrIName(t *testing.T) {
 	c := &fakeClient{findNodes: findMixedNodes()}
-	cmd := newRootCommand(c, "gxfs")
+	cmd := newRootCommand(c, c, "gxfs")
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -1317,7 +1317,7 @@ func TestTreeSortByTimeDirsFirstSize(t *testing.T) {
 func executeErr(t *testing.T, args ...string) error {
 	t.Helper()
 	client := &fakeClient{}
-	cmd := newRootCommand(client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs")
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -1843,5 +1843,258 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func TestMountAddRejectsInvalidRemoteRef(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	_, err := executeWithClientErr(client, "mount", "add", "http://bad/ref", "docs")
+	if err == nil {
+		t.Fatal("expected error for invalid remote ref")
+	}
+	if !strings.Contains(err.Error(), "only repo://self/<path>") {
+		t.Fatalf("error = %q, want repo://self rejection", err)
+	}
+}
+
+func TestMountAddRejectsCollectionRef(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	_, err := executeWithClientErr(client, "mount", "add", "collection://stuff", "docs")
+	if err == nil {
+		t.Fatal("expected error for collection ref")
+	}
+}
+
+func TestMountAddRejectsEmptyLocalPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	_, err := executeWithClientErr(client, "mount", "add", "repo://self/docs", "/")
+	if err == nil {
+		t.Fatal("expected error for empty local path")
+	}
+	if !strings.Contains(err.Error(), "non-empty relative path") {
+		t.Fatalf("error = %q, want non-empty path rejection", err)
+	}
+
+	_, err = executeWithClientErr(client, "mount", "add", "repo://self/docs", "   ")
+	if err == nil {
+		t.Fatal("expected error for whitespace local path")
+	}
+}
+
+func TestMountAddRejectsEmptyRemotePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	_, err := executeWithClientErr(client, "mount", "add", "repo://self/", "docs")
+	if err == nil {
+		t.Fatal("expected error for empty remote path")
+	}
+}
+
+func TestMountAddRejectsInvalidMode(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	_, err := executeWithClientErr(client, "mount", "add", "repo://self/docs", "docs", "--mode", "readwrite")
+	if err == nil {
+		t.Fatal("expected error for invalid mode")
+	}
+	if !strings.Contains(err.Error(), "mode must be readonly or writable") {
+		t.Fatalf("error = %q, want mode rejection", err)
+	}
+}
+
+func TestMountAddWritesMountsToml(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	got := executeWithClient(t, client, "mount", "add", "repo://self/docs", "mydocs", "--mode", "writable", "--no-refresh")
+	if !strings.Contains(got, "added mount mydocs → repo://self/docs (writable)") {
+		t.Fatalf("output = %q, want add confirmation", got)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gxfs", "mounts.toml"))
+	if err != nil {
+		t.Fatalf("read mounts.toml: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "local = 'mydocs'") {
+		t.Fatalf("mounts.toml missing local path: %s", content)
+	}
+	if !strings.Contains(content, "remote = 'repo://self/docs'") {
+		t.Fatalf("mounts.toml missing remote: %s", content)
+	}
+	if !strings.Contains(content, "mode = 'writable'") {
+		t.Fatalf("mounts.toml missing mode: %s", content)
+	}
+	if !strings.Contains(content, "source = 'manual'") {
+		t.Fatalf("mounts.toml missing source: %s", content)
+	}
+}
+
+func TestMountAddRejectsDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	// Add first
+	executeWithClient(t, client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
+
+	// Second add without --force should fail
+	_, err := executeWithClientErr(client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
+	if err == nil {
+		t.Fatal("expected error for duplicate mount")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("error = %q, want duplicate rejection", err)
+	}
+}
+
+func TestMountAddForceReplaces(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	// Add first
+	executeWithClient(t, client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
+	// Force replace
+	got := executeWithClient(t, client, "mount", "add", "repo://self/api", "docs", "--mode", "writable", "--force", "--no-refresh")
+	if !strings.Contains(got, "replaced mount docs → repo://self/api") {
+		t.Fatalf("output = %q, want replace confirmation", got)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gxfs", "mounts.toml"))
+	if err != nil {
+		t.Fatalf("read mounts.toml: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "repo://self/docs") {
+		t.Fatalf("mounts.toml still contains old mount: %s", content)
+	}
+	if !strings.Contains(content, "repo://self/api") {
+		t.Fatalf("mounts.toml missing new remote: %s", content)
+	}
+}
+
+func TestMountRemoveDeletesEntry(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	// Add then remove
+	executeWithClient(t, client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
+	got := executeWithClient(t, client, "mount", "remove", "docs")
+	if !strings.Contains(got, "removed mount docs") {
+		t.Fatalf("output = %q, want remove confirmation", got)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gxfs", "mounts.toml"))
+	if err != nil {
+		t.Fatalf("read mounts.toml: %v", err)
+	}
+	if strings.Contains(string(data), "local = 'docs'") {
+		t.Fatalf("mounts.toml still has removed mount: %s", string(data))
+	}
+}
+
+func TestMountRemoveRejectsMissing(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	// No mounts.toml at all
+	_, err := executeWithClientErr(&fakeClient{}, "mount", "remove", "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for removing nonexistent mount")
+	}
+}
+
+func TestMountRemoveBlocksOnMaterialized(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	// Add mount
+	executeWithClient(t, client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
+
+	// Write a manifest with a materialized file under docs/
+	manifestDir := filepath.Join(dir, ".gxfs")
+	manifestContent := `version = 1
+
+[[entries]]
+local = 'docs/readme.md'
+remote_doc = 'repo://self/docs/readme.md'
+content_hash = 'sha256:abc123'
+materialized = true
+`
+	if err := os.WriteFile(filepath.Join(manifestDir, "manifest.toml"), []byte(manifestContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove should fail
+	_, err := executeWithClientErr(client, "mount", "remove", "docs")
+	if err == nil {
+		t.Fatal("expected error when materialized files exist")
+	}
+	if !strings.Contains(err.Error(), "materialized files exist") {
+		t.Fatalf("error = %q, want materialized warning", err)
+	}
+}
+
+func TestMountListShowsMounts(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	// No mounts yet → "no mounts configured"
+	got := executeWithClient(t, client, "mount", "list")
+	if !strings.Contains(got, "no mounts configured") {
+		t.Fatalf("empty list = %q, want 'no mounts configured'", got)
+	}
+
+	// Add two mounts
+	executeWithClient(t, client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
+	executeWithClient(t, client, "mount", "add", "repo://self/api", "api", "--mode", "writable", "--no-refresh")
+
+	got = executeWithClient(t, client, "mount", "list")
+	if !strings.Contains(got, "docs\trepo://self/docs\treadonly") {
+		t.Fatalf("list output missing docs mount: %q", got)
+	}
+	if !strings.Contains(got, "api\trepo://self/api\twritable") {
+		t.Fatalf("list output missing api mount: %q", got)
+	}
+}
+
+func TestMountAddRefreshUsesCorrectRemotePath(t *testing.T) {
+	// Mount repo://self/api at local "docs/api" and verify the refresh
+	// requests the remote path /api, NOT /docs/api.
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/api", Name: "api", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/api/endpoint.md", Name: "endpoint.md", Kind: "file"},
+		},
+	}
+	got := executeWithClient(t, client, "mount", "add", "repo://self/api", "docs/api")
+	if !strings.Contains(got, "added mount docs/api → repo://self/api") {
+		t.Fatalf("output = %q, want add confirmation", got)
+	}
+
+	// The fakeClient.lsReq should have received the resolved remote path /api,
+	// not the local path "docs/api" or "/docs/api".
+	if client.lsReq.Path != "/api" {
+		t.Fatalf("LS request path = %q, want /api (refresh resolved through mount resolver)", client.lsReq.Path)
 	}
 }
