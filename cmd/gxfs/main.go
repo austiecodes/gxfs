@@ -688,84 +688,30 @@ func newSyncPullCommand(adapter store.Adapter, repo string) *cobra.Command {
 				manifestPath = filepath.Join(".gxfs", "manifest.toml")
 			}
 
-			manifest := syncmanifest.Manifest{}
-			if existing, err := syncmanifest.Load(manifestPath); err == nil {
-				manifest = existing
-			} else if !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
-			existingByLocal := manifestEntriesByLocal(manifest)
-
-			remoteFiles, err := collectRemoteFiles(cmd.Context(), adapter, repo, root)
+			manifest, err := loadManifest(manifestPath)
 			if err != nil {
 				return err
 			}
 
-			entries := make([]syncmanifest.Entry, 0, len(remoteFiles))
-			materialized := 0
-			forcePushed := 0
-			for _, remote := range remoteFiles {
-				existing, hasExisting := existingByLocal[remote.LocalPath]
-				local, localExists, err := readLocalSyncFile(remote.LocalPath)
-				if err != nil {
-					return err
-				}
-
-				remoteChanged := !hasExisting || existing.ContentHash != remote.ContentHash
-				localChanged := localExists && hasExisting && local.ContentHash != existing.ContentHash
-				untrackedLocalConflict := materialize && localExists && !hasExisting && local.ContentHash != remote.ContentHash
-
-				if localChanged && remoteChanged {
-					if forceLocal {
-						entry, err := pushLocalConflict(cmd.Context(), adapter, repo, local, remote, root)
-						if err != nil {
-							return err
-						}
-						entries = append(entries, entry)
-						forcePushed++
-						continue
-					}
-					if !forceRemote {
-						return fmt.Errorf("conflict on %s: local and remote both changed (use --force-local or --force-remote)", remote.LocalPath)
-					}
-				}
-				if materialize && (localChanged || untrackedLocalConflict) && !forceRemote {
-					if forceLocal && localExists {
-						entry, err := pushLocalConflict(cmd.Context(), adapter, repo, local, remote, root)
-						if err != nil {
-							return err
-						}
-						entries = append(entries, entry)
-						forcePushed++
-						continue
-					}
-					return fmt.Errorf("local file %s has unpushed changes (use --force-local or --force-remote)", remote.LocalPath)
-				}
-
-				entry := remote.toManifestEntry(root, materialize && (!localChanged || forceRemote))
-				if materialize {
-					if err := writeMaterializedFile(remote.LocalPath, remote.Content); err != nil {
-						return err
-					}
-					materialized++
-					entry.Materialized = true
-				} else if localExists && local.ContentHash == remote.ContentHash {
-					entry.Materialized = true
-				}
-				entries = append(entries, entry)
+			plan, err := buildRemoteSyncPlan(cmd.Context(), adapter, repo, root, manifest, remoteSyncOptions{
+				Materialize: materialize,
+				ForceLocal:  forceLocal,
+				ForceRemote: forceRemote,
+			})
+			if err != nil {
+				return err
 			}
-
-			manifest = syncmanifest.ReplaceUnder(manifest, root, entries)
-			if err := syncmanifest.Save(manifestPath, manifest); err != nil {
+			result, err := applyRemoteSyncPlan(cmd.Context(), adapter, repo, root, manifestPath, manifest, plan)
+			if err != nil {
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "pulled %d file%s from %s\n", len(remoteFiles), plural(len(remoteFiles)), root)
+			fmt.Fprintf(cmd.OutOrStdout(), "pulled %d file%s from %s\n", result.RemoteFiles, plural(result.RemoteFiles), root)
 			if materialize {
-				fmt.Fprintf(cmd.OutOrStdout(), "materialized %d file%s under %s\n", materialized, plural(materialized), root)
+				fmt.Fprintf(cmd.OutOrStdout(), "materialized %d file%s under %s\n", result.Materialized, plural(result.Materialized), root)
 			}
-			if forcePushed > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "pushed %d local file%s to resolve conflicts\n", forcePushed, plural(forcePushed))
+			if result.ForcePushed > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "pushed %d local file%s to resolve conflicts\n", result.ForcePushed, plural(result.ForcePushed))
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "updated %s\n", manifestPath)
 			return nil
@@ -793,6 +739,38 @@ type localSyncFile struct {
 	ContentHash string
 	Size        int64
 	MTime       time.Time
+}
+
+type remoteSyncOptions struct {
+	Materialize bool
+	ForceLocal  bool
+	ForceRemote bool
+}
+
+type remoteSyncAction string
+
+const (
+	remoteSyncAccept      remoteSyncAction = "accept"
+	remoteSyncMaterialize remoteSyncAction = "materialize"
+	remoteSyncPushLocal   remoteSyncAction = "push-local"
+)
+
+type remoteSyncPlan struct {
+	Changes []remoteSyncChange
+}
+
+type remoteSyncChange struct {
+	Action remoteSyncAction
+	Remote remoteSyncFile
+	Local  *localSyncFile
+	Entry  syncmanifest.Entry
+}
+
+type remoteSyncResult struct {
+	Manifest     syncmanifest.Manifest
+	RemoteFiles  int
+	Materialized int
+	ForcePushed  int
 }
 
 func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root string) ([]remoteSyncFile, error) {
@@ -832,6 +810,86 @@ func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root s
 	return files, nil
 }
 
+func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root string, manifest syncmanifest.Manifest, opts remoteSyncOptions) (remoteSyncPlan, error) {
+	remoteFiles, err := collectRemoteFiles(ctx, adapter, repo, root)
+	if err != nil {
+		return remoteSyncPlan{}, err
+	}
+
+	existingByLocal := manifestEntriesByLocal(manifest)
+	changes := make([]remoteSyncChange, 0, len(remoteFiles))
+	for _, remote := range remoteFiles {
+		existing, hasExisting := existingByLocal[remote.LocalPath]
+		local, localExists, err := readLocalSyncFile(remote.LocalPath)
+		if err != nil {
+			return remoteSyncPlan{}, err
+		}
+
+		remoteChanged := !hasExisting || existing.ContentHash != remote.ContentHash
+		localChanged := localExists && hasExisting && local.ContentHash != existing.ContentHash
+		untrackedLocalConflict := opts.Materialize && localExists && !hasExisting && local.ContentHash != remote.ContentHash
+
+		if localChanged && remoteChanged {
+			if opts.ForceLocal {
+				changes = append(changes, remoteSyncChange{Action: remoteSyncPushLocal, Remote: remote, Local: &local})
+				continue
+			}
+			if !opts.ForceRemote {
+				return remoteSyncPlan{}, fmt.Errorf("conflict on %s: local and remote both changed (use --force-local or --force-remote)", remote.LocalPath)
+			}
+		}
+		if opts.Materialize && (localChanged || untrackedLocalConflict) && !opts.ForceRemote {
+			if opts.ForceLocal && localExists {
+				changes = append(changes, remoteSyncChange{Action: remoteSyncPushLocal, Remote: remote, Local: &local})
+				continue
+			}
+			return remoteSyncPlan{}, fmt.Errorf("local file %s has unpushed changes (use --force-local or --force-remote)", remote.LocalPath)
+		}
+
+		action := remoteSyncAccept
+		entry := remote.toManifestEntry(root, false)
+		if opts.Materialize {
+			action = remoteSyncMaterialize
+			entry.Materialized = true
+		} else if localExists && local.ContentHash == remote.ContentHash {
+			entry.Materialized = true
+		}
+		changes = append(changes, remoteSyncChange{Action: action, Remote: remote, Entry: entry})
+	}
+	return remoteSyncPlan{Changes: changes}, nil
+}
+
+func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root, manifestPath string, manifest syncmanifest.Manifest, plan remoteSyncPlan) (remoteSyncResult, error) {
+	result := remoteSyncResult{RemoteFiles: len(plan.Changes)}
+	entries := make([]syncmanifest.Entry, 0, len(plan.Changes))
+	for _, change := range plan.Changes {
+		switch change.Action {
+		case remoteSyncPushLocal:
+			entry, err := pushLocalConflict(ctx, adapter, repo, *change.Local, change.Remote, root)
+			if err != nil {
+				return remoteSyncResult{}, err
+			}
+			entries = append(entries, entry)
+			result.ForcePushed++
+		case remoteSyncMaterialize:
+			if err := writeMaterializedFile(change.Remote.LocalPath, change.Remote.Content); err != nil {
+				return remoteSyncResult{}, err
+			}
+			entries = append(entries, change.Entry)
+			result.Materialized++
+		default:
+			entries = append(entries, change.Entry)
+		}
+	}
+
+	manifest = syncmanifest.ReplaceUnder(manifest, root, entries)
+	if err := syncmanifest.Save(manifestPath, manifest); err != nil {
+		return remoteSyncResult{}, err
+	}
+	result.Manifest = manifest
+	return result, nil
+}
+
 func (f remoteSyncFile) toManifestEntry(root string, materialized bool) syncmanifest.Entry {
 	return syncmanifest.Entry{
 		Local:        f.LocalPath,
@@ -861,7 +919,7 @@ func readLocalSyncFile(localPath string) (localSyncFile, bool, error) {
 		return localSyncFile{}, false, fmt.Errorf("stat %s: %w", localPath, err)
 	}
 	if info.IsDir() {
-		return localSyncFile{}, false, nil
+		return localSyncFile{}, false, fmt.Errorf("local path %s is a directory", localPath)
 	}
 	data, err := os.ReadFile(localPath)
 	if err != nil {
@@ -929,34 +987,15 @@ func refreshManifest(ctx context.Context, adapter store.Adapter, repo, root, man
 	if err != nil {
 		return syncmanifest.Manifest{}, 0, 0, err
 	}
-	remoteFiles, err := collectRemoteFiles(ctx, adapter, repo, root)
+	plan, err := buildRemoteSyncPlan(ctx, adapter, repo, root, manifest, remoteSyncOptions{Materialize: materialize})
 	if err != nil {
 		return syncmanifest.Manifest{}, 0, 0, err
 	}
-
-	entries := make([]syncmanifest.Entry, 0, len(remoteFiles))
-	materialized := 0
-	for _, remote := range remoteFiles {
-		entry := remote.toManifestEntry(root, false)
-		if materialize {
-			if err := writeMaterializedFile(remote.LocalPath, remote.Content); err != nil {
-				return syncmanifest.Manifest{}, 0, 0, err
-			}
-			entry.Materialized = true
-			materialized++
-		} else if local, exists, err := readLocalSyncFile(remote.LocalPath); err != nil {
-			return syncmanifest.Manifest{}, 0, 0, err
-		} else if exists && local.ContentHash == remote.ContentHash {
-			entry.Materialized = true
-		}
-		entries = append(entries, entry)
-	}
-
-	manifest = syncmanifest.ReplaceUnder(manifest, root, entries)
-	if err := syncmanifest.Save(manifestPath, manifest); err != nil {
+	result, err := applyRemoteSyncPlan(ctx, adapter, repo, root, manifestPath, manifest, plan)
+	if err != nil {
 		return syncmanifest.Manifest{}, 0, 0, err
 	}
-	return manifest, len(remoteFiles), materialized, nil
+	return result.Manifest, result.RemoteFiles, result.Materialized, nil
 }
 
 func newRefreshCommand(adapter store.Adapter, repo string) *cobra.Command {
@@ -1026,7 +1065,7 @@ func newDematerializeCommand() *cobra.Command {
 			dematerialized := 0
 			for i := range entries {
 				if entries[i].Materialized && !keepFiles {
-					if err := removeMaterializedFile(entries[i].Local); err != nil {
+					if err := removeMaterializedFile(entries[i].Local, root); err != nil {
 						return err
 					}
 				}
@@ -1050,9 +1089,48 @@ func newDematerializeCommand() *cobra.Command {
 	return cmd
 }
 
-func removeMaterializedFile(localPath string) error {
+func removeMaterializedFile(localPath, root string) error {
 	if err := os.Remove(localPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", localPath, err)
+	}
+	if err := removeEmptyParents(localPath, root); err != nil {
+		return err
+	}
+	return nil
+}
+
+func removeEmptyParents(localPath, root string) error {
+	dir := filepath.Clean(filepath.Dir(localPath))
+	stop := filepath.Clean(root)
+	if stop == "." || stop == "" {
+		return nil
+	}
+	if filepath.Clean(localPath) == stop {
+		stop = filepath.Clean(filepath.Dir(stop))
+	}
+
+	for dir != "." && dir != string(filepath.Separator) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("read dir %s: %w", dir, err)
+		}
+		if len(entries) > 0 {
+			return nil
+		}
+		if err := os.Remove(dir); err != nil {
+			return fmt.Errorf("remove dir %s: %w", dir, err)
+		}
+		if dir == stop {
+			return nil
+		}
+		parent := filepath.Clean(filepath.Dir(dir))
+		if parent == dir {
+			return nil
+		}
+		dir = parent
 	}
 	return nil
 }
