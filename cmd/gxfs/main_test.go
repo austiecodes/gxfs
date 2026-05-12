@@ -2074,3 +2074,27 @@ func TestMountListShowsMounts(t *testing.T) {
 		t.Fatalf("list output missing api mount: %q", got)
 	}
 }
+
+func TestMountAddRefreshUsesCorrectRemotePath(t *testing.T) {
+	// Mount repo://self/api at local "docs/api" and verify the refresh
+	// requests the remote path /api, NOT /docs/api.
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/api", Name: "api", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/api/endpoint.md", Name: "endpoint.md", Kind: "file"},
+		},
+	}
+	got := executeWithClient(t, client, "mount", "add", "repo://self/api", "docs/api")
+	if !strings.Contains(got, "added mount docs/api → repo://self/api") {
+		t.Fatalf("output = %q, want add confirmation", got)
+	}
+
+	// The fakeClient.lsReq should have received the resolved remote path /api,
+	// not the local path "docs/api" or "/docs/api".
+	if client.lsReq.Path != "/api" {
+		t.Fatalf("LS request path = %q, want /api (refresh resolved through mount resolver)", client.lsReq.Path)
+	}
+}

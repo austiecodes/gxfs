@@ -1417,8 +1417,20 @@ func refreshAfterMount(cmd *cobra.Command, rawAdapter store.Adapter, repo, local
 	if noRefresh {
 		return nil
 	}
+	// Reload mounts config (now includes the newly added mount) and build a
+	// fresh mount adapter so the resolver maps localPath → remotePath correctly.
+	mountsCfg, err := config.LoadMounts(mountsPath)
+	if err != nil {
+		return fmt.Errorf("reload mounts for refresh: %w", err)
+	}
+	resolver, err := mountadapter.NewResolver(repo, mountsCfg.Mounts)
+	if err != nil {
+		return fmt.Errorf("build resolver for refresh: %w", err)
+	}
+	mountedAdapter := mountadapter.NewAdapter(rawAdapter, resolver)
+
 	manifestPath := defaultManifestPath("")
-	if _, err := refreshManifest(cmd.Context(), rawAdapter, repo, localPath, manifestPath, false); err != nil {
+	if _, err := refreshManifest(cmd.Context(), mountedAdapter, repo, localPath, manifestPath, false); err != nil {
 		return fmt.Errorf("refresh manifest after mount: %w", err)
 	}
 	return nil
