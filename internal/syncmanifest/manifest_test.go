@@ -76,6 +76,27 @@ func TestReplaceUnderRefreshesOnlyRequestedRoot(t *testing.T) {
 	}
 }
 
+func TestEntriesUnderAndUpdateEntries(t *testing.T) {
+	manifest := Manifest{Entries: []Entry{
+		{Local: "docs/a.md", ContentHash: "sha256:a", Materialized: true},
+		{Local: "docs/nested/b.md", ContentHash: "sha256:b", Materialized: true},
+		{Local: "other/c.md", ContentHash: "sha256:c", Materialized: true},
+	}}
+
+	entries := EntriesUnder(manifest, "docs")
+	if len(entries) != 2 {
+		t.Fatalf("EntriesUnder len = %d, want 2: %+v", len(entries), entries)
+	}
+	entries[0].Materialized = false
+	got := UpdateEntries(manifest, entries[:1])
+	if got.Entries[0].Local != "docs/a.md" || got.Entries[0].Materialized {
+		t.Fatalf("updated entry = %+v, want docs/a.md dematerialized", got.Entries[0])
+	}
+	if !got.Entries[1].Materialized || !got.Entries[2].Materialized {
+		t.Fatalf("unupdated entries changed: %+v", got.Entries)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -182,6 +182,9 @@ Sync local docs into GXFS:
 gxfs sync push docs
 gxfs sync pull docs
 gxfs sync pull docs --materialize
+gxfs refresh docs
+gxfs materialize docs
+gxfs dematerialize docs
 gxfs sync push docs --manifest .gxfs/manifest.toml
 ```
 
@@ -312,6 +315,28 @@ By default it only refreshes the manifest; it does not write local files.
 
 Conflict detection compares the manifest's last synced hash with current local
 and remote hashes. If both changed, pull fails unless one force flag is used.
+
+`gxfs refresh <path>`
+
+Refreshes `.gxfs/manifest.toml` for remote docs under a path without writing
+local files.
+
+- `--manifest`: custom manifest path. Defaults to `.gxfs/manifest.toml`.
+
+`gxfs materialize <path>`
+
+Refreshes the manifest and writes remote docs under the path to local markdown
+files.
+
+- `--manifest`: custom manifest path. Defaults to `.gxfs/manifest.toml`.
+
+`gxfs dematerialize <path>`
+
+Marks manifest entries under the path as remote-only and removes local
+materialized files.
+
+- `--manifest`: custom manifest path. Defaults to `.gxfs/manifest.toml`.
+- `--keep-files`: update the manifest but leave local files in place.
 
 ## Agent Usage
 

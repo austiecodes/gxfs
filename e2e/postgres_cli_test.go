@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -217,6 +218,51 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		}
 		if !strings.Contains(string(manifest), `local = 'docs/pull/a.md'`) || !strings.Contains(string(manifest), `materialized = true`) {
 			t.Fatalf("manifest missing materialized pull entry: %s", manifest)
+		}
+	})
+
+	t.Run("materialize refresh and dematerialize commands update manifest", func(t *testing.T) {
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/materialize/a.md", "materialize alpha")
+
+		projectDir := filepath.Join(tmp, "materialize-project")
+		if err := os.MkdirAll(filepath.Join(projectDir, ".gxfs"), 0o755); err != nil {
+			t.Fatalf("mkdir materialize project config: %v", err)
+		}
+		matConfig := filepath.Join(projectDir, ".gxfs", "settings.toml")
+		matMounts := filepath.Join(projectDir, ".gxfs", "mounts.toml")
+		writeFile(t, matConfig, cliConfigText(serverPort))
+		writeFile(t, matMounts, cliMountsText())
+
+		got := runCLIInDir(t, projectDir, cliPath, matConfig, "refresh", "docs/materialize")
+		if !strings.Contains(got, "refreshed 1 file") || strings.Contains(got, "materialized") {
+			t.Fatalf("refresh output = %q, want refreshed only", got)
+		}
+		if _, err := os.Stat(filepath.Join(projectDir, "docs", "materialize", "a.md")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("file after refresh stat error = %v, want not exist", err)
+		}
+
+		got = runCLIInDir(t, projectDir, cliPath, matConfig, "materialize", "docs/materialize")
+		if !strings.Contains(got, "materialized 1 file") {
+			t.Fatalf("materialize output = %q, want materialized count", got)
+		}
+		materialized := readFile(t, filepath.Join(projectDir, "docs", "materialize", "a.md"))
+		if materialized != "materialize alpha" {
+			t.Fatalf("materialized file = %q, want materialize alpha", materialized)
+		}
+
+		got = runCLIInDir(t, projectDir, cliPath, matConfig, "dematerialize", "docs/materialize")
+		if !strings.Contains(got, "dematerialized 1 file") {
+			t.Fatalf("dematerialize output = %q, want dematerialized count", got)
+		}
+		if _, err := os.Stat(filepath.Join(projectDir, "docs", "materialize", "a.md")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("file after dematerialize stat error = %v, want not exist", err)
+		}
+		manifest, err := os.ReadFile(filepath.Join(projectDir, ".gxfs", "manifest.toml"))
+		if err != nil {
+			t.Fatalf("read manifest: %v", err)
+		}
+		if !strings.Contains(string(manifest), `local = 'docs/materialize/a.md'`) || !strings.Contains(string(manifest), `materialized = false`) {
+			t.Fatalf("manifest missing dematerialized entry: %s", manifest)
 		}
 	})
 }

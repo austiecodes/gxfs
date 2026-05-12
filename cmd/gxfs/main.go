@@ -40,6 +40,9 @@ func newRootCommand(adapter store.Adapter, repo string) *cobra.Command {
 	cmd.AddCommand(newWriteCommand(adapter, repo))
 	cmd.AddCommand(newEditCommand(adapter, repo))
 	cmd.AddCommand(newDeleteCommand(adapter, repo))
+	cmd.AddCommand(newRefreshCommand(adapter, repo))
+	cmd.AddCommand(newMaterializeCommand(adapter, repo))
+	cmd.AddCommand(newDematerializeCommand())
 	cmd.AddCommand(newInitCommand())
 	cmd.AddCommand(newConfigCommand(repo))
 	cmd.AddCommand(newSyncCommand(adapter, repo))
@@ -900,6 +903,156 @@ func writeMaterializedFile(localPath, content string) error {
 	}
 	if err := os.WriteFile(localPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", localPath, err)
+	}
+	return nil
+}
+
+func defaultManifestPath(path string) string {
+	if path != "" {
+		return path
+	}
+	return filepath.Join(".gxfs", "manifest.toml")
+}
+
+func loadManifest(path string) (syncmanifest.Manifest, error) {
+	manifest := syncmanifest.Manifest{}
+	if existing, err := syncmanifest.Load(path); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return syncmanifest.Manifest{}, err
+	}
+	return manifest, nil
+}
+
+func refreshManifest(ctx context.Context, adapter store.Adapter, repo, root, manifestPath string, materialize bool) (syncmanifest.Manifest, int, int, error) {
+	manifest, err := loadManifest(manifestPath)
+	if err != nil {
+		return syncmanifest.Manifest{}, 0, 0, err
+	}
+	remoteFiles, err := collectRemoteFiles(ctx, adapter, repo, root)
+	if err != nil {
+		return syncmanifest.Manifest{}, 0, 0, err
+	}
+
+	entries := make([]syncmanifest.Entry, 0, len(remoteFiles))
+	materialized := 0
+	for _, remote := range remoteFiles {
+		entry := remote.toManifestEntry(root, false)
+		if materialize {
+			if err := writeMaterializedFile(remote.LocalPath, remote.Content); err != nil {
+				return syncmanifest.Manifest{}, 0, 0, err
+			}
+			entry.Materialized = true
+			materialized++
+		} else if local, exists, err := readLocalSyncFile(remote.LocalPath); err != nil {
+			return syncmanifest.Manifest{}, 0, 0, err
+		} else if exists && local.ContentHash == remote.ContentHash {
+			entry.Materialized = true
+		}
+		entries = append(entries, entry)
+	}
+
+	manifest = syncmanifest.ReplaceUnder(manifest, root, entries)
+	if err := syncmanifest.Save(manifestPath, manifest); err != nil {
+		return syncmanifest.Manifest{}, 0, 0, err
+	}
+	return manifest, len(remoteFiles), materialized, nil
+}
+
+func newRefreshCommand(adapter store.Adapter, repo string) *cobra.Command {
+	var manifestPath string
+	cmd := &cobra.Command{
+		Use:   "refresh <path>",
+		Short: "Refresh the local GXFS manifest for a path",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root := args[0]
+			manifestPath = defaultManifestPath(manifestPath)
+			_, refreshed, _, err := refreshManifest(cmd.Context(), adapter, repo, root, manifestPath, false)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "refreshed %d file%s under %s\n", refreshed, plural(refreshed), root)
+			fmt.Fprintf(cmd.OutOrStdout(), "updated %s\n", manifestPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&manifestPath, "manifest", "", "manifest path (default .gxfs/manifest.toml)")
+	return cmd
+}
+
+func newMaterializeCommand(adapter store.Adapter, repo string) *cobra.Command {
+	var manifestPath string
+	cmd := &cobra.Command{
+		Use:   "materialize <path>",
+		Short: "Write GXFS docs under a path to local markdown files",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root := args[0]
+			manifestPath = defaultManifestPath(manifestPath)
+			_, refreshed, materialized, err := refreshManifest(cmd.Context(), adapter, repo, root, manifestPath, true)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "refreshed %d file%s under %s\n", refreshed, plural(refreshed), root)
+			fmt.Fprintf(cmd.OutOrStdout(), "materialized %d file%s under %s\n", materialized, plural(materialized), root)
+			fmt.Fprintf(cmd.OutOrStdout(), "updated %s\n", manifestPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&manifestPath, "manifest", "", "manifest path (default .gxfs/manifest.toml)")
+	return cmd
+}
+
+func newDematerializeCommand() *cobra.Command {
+	var manifestPath string
+	var keepFiles bool
+	cmd := &cobra.Command{
+		Use:   "dematerialize <path>",
+		Short: "Mark materialized GXFS docs as remote-only",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root := args[0]
+			manifestPath = defaultManifestPath(manifestPath)
+			manifest, err := syncmanifest.Load(manifestPath)
+			if err != nil {
+				return err
+			}
+			entries := syncmanifest.EntriesUnder(manifest, root)
+			if len(entries) == 0 {
+				return fmt.Errorf("no manifest entries under %s", root)
+			}
+
+			dematerialized := 0
+			for i := range entries {
+				if entries[i].Materialized && !keepFiles {
+					if err := removeMaterializedFile(entries[i].Local); err != nil {
+						return err
+					}
+				}
+				if entries[i].Materialized {
+					dematerialized++
+				}
+				entries[i].Materialized = false
+			}
+			manifest = syncmanifest.UpdateEntries(manifest, entries)
+			if err := syncmanifest.Save(manifestPath, manifest); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "dematerialized %d file%s under %s\n", dematerialized, plural(dematerialized), root)
+			fmt.Fprintf(cmd.OutOrStdout(), "updated %s\n", manifestPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&manifestPath, "manifest", "", "manifest path (default .gxfs/manifest.toml)")
+	cmd.Flags().BoolVar(&keepFiles, "keep-files", false, "update manifest without deleting local files")
+	return cmd
+}
+
+func removeMaterializedFile(localPath string) error {
+	if err := os.Remove(localPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", localPath, err)
 	}
 	return nil
 }

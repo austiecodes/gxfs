@@ -110,6 +110,40 @@ func ReplaceUnder(existing Manifest, root string, entries []Entry) Manifest {
 	return existing
 }
 
+func EntriesUnder(manifest Manifest, root string) []Entry {
+	root = cleanManifestPath(root)
+	var entries []Entry
+	for _, entry := range manifest.Entries {
+		if isUnder(entry.Local, root) {
+			entries = append(entries, entry)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Local < entries[j].Local
+	})
+	return entries
+}
+
+func UpdateEntries(existing Manifest, updates []Entry) Manifest {
+	if existing.Version == 0 {
+		existing.Version = 1
+	}
+	byLocal := make(map[string]Entry, len(updates))
+	for _, entry := range updates {
+		byLocal[entry.Local] = entry
+	}
+	for i, entry := range existing.Entries {
+		if updated, ok := byLocal[entry.Local]; ok {
+			existing.Entries[i] = updated
+		}
+	}
+	existing.GeneratedAt = time.Now().UTC()
+	sort.Slice(existing.Entries, func(i, j int) bool {
+		return existing.Entries[i].Local < existing.Entries[j].Local
+	})
+	return existing
+}
+
 func cleanManifestPath(p string) string {
 	p = filepath.ToSlash(filepath.Clean(p))
 	p = strings.TrimPrefix(p, "./")
