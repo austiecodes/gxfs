@@ -382,3 +382,42 @@ func TestClientTreeZeroValuesOmitParams(t *testing.T) {
 		}
 	}
 }
+
+func TestClientSearchParams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/repos/gxfs/search" {
+			t.Fatalf("path = %q, want /v1/repos/gxfs/search", r.URL.Path)
+		}
+		q := r.URL.Query()
+		if q.Get("q") != "openai-go" {
+			t.Fatalf("query q = %q, want openai-go", q.Get("q"))
+		}
+		if q.Get("path") != "/docs" {
+			t.Fatalf("query path = %q, want /docs", q.Get("path"))
+		}
+		if q.Get("limit") != "10" {
+			t.Fatalf("query limit = %q, want 10", q.Get("limit"))
+		}
+		_ = json.NewEncoder(w).Encode(store.SearchResponse{
+			Results: []store.SearchResult{{Path: "/docs/gotchas.md", Rank: 0.95, Snippet: "**openai-go** issue"}},
+			Total:   1,
+		})
+	}))
+	defer server.Close()
+
+	resp, err := New(server.URL).Search(context.Background(), store.SearchRequest{
+		Repo:  "gxfs",
+		Query: "openai-go",
+		Path:  "/docs",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if resp.Total != 1 || len(resp.Results) != 1 {
+		t.Fatalf("Search() = %+v, want 1 result", resp)
+	}
+	if resp.Results[0].Path != "/docs/gotchas.md" {
+		t.Fatalf("result path = %q, want /docs/gotchas.md", resp.Results[0].Path)
+	}
+}

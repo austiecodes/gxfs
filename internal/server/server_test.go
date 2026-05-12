@@ -12,10 +12,12 @@ import (
 )
 
 type fakeAdapter struct {
-	lsReq   store.LSRequest
-	grepReq store.GrepRequest
-	findReq store.FindRequest
-	treeReq store.TreeRequest
+	lsReq     store.LSRequest
+	grepReq   store.GrepRequest
+	findReq   store.FindRequest
+	treeReq   store.TreeRequest
+	searchReq store.SearchRequest
+	searchErr error
 }
 
 func (f *fakeAdapter) LS(_ context.Context, req store.LSRequest) (*store.LSResponse, error) {
@@ -58,8 +60,17 @@ func (f *fakeAdapter) Edit(context.Context, store.EditRequest) (*store.EditRespo
 	return nil, nil
 }
 
-func (f *fakeAdapter) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
-	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
+func (f *fakeAdapter) Search(_ context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
+	f.searchReq = req
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
+	return &store.SearchResponse{
+		Results: []store.SearchResult{
+			{Path: "/docs/guide.md", Rank: 0.9, Snippet: "**test** result", Size: 100},
+		},
+		Total: 1,
+	}, nil
 }
 
 func TestHandlerRoutesLS(t *testing.T) {
@@ -468,5 +479,67 @@ func TestHandlerMapsUnknownRepoToNotFound(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"code":"UNKNOWN_REPO"`) {
 		t.Fatalf("body = %q, want UNKNOWN_REPO code", rec.Body.String())
+	}
+}
+
+func TestHandlerRoutesSearch(t *testing.T) {
+	adapter := &fakeAdapter{}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/search?q=test&path=/docs&limit=5", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if adapter.searchReq.Query != "test" {
+		t.Fatalf("search query = %q, want %q", adapter.searchReq.Query, "test")
+	}
+	if adapter.searchReq.Path != "/docs" {
+		t.Fatalf("search path = %q, want %q", adapter.searchReq.Path, "/docs")
+	}
+	if adapter.searchReq.Limit != 5 {
+		t.Fatalf("search limit = %d, want 5", adapter.searchReq.Limit)
+	}
+	if adapter.searchReq.Repo != "gxfs" {
+		t.Fatalf("search repo = %q, want %q", adapter.searchReq.Repo, "gxfs")
+	}
+
+	var resp store.SearchResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Results) != 1 {
+		t.Fatalf("search response = %+v, want 1 result", resp)
+	}
+	if resp.Results[0].Path != "/docs/guide.md" {
+		t.Fatalf("result path = %q, want /docs/guide.md", resp.Results[0].Path)
+	}
+}
+
+func TestHandlerSearchEmptyQuery(t *testing.T) {
+	adapter := &fakeAdapter{searchErr: store.ErrEmptyQuery}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/search?q=", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "BAD_REQUEST") {
+		t.Fatalf("body = %q, want BAD_REQUEST", rec.Body.String())
+	}
+}
+
+func TestHandlerSearchInvalidLimit(t *testing.T) {
+	adapter := &fakeAdapter{}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/search?q=test&limit=abc", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for invalid limit", rec.Code)
 	}
 }

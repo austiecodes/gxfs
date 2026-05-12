@@ -15,7 +15,10 @@ import (
 
 	"gxfs/internal/vfs"
 
+	"gxfs/internal/config"
+	"gxfs/internal/mount"
 	"gxfs/internal/store"
+	"gxfs/internal/syncmanifest"
 )
 
 type fakeClient struct {
@@ -32,6 +35,8 @@ type fakeClient struct {
 	catReqs     []store.CatRequest
 	catContents map[string]string
 	putReqs     []store.PutRequest
+	searchReq   store.SearchRequest
+	searchResp  *store.SearchResponse
 }
 
 func defaultLSNodes() []store.Node {
@@ -136,15 +141,24 @@ func (f *fakeClient) Edit(context.Context, store.EditRequest) (*store.EditRespon
 	return nil, nil
 }
 
-func (f *fakeClient) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
-	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
+func (f *fakeClient) Search(_ context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
+	f.searchReq = req
+	if f.searchResp != nil {
+		return f.searchResp, nil
+	}
+	return &store.SearchResponse{
+		Results: []store.SearchResult{
+			{Path: "/docs/guide.md", Rank: 0.9, Snippet: "**test** result", Size: 100, ModTime: "2026-01-01"},
+		},
+		Total: 1,
+	}, nil
 }
 
 func execute(t *testing.T, args ...string) (string, *fakeClient) {
 	t.Helper()
 
 	client := &fakeClient{}
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -160,7 +174,7 @@ func executeWithNodes(t *testing.T, nodes []store.Node, args ...string) string {
 	t.Helper()
 
 	client := &fakeClient{lsNodes: nodes}
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -175,7 +189,7 @@ func executeWithNodes(t *testing.T, nodes []store.Node, args ...string) string {
 func executeWithClient(t *testing.T, client *fakeClient, args ...string) string {
 	t.Helper()
 
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -188,7 +202,7 @@ func executeWithClient(t *testing.T, client *fakeClient, args ...string) string 
 }
 
 func executeWithClientErr(client *fakeClient, args ...string) (string, error) {
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -1197,7 +1211,7 @@ func TestFindINameAloneIsValid(t *testing.T) {
 
 func TestFindRequiresNameOrIName(t *testing.T) {
 	c := &fakeClient{findNodes: findMixedNodes()}
-	cmd := newRootCommand(c, c, "gxfs")
+	cmd := newRootCommand(c, c, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -1317,7 +1331,7 @@ func TestTreeSortByTimeDirsFirstSize(t *testing.T) {
 func executeErr(t *testing.T, args ...string) error {
 	t.Helper()
 	client := &fakeClient{}
-	cmd := newRootCommand(client, client, "gxfs")
+	cmd := newRootCommand(client, client, "gxfs", nil)
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -2110,5 +2124,217 @@ func TestMountAddRefreshUsesCorrectRemotePath(t *testing.T) {
 	// not the local path "docs/api" or "/docs/api".
 	if client.lsReq.Path != "/api" {
 		t.Fatalf("LS request path = %q, want /api (refresh resolved through mount resolver)", client.lsReq.Path)
+	}
+}
+
+func TestSearchHumanOutput(t *testing.T) {
+	client := &fakeClient{}
+	got := executeWithClient(t, client, "search", "test query")
+	if !strings.Contains(got, "/docs/guide.md") {
+		t.Fatalf("search output missing path: %q", got)
+	}
+	if !strings.Contains(got, "rank: 0.90") {
+		t.Fatalf("search output missing rank: %q", got)
+	}
+	if !strings.Contains(got, "test result") {
+		t.Fatalf("search output missing snippet: %q", got)
+	}
+	if client.searchReq.Query != "test query" {
+		t.Fatalf("search query = %q, want 'test query'", client.searchReq.Query)
+	}
+}
+
+func TestSearchJSONOutput(t *testing.T) {
+	client := &fakeClient{}
+	got := executeWithClient(t, client, "search", "test", "--json")
+	var resp store.SearchResponse
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("unmarshal JSON: %v, body = %q", err, got)
+	}
+	if resp.Total != 1 || len(resp.Results) != 1 {
+		t.Fatalf("search JSON = %+v, want 1 result", resp)
+	}
+	if resp.Results[0].Path != "/docs/guide.md" {
+		t.Fatalf("result path = %q, want /docs/guide.md", resp.Results[0].Path)
+	}
+}
+
+func TestSearchPathAndLimitFlags(t *testing.T) {
+	client := &fakeClient{}
+	_ = executeWithClient(t, client, "search", "test", "--path", "/docs", "--limit", "5")
+	if client.searchReq.Path != "/docs" {
+		t.Fatalf("search path = %q, want /docs", client.searchReq.Path)
+	}
+	if client.searchReq.Limit != 5 {
+		t.Fatalf("search limit = %d, want 5", client.searchReq.Limit)
+	}
+}
+
+func TestSearchEmptyResults(t *testing.T) {
+	client := &fakeClient{
+		searchResp: &store.SearchResponse{Results: []store.SearchResult{}, Total: 0},
+	}
+	got := executeWithClient(t, client, "search", "nonexistent")
+	if !strings.Contains(got, "no results found") {
+		t.Fatalf("empty search output = %q, want 'no results found'", got)
+	}
+}
+
+// TestRefreshMountedRemoteDocCorrect verifies that when a mount maps
+// repo://self/api to local docs/api, the manifest remote_doc contains
+// the true server path (repo://self/api/endpoint.md), NOT the local
+// display path (repo://self/docs/api/endpoint.md).
+func TestRefreshMountedRemoteDocCorrect(t *testing.T) {
+	// Set up a resolver that maps docs/api -> /api (remote != local).
+	resolver, err := mount.NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/api", Remote: "repo://self/api", Mode: "readonly", Source: "manual"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	// Fake client returns /api dir and /api/endpoint.md file.
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/api", Name: "api", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/api/endpoint.md", Name: "endpoint.md", Kind: "file"},
+		},
+		catContent: "# API Docs\n",
+	}
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	cmd := newRootCommand(client, client, "gxfs", resolver)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"refresh", "docs/api"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("refresh error: %v", err)
+	}
+
+	// Read the manifest and verify remote_doc correctness.
+	manifest, err := syncmanifest.Load(filepath.Join(".gxfs", "manifest.toml"))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if len(manifest.Entries) != 1 {
+		t.Fatalf("manifest entries = %d, want 1", len(manifest.Entries))
+	}
+	entry := manifest.Entries[0]
+
+	// Local path should use the mounted local name.
+	if entry.Local != "docs/api/endpoint.md" {
+		t.Errorf("local = %q, want %q", entry.Local, "docs/api/endpoint.md")
+	}
+	// remote_doc must be the true server path, NOT the localized display path.
+	wantRemoteDoc := "repo://self/api/endpoint.md"
+	if entry.RemoteDoc != wantRemoteDoc {
+		t.Errorf("remote_doc = %q, want %q (must NOT be repo://self/docs/api/endpoint.md)", entry.RemoteDoc, wantRemoteDoc)
+	}
+}
+
+// TestSyncPullMountedRemoteDocCorrect verifies the same remote_doc correctness
+// for sync pull (not just refresh).
+func TestSyncPullMountedRemoteDocCorrect(t *testing.T) {
+	resolver, err := mount.NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/api", Remote: "repo://self/api", Mode: "readonly", Source: "manual"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/api", Name: "api", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/api/endpoint.md", Name: "endpoint.md", Kind: "file"},
+		},
+		catContent: "# API Docs\n",
+	}
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	cmd := newRootCommand(client, client, "gxfs", resolver)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"sync", "pull", "docs/api"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("sync pull error: %v", err)
+	}
+
+	manifest, err := syncmanifest.Load(filepath.Join(".gxfs", "manifest.toml"))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if len(manifest.Entries) != 1 {
+		t.Fatalf("manifest entries = %d, want 1", len(manifest.Entries))
+	}
+	entry := manifest.Entries[0]
+
+	if entry.Local != "docs/api/endpoint.md" {
+		t.Errorf("local = %q, want %q", entry.Local, "docs/api/endpoint.md")
+	}
+	wantRemoteDoc := "repo://self/api/endpoint.md"
+	if entry.RemoteDoc != wantRemoteDoc {
+		t.Errorf("remote_doc = %q, want %q", entry.RemoteDoc, wantRemoteDoc)
+	}
+}
+
+// TestRefreshMountedDirtyPathNormalizesLocal verifies that non-canonical
+// input paths like "./docs/api/" or "docs/api/" produce a clean manifest
+// local path "docs/api/endpoint.md" (not "./docs/api/..." or "docs/api//...").
+func TestRefreshMountedDirtyPathNormalizesLocal(t *testing.T) {
+	resolver, err := mount.NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/api", Remote: "repo://self/api", Mode: "readonly", Source: "manual"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/api", Name: "api", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/api/endpoint.md", Name: "endpoint.md", Kind: "file"},
+		},
+		catContent: "# API\n",
+	}
+
+	cases := []string{"./docs/api/", "docs/api/", "./docs/api", "docs/api"}
+
+	for _, input := range cases {
+		t.Run(input, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+
+			cmd := newRootCommand(client, client, "gxfs", resolver)
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs([]string{"refresh", input})
+
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("refresh %q error: %v", input, err)
+			}
+
+			manifest, err := syncmanifest.Load(filepath.Join(".gxfs", "manifest.toml"))
+			if err != nil {
+				t.Fatalf("load manifest: %v", err)
+			}
+			if len(manifest.Entries) != 1 {
+				t.Fatalf("entries = %d, want 1", len(manifest.Entries))
+			}
+			entry := manifest.Entries[0]
+			if entry.Local != "docs/api/endpoint.md" {
+				t.Errorf("input %q: local = %q, want %q", input, entry.Local, "docs/api/endpoint.md")
+			}
+			if entry.RemoteDoc != "repo://self/api/endpoint.md" {
+				t.Errorf("input %q: remote_doc = %q, want %q", input, entry.RemoteDoc, "repo://self/api/endpoint.md")
+			}
+		})
 	}
 }
