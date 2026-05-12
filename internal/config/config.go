@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -193,6 +194,20 @@ func DefaultMounts(cfg CLIConfig) MountsConfig {
 			Source: "default",
 		}},
 	}
+}
+
+func SaveMounts(path string, cfg MountsConfig) error {
+	data, err := toml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal mounts config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create mounts dir: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write mounts config: %w", err)
+	}
+	return nil
 }
 
 func LoadServer(path string) (ServerConfig, error) {

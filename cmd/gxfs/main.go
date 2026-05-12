@@ -48,6 +48,7 @@ func newRootCommand(adapter store.Adapter, repo string) *cobra.Command {
 	cmd.AddCommand(newInitCommand())
 	cmd.AddCommand(newConfigCommand(repo))
 	cmd.AddCommand(newSyncCommand(adapter, repo))
+	cmd.AddCommand(newMountCommand(adapter, repo))
 	return cmd
 }
 
@@ -1203,6 +1204,218 @@ func removeEmptyParents(localPath, root string) error {
 			return fmt.Errorf("remove dir %s: %w", dir, err)
 		}
 		dir = filepath.Dir(dir)
+	}
+	return nil
+}
+
+func newMountCommand(adapter store.Adapter, repo string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "mount",
+		Short: "Manage mount points",
+	}
+	cmd.AddCommand(newMountAddCommand(adapter, repo))
+	cmd.AddCommand(newMountRemoveCommand())
+	cmd.AddCommand(newMountListCommand())
+	return cmd
+}
+
+func newMountAddCommand(adapter store.Adapter, repo string) *cobra.Command {
+	var mode string
+	var force bool
+	var noRefresh bool
+
+	cmd := &cobra.Command{
+		Use:   "add <remote-ref> <local-path>",
+		Short: "Add a mount point",
+		Long:  "Add a mount point mapping a remote path to a local path.\nOnly repo://self/<path> references are supported in this version.",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			remoteRef := args[0]
+			localPath := cleanMountLocal(args[1])
+
+			if !strings.HasPrefix(remoteRef, "repo://self/") {
+				return fmt.Errorf("only repo://self/<path> references are supported; got %q", remoteRef)
+			}
+			remotePath := strings.TrimPrefix(remoteRef, "repo://self")
+			if remotePath == "" || remotePath == "/" {
+				return fmt.Errorf("remote path cannot be empty")
+			}
+
+			if mode != "readonly" && mode != "writable" {
+				return fmt.Errorf("mode must be readonly or writable, got %q", mode)
+			}
+
+			// Validate remote path exists on server
+			if _, err := adapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: remotePath}); err != nil {
+				return fmt.Errorf("remote path %s does not exist: %w", remoteRef, err)
+			}
+
+			mountsPath := defaultMountsPath()
+			mountsCfg, err := loadMountsOrDefault(mountsPath)
+			if err != nil {
+				return err
+			}
+
+			// Check conflicts
+			for i, m := range mountsCfg.Mounts {
+				if m.Local == localPath {
+					if !force {
+						return fmt.Errorf("mount for %s already exists (use --force to replace)", localPath)
+					}
+					// Replace existing
+					mountsCfg.Mounts[i] = config.MountConfig{
+						Local:  localPath,
+						Remote: remoteRef,
+						Mode:   mode,
+						Source: "manual",
+					}
+					if err := config.SaveMounts(mountsPath, mountsCfg); err != nil {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "replaced mount %s → %s (%s)\n", localPath, remoteRef, mode)
+					return refreshAfterMount(cmd, adapter, repo, localPath, mountsPath, noRefresh)
+				}
+			}
+
+			// Check ancestor/descendant overlap
+			for _, m := range mountsCfg.Mounts {
+				if strings.HasPrefix(m.Local, localPath+"/") || strings.HasPrefix(localPath, m.Local+"/") {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s overlaps with existing mount %s\n", localPath, m.Local)
+				}
+			}
+
+			mountsCfg.Mounts = append(mountsCfg.Mounts, config.MountConfig{
+				Local:  localPath,
+				Remote: remoteRef,
+				Mode:   mode,
+				Source: "manual",
+			})
+			if err := config.SaveMounts(mountsPath, mountsCfg); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "added mount %s → %s (%s)\n", localPath, remoteRef, mode)
+
+			return refreshAfterMount(cmd, adapter, repo, localPath, mountsPath, noRefresh)
+		},
+	}
+	cmd.Flags().StringVar(&mode, "mode", "readonly", "mount mode: readonly or writable")
+	cmd.Flags().BoolVar(&force, "force", false, "replace existing mount at same local path")
+	cmd.Flags().BoolVar(&noRefresh, "no-refresh", false, "skip manifest refresh after adding mount")
+	return cmd
+}
+
+func newMountRemoveCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "remove <local-path>",
+		Short: "Remove a mount point",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			localPath := cleanMountLocal(args[0])
+
+			mountsPath := defaultMountsPath()
+			mountsCfg, err := config.LoadMounts(mountsPath)
+			if err != nil {
+				return fmt.Errorf("load mounts: %w", err)
+			}
+
+			found := false
+			var remaining []config.MountConfig
+			for _, m := range mountsCfg.Mounts {
+				if m.Local == localPath {
+					found = true
+					continue
+				}
+				remaining = append(remaining, m)
+			}
+			if !found {
+				return fmt.Errorf("no mount found for %s", localPath)
+			}
+
+			// Check if materialized files exist under this mount
+			manifestPath := defaultManifestPath("")
+			if manifest, err := syncmanifest.Load(manifestPath); err == nil {
+				entries := syncmanifest.EntriesUnder(manifest, localPath)
+				for _, e := range entries {
+					if e.Materialized {
+						return fmt.Errorf("cannot remove mount %s: materialized files exist under this path (run `gxfs dematerialize %s` first)", localPath, localPath)
+					}
+				}
+			}
+
+			mountsCfg.Mounts = remaining
+			if len(mountsCfg.Mounts) == 0 {
+				mountsCfg.Mounts = []config.MountConfig{}
+			}
+			if err := config.SaveMounts(mountsPath, mountsCfg); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "removed mount %s\n", localPath)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newMountListCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List current mount points",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mountsPath := defaultMountsPath()
+			mountsCfg, err := config.LoadMounts(mountsPath)
+			if err != nil {
+				return fmt.Errorf("load mounts: %w", err)
+			}
+			if len(mountsCfg.Mounts) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no mounts configured")
+				return nil
+			}
+			for _, m := range mountsCfg.Mounts {
+				source := ""
+				if m.Source != "" && m.Source != "manual" {
+					source = fmt.Sprintf("  [%s]", m.Source)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s%s\n", m.Local, m.Remote, m.Mode, source)
+			}
+			return nil
+		},
+	}
+	return cmd
+}
+
+func cleanMountLocal(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.Trim(p, "/")
+	if p == "" {
+		return ""
+	}
+	return path.Clean(p)
+}
+
+func defaultMountsPath() string {
+	return filepath.Join(".gxfs", "mounts.toml")
+}
+
+func loadMountsOrDefault(mountsPath string) (config.MountsConfig, error) {
+	mountsCfg, err := config.LoadMounts(mountsPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return config.MountsConfig{Version: 1, Mounts: []config.MountConfig{}}, nil
+		}
+		return config.MountsConfig{}, err
+	}
+	return mountsCfg, nil
+}
+
+func refreshAfterMount(cmd *cobra.Command, adapter store.Adapter, repo, localPath, mountsPath string, noRefresh bool) error {
+	if noRefresh {
+		return nil
+	}
+	manifestPath := defaultManifestPath("")
+	_, err := refreshManifest(cmd.Context(), adapter, repo, localPath, manifestPath, false)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: refresh after mount failed: %v\n", err)
 	}
 	return nil
 }
