@@ -115,17 +115,17 @@ func TestHandlerRoutesLSParams(t *testing.T) {
 			name: "invalid reverse treated as false",
 			url:  "/v1/repos/test/ls?path=/docs&reverse=garbage",
 			want: store.LSRequest{Repo: "test", Path: "/docs"},
-			},
+		},
 		{
 			name: "invalid recursive treated as false",
 			url:  "/v1/repos/test/ls?path=/docs&recursive=nope",
 			want: store.LSRequest{Repo: "test", Path: "/docs"},
-			},
+		},
 		{
 			name: "invalid all treated as false",
 			url:  "/v1/repos/test/ls?path=/docs&all=bogus",
 			want: store.LSRequest{Repo: "test", Path: "/docs"},
-			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -392,9 +392,9 @@ func TestHandlerRoutesTreeParams(t *testing.T) {
 			want: store.TreeRequest{Repo: "test", Path: "/src"},
 		},
 		{
-			name: "invalid depth returns error",
-			url:  "/v1/repos/test/tree?path=/src&depth=abc",
-			want: store.TreeRequest{}, // won't match; we check status != 200
+			name:        "invalid depth returns error",
+			url:         "/v1/repos/test/tree?path=/src&depth=abc",
+			want:        store.TreeRequest{}, // won't match; we check status != 200
 			expectError: true,
 		},
 	}
@@ -442,5 +442,23 @@ func TestHandlerMapsReadOnlyMountErrorToForbidden(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"code":"FORBIDDEN"`) {
 		t.Fatalf("body = %q, want FORBIDDEN code", rec.Body.String())
+	}
+}
+
+func TestHandlerMapsUnknownRepoToNotFound(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/missing/ls?path=/docs", nil)
+	rec := httptest.NewRecorder()
+	registry, err := store.NewRegistry(map[string]store.Adapter{"known": &fakeAdapter{}})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+
+	NewHandler(registry).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"UNKNOWN_REPO"`) {
+		t.Fatalf("body = %q, want UNKNOWN_REPO code", rec.Body.String())
 	}
 }

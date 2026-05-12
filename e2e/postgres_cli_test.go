@@ -302,6 +302,61 @@ func TestGXFSPostgresAutoMigratesEmptyDatabase(t *testing.T) {
 	}
 }
 
+func TestGXFSPostgresServerRoutesMultipleRepos(t *testing.T) {
+	requireDocker(t)
+
+	repoRoot := repositoryRoot(t)
+	tmp := t.TempDir()
+
+	pgPort := freePort(t)
+	containerName := fmt.Sprintf("gxfs-e2e-multirepo-%d-%d", os.Getpid(), time.Now().UnixNano())
+	startPostgres(t, containerName, pgPort)
+
+	cliPath := filepath.Join(tmp, "gxfs")
+	serverPath := filepath.Join(tmp, "gxfs-server")
+	buildBinary(t, repoRoot, cliPath, "./cmd/gxfs")
+	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
+
+	serverPort := freePort(t)
+	serverConfig := filepath.Join(tmp, "conf", "server.toml")
+	os.MkdirAll(filepath.Join(tmp, "conf"), 0o755)
+	writeFile(t, serverConfig, multiRepoServerConfigText(serverPort, pgPort))
+
+	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
+
+	alphaConfig := filepath.Join(tmp, "alpha", ".gxfs", "settings.toml")
+	alphaMounts := filepath.Join(tmp, "alpha", ".gxfs", "mounts.toml")
+	betaConfig := filepath.Join(tmp, "beta", ".gxfs", "settings.toml")
+	betaMounts := filepath.Join(tmp, "beta", ".gxfs", "mounts.toml")
+	os.MkdirAll(filepath.Dir(alphaConfig), 0o755)
+	os.MkdirAll(filepath.Dir(betaConfig), 0o755)
+	writeFile(t, alphaConfig, cliConfigTextForRepo(serverPort, "alpha"))
+	writeFile(t, alphaMounts, cliMountsText())
+	writeFile(t, betaConfig, cliConfigTextForRepo(serverPort, "beta"))
+	writeFile(t, betaMounts, cliMountsText())
+
+	runCLI(t, repoRoot, cliPath, alphaConfig, "write", "/docs/alpha.md", "alpha content")
+	runCLI(t, repoRoot, cliPath, betaConfig, "write", "/docs/beta.md", "beta content")
+
+	alphaCat := runCLI(t, repoRoot, cliPath, alphaConfig, "cat", "/docs/alpha.md")
+	if alphaCat != "alpha content" {
+		t.Fatalf("alpha cat = %q, want alpha content", alphaCat)
+	}
+	betaCat := runCLI(t, repoRoot, cliPath, betaConfig, "cat", "/docs/beta.md")
+	if betaCat != "beta content" {
+		t.Fatalf("beta cat = %q, want beta content", betaCat)
+	}
+
+	alphaLS := runCLI(t, repoRoot, cliPath, alphaConfig, "ls", "/docs")
+	if strings.Contains(alphaLS, "beta.md") || !strings.Contains(alphaLS, "alpha.md") {
+		t.Fatalf("alpha ls = %q, want alpha.md only", alphaLS)
+	}
+	betaLS := runCLI(t, repoRoot, cliPath, betaConfig, "ls", "/docs")
+	if strings.Contains(betaLS, "alpha.md") || !strings.Contains(betaLS, "beta.md") {
+		t.Fatalf("beta ls = %q, want beta.md only", betaLS)
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 
@@ -587,8 +642,56 @@ mtime_column = "updated_at"
 `, serverPort, dsn)
 }
 
+func multiRepoServerConfigText(serverPort, pgPort int) string {
+	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	return fmt.Sprintf(`addr = "127.0.0.1:%d"
+
+[[repos]]
+name = "alpha"
+
+[repos.backend]
+type = "postgres"
+
+[repos.backend.postgres]
+dsn = %q
+schema = "public"
+nodes_table = "vfs_nodes"
+content_table = "vfs_content"
+repo_nodes_table = "vfs_repo_nodes"
+
+[repos.backend.postgres.files]
+path_column = "path"
+kind_column = "kind"
+size_column = "size"
+mtime_column = "updated_at"
+
+[[repos]]
+name = "beta"
+
+[repos.backend]
+type = "postgres"
+
+[repos.backend.postgres]
+dsn = %q
+schema = "public"
+nodes_table = "vfs_nodes"
+content_table = "vfs_content"
+repo_nodes_table = "vfs_repo_nodes"
+
+[repos.backend.postgres.files]
+path_column = "path"
+kind_column = "kind"
+size_column = "size"
+mtime_column = "updated_at"
+`, serverPort, dsn, dsn)
+}
+
 func cliConfigText(serverPort int) string {
-	return fmt.Sprintf(`repo = "e2e-test"
+	return cliConfigTextForRepo(serverPort, "e2e-test")
+}
+
+func cliConfigTextForRepo(serverPort int, repo string) string {
+	return fmt.Sprintf(`repo = %q
 version = 1
 
 [server]
@@ -596,7 +699,7 @@ addr = "http://127.0.0.1:%d"
 
 [docs]
 path = "docs"
-`, serverPort)
+`, repo, serverPort)
 }
 
 func cliMountsText() string {

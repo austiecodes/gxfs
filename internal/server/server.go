@@ -153,9 +153,9 @@ func (h *handler) dispatchPut(r *http.Request, repo, op string) (any, error) {
 		})
 	case "edit":
 		var editReq struct {
-			Old  string `json:"old"`
-			New  string `json:"new"`
-			All  bool   `json:"all"`
+			Old string `json:"old"`
+			New string `json:"new"`
+			All bool   `json:"all"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&editReq); err != nil {
 			return nil, fmt.Errorf("decode edit body: %w", err)
@@ -262,6 +262,8 @@ func mapError(err error) (int, string) {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrOldNotFound):
 		return http.StatusNotFound, "NOT_FOUND"
+	case errors.Is(err, store.ErrUnknownRepo):
+		return http.StatusNotFound, "UNKNOWN_REPO"
 	case errors.Is(err, store.ErrReadOnlyMount):
 		return http.StatusForbidden, "FORBIDDEN"
 	case errors.Is(err, store.ErrIsDir), errors.Is(err, store.ErrNotDir),

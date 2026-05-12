@@ -37,16 +37,20 @@ type Adapter struct {
 	pool *pgxpool.Pool
 	cfg  Config
 
-	mu           sync.RWMutex
-	cachedTree   *vfs.Tree
-	treeLoadedAt time.Time
-	contentMu    sync.Mutex
+	mu          sync.RWMutex
+	cachedTrees map[string]*cachedTree
+	contentMu   sync.Mutex
 }
 
 var _ store.Adapter = (*Adapter)(nil)
 
+type cachedTree struct {
+	tree     *vfs.Tree
+	loadedAt time.Time
+}
+
 func New(pool *pgxpool.Pool, cfg Config) *Adapter {
-	return &Adapter{pool: pool, cfg: cfg}
+	return &Adapter{pool: pool, cfg: cfg, cachedTrees: make(map[string]*cachedTree)}
 }
 
 func Connect(ctx context.Context, cfg Config) (*Adapter, error) {
@@ -63,7 +67,8 @@ func Connect(ctx context.Context, cfg Config) (*Adapter, error) {
 }
 
 func (a *Adapter) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
-	tree, err := a.treeFor(ctx)
+	repo := a.repo(req.Repo)
+	tree, err := a.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +88,8 @@ func (a *Adapter) LS(ctx context.Context, req store.LSRequest) (*store.LSRespons
 }
 
 func (a *Adapter) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeResponse, error) {
-	tree, err := a.treeFor(ctx)
+	repo := a.repo(req.Repo)
+	tree, err := a.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +115,8 @@ func (a *Adapter) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeR
 }
 
 func (a *Adapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResponse, error) {
-	tree, err := a.treeFor(ctx)
+	repo := a.repo(req.Repo)
+	tree, err := a.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +133,8 @@ func (a *Adapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResp
 }
 
 func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
-	tree, err := a.treeFor(ctx)
+	repo := a.repo(req.Repo)
+	tree, err := a.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +162,8 @@ func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepR
 }
 
 func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindResponse, error) {
-	tree, err := a.treeFor(ctx)
+	repo := a.repo(req.Repo)
+	tree, err := a.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +184,8 @@ func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindR
 }
 
 func (a *Adapter) Stat(ctx context.Context, req store.StatRequest) (*store.StatResponse, error) {
-	tree, err := a.treeFor(ctx)
+	repo := a.repo(req.Repo)
+	tree, err := a.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -189,19 +199,26 @@ func (a *Adapter) Stat(ctx context.Context, req store.StatRequest) (*store.StatR
 }
 
 func (a *Adapter) Put(ctx context.Context, req store.PutRequest) (*store.PutResponse, error) {
-	if _, err := a.treeFor(ctx); err != nil {
+	repo := a.repo(req.Repo)
+	tree, err := a.treeFor(ctx, repo)
+	if err != nil {
 		return nil, err
 	}
 
-	if err := a.writeBackPut(ctx, req); err != nil {
+	if err := a.writeBackPut(ctx, repo, req); err != nil {
 		return nil, err
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	a.cachedTree.Put(req.Path, req.Content)
-	node, err := a.cachedTree.Stat(req.Path)
+	cache := a.cachedTrees[repo]
+	if cache == nil {
+		cache = &cachedTree{tree: tree, loadedAt: time.Now()}
+		a.cachedTrees[repo] = cache
+	}
+	cache.tree.Put(req.Path, req.Content)
+	node, err := cache.tree.Stat(req.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -209,25 +226,33 @@ func (a *Adapter) Put(ctx context.Context, req store.PutRequest) (*store.PutResp
 }
 
 func (a *Adapter) Delete(ctx context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
-	if _, err := a.treeFor(ctx); err != nil {
+	repo := a.repo(req.Repo)
+	tree, err := a.treeFor(ctx, repo)
+	if err != nil {
 		return nil, err
 	}
 
-	if err := a.writeBackDelete(ctx, req); err != nil {
+	if err := a.writeBackDelete(ctx, repo, tree, req); err != nil {
 		return nil, err
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if err := a.cachedTree.Delete(req.Path); err != nil {
+	cache := a.cachedTrees[repo]
+	if cache == nil {
+		cache = &cachedTree{tree: tree, loadedAt: time.Now()}
+		a.cachedTrees[repo] = cache
+	}
+	if err := cache.tree.Delete(req.Path); err != nil {
 		return nil, err
 	}
 	return &store.DeleteResponse{}, nil
 }
 
 func (a *Adapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditResponse, error) {
-	tree, err := a.treeFor(ctx)
+	repo := a.repo(req.Repo)
+	tree, err := a.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -248,14 +273,21 @@ func (a *Adapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditR
 		return nil, catErr
 	}
 	a.mu.Unlock()
-	if err := a.writeBackPut(ctx, store.PutRequest{Path: req.Path, Content: content}); err != nil {
+	if err := a.writeBackPut(ctx, repo, store.PutRequest{Path: req.Path, Content: content}); err != nil {
 		return nil, err
 	}
 
 	return &store.EditResponse{Path: req.Path, Replaced: replaced, Content: content}, nil
 }
 
-func (a *Adapter) writeBackPut(ctx context.Context, req store.PutRequest) error {
+func (a *Adapter) repo(reqRepo string) string {
+	if reqRepo != "" {
+		return reqRepo
+	}
+	return a.cfg.Repo
+}
+
+func (a *Adapter) writeBackPut(ctx context.Context, repo string, req store.PutRequest) error {
 	tx, err := a.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -284,7 +316,7 @@ func (a *Adapter) writeBackPut(ctx context.Context, req store.PutRequest) error 
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, upsertRepo, a.cfg.Repo, req.Path); err != nil {
+	if _, err := tx.Exec(ctx, upsertRepo, repo, req.Path); err != nil {
 		return fmt.Errorf("upsert repo node: %w", err)
 	}
 
@@ -295,7 +327,7 @@ func (a *Adapter) writeBackPut(ctx context.Context, req store.PutRequest) error 
 		if _, err := tx.Exec(ctx, upsertNode, dir, vfs.KindDir, 0); err != nil {
 			return fmt.Errorf("upsert parent node %s: %w", dir, err)
 		}
-		if _, err := tx.Exec(ctx, upsertRepo, a.cfg.Repo, dir); err != nil {
+		if _, err := tx.Exec(ctx, upsertRepo, repo, dir); err != nil {
 			return fmt.Errorf("upsert parent repo node %s: %w", dir, err)
 		}
 		dir = path.Dir(dir)
@@ -304,7 +336,7 @@ func (a *Adapter) writeBackPut(ctx context.Context, req store.PutRequest) error 
 	return tx.Commit(ctx)
 }
 
-func (a *Adapter) writeBackDelete(ctx context.Context, req store.DeleteRequest) error {
+func (a *Adapter) writeBackDelete(ctx context.Context, repo string, tree *vfs.Tree, req store.DeleteRequest) error {
 	tx, err := a.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -317,9 +349,9 @@ func (a *Adapter) writeBackDelete(ctx context.Context, req store.DeleteRequest) 
 	}
 
 	// collect all paths to delete (node + children if dir)
-	paths := a.collectPathsForDelete(req.Path)
+	paths := a.collectPathsForDelete(tree, req.Path)
 	for _, p := range paths {
-		if _, err := tx.Exec(ctx, deleteRepo, a.cfg.Repo, p); err != nil {
+		if _, err := tx.Exec(ctx, deleteRepo, repo, p); err != nil {
 			return fmt.Errorf("delete repo node %s: %w", p, err)
 		}
 	}
@@ -338,26 +370,26 @@ func (a *Adapter) writeBackDelete(ctx context.Context, req store.DeleteRequest) 
 	return tx.Commit(ctx)
 }
 
-func (a *Adapter) collectPathsForDelete(p string) []string {
+func (a *Adapter) collectPathsForDelete(tree *vfs.Tree, p string) []string {
 	p = path.Clean("/" + p)
-	node, err := a.cachedTree.Stat(p)
+	node, err := tree.Stat(p)
 	if err == nil && node.Kind == vfs.KindDir {
 		paths := []string{p}
-		a.collectChildPaths(p, &paths)
+		a.collectChildPaths(tree, p, &paths)
 		return paths
 	}
 	return []string{p}
 }
 
-func (a *Adapter) collectChildPaths(dir string, paths *[]string) {
-	nodes, err := a.cachedTree.LS(dir, vfs.LSOptions{All: true})
+func (a *Adapter) collectChildPaths(tree *vfs.Tree, dir string, paths *[]string) {
+	nodes, err := tree.LS(dir, vfs.LSOptions{All: true})
 	if err != nil {
 		return
 	}
 	for _, n := range nodes {
 		*paths = append(*paths, n.Path)
 		if n.Kind == vfs.KindDir {
-			a.collectChildPaths(n.Path, paths)
+			a.collectChildPaths(tree, n.Path, paths)
 		}
 	}
 }
@@ -365,8 +397,7 @@ func (a *Adapter) collectChildPaths(dir string, paths *[]string) {
 func (a *Adapter) Invalidate() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.cachedTree = nil
-	a.treeLoadedAt = time.Time{}
+	a.cachedTrees = make(map[string]*cachedTree)
 }
 
 func (a *Adapter) ensureSchema(ctx context.Context) error {
@@ -382,10 +413,10 @@ func (a *Adapter) ensureSchema(ctx context.Context) error {
 	return nil
 }
 
-func (a *Adapter) treeFor(ctx context.Context) (*vfs.Tree, error) {
+func (a *Adapter) treeFor(ctx context.Context, repo string) (*vfs.Tree, error) {
 	a.mu.RLock()
-	if a.cachedTree != nil && !a.expired() {
-		tree := a.cachedTree
+	if cache := a.cachedTrees[repo]; cache != nil && !a.expired(cache) {
+		tree := cache.tree
 		a.mu.RUnlock()
 		return tree, nil
 	}
@@ -394,35 +425,34 @@ func (a *Adapter) treeFor(ctx context.Context) (*vfs.Tree, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.cachedTree != nil && !a.expired() {
-		return a.cachedTree, nil
+	if cache := a.cachedTrees[repo]; cache != nil && !a.expired(cache) {
+		return cache.tree, nil
 	}
 	if a.pool == nil {
 		return nil, fmt.Errorf("postgres pool is nil")
 	}
 
-	tree, err := a.loadTree(ctx)
+	tree, err := a.loadTree(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	a.cachedTree = tree
-	a.treeLoadedAt = time.Now()
+	a.cachedTrees[repo] = &cachedTree{tree: tree, loadedAt: time.Now()}
 	return tree, nil
 }
 
-func (a *Adapter) expired() bool {
+func (a *Adapter) expired(cache *cachedTree) bool {
 	if a.cfg.CacheTTL <= 0 {
 		return false
 	}
-	return time.Since(a.treeLoadedAt) >= a.cfg.CacheTTL
+	return time.Since(cache.loadedAt) >= a.cfg.CacheTTL
 }
 
-func (a *Adapter) loadTree(ctx context.Context) (*vfs.Tree, error) {
+func (a *Adapter) loadTree(ctx context.Context, repo string) (*vfs.Tree, error) {
 	query, err := ListNodesSQL(a.cfg)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := a.pool.Query(ctx, query, a.cfg.Repo)
+	rows, err := a.pool.Query(ctx, query, repo)
 	if err != nil {
 		return nil, fmt.Errorf("query postgres nodes: %w", err)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"gxfs/internal/config"
@@ -50,5 +51,17 @@ func TestPostgresConfigFromRepoDefaultsFileTable(t *testing.T) {
 		cfg.Files.PathColumn != "path" || cfg.Files.KindColumn != "kind" ||
 		cfg.Files.SizeColumn != "size" || cfg.Files.MTimeColumn != "updated_at" {
 		t.Fatalf("config = %+v, want default table mapping", cfg)
+	}
+}
+
+func TestAdapterFromServerConfigRejectsDuplicateRepos(t *testing.T) {
+	_, err := adapterFromServerConfig(context.Background(), config.ServerConfig{
+		Repos: []config.RepoConfig{
+			{Name: "gxfs", Backend: config.BackendConfig{Type: "postgres"}},
+			{Name: "gxfs", Backend: config.BackendConfig{Type: "postgres"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("adapterFromServerConfig() error = nil, want duplicate repo error")
 	}
 }

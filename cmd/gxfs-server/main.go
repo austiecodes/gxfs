@@ -39,11 +39,21 @@ func splitAddr(addr string) (string, int, error) {
 }
 
 func adapterFromServerConfig(ctx context.Context, cfg config.ServerConfig) (store.Adapter, error) {
-	if len(cfg.Repos) != 1 {
-		return nil, fmt.Errorf("exactly one repo is supported in this version")
+	adapters := make(map[string]store.Adapter, len(cfg.Repos))
+	for _, repo := range cfg.Repos {
+		if _, exists := adapters[repo.Name]; exists {
+			return nil, fmt.Errorf("duplicate repo %q", repo.Name)
+		}
+		adapter, err := adapterFromRepoConfig(ctx, repo)
+		if err != nil {
+			return nil, fmt.Errorf("repo %s: %w", repo.Name, err)
+		}
+		adapters[repo.Name] = adapter
 	}
+	return store.NewRegistry(adapters)
+}
 
-	repo := cfg.Repos[0]
+func adapterFromRepoConfig(ctx context.Context, repo config.RepoConfig) (store.Adapter, error) {
 	switch repo.Backend.Type {
 	case "postgres":
 		return postgres.Connect(ctx, postgresConfigFromRepo(repo))

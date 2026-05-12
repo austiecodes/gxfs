@@ -153,20 +153,20 @@ func TestSchemaSQLCreatesConfiguredTables(t *testing.T) {
 
 func TestAdapterCacheTTLZeroDoesNotExpire(t *testing.T) {
 	adapter := &Adapter{}
-	adapter.treeLoadedAt = time.Now().Add(-24 * time.Hour)
 	adapter.cfg.CacheTTL = 0
+	cache := &cachedTree{loadedAt: time.Now().Add(-24 * time.Hour)}
 
-	if adapter.expired() {
+	if adapter.expired(cache) {
 		t.Fatal("expired() = true, want false when CacheTTL is zero")
 	}
 }
 
 func TestAdapterCacheTTLPositiveExpires(t *testing.T) {
 	adapter := &Adapter{}
-	adapter.treeLoadedAt = time.Now().Add(-2 * time.Minute)
 	adapter.cfg.CacheTTL = time.Minute
+	cache := &cachedTree{loadedAt: time.Now().Add(-2 * time.Minute)}
 
-	if !adapter.expired() {
+	if !adapter.expired(cache) {
 		t.Fatal("expired() = false, want true when cache is older than TTL")
 	}
 }

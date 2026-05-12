@@ -118,11 +118,12 @@ mtime_column = "updated_at"
 Notes:
 
 - Environment variables in config files are expanded.
-- This version supports exactly one configured repo per server process.
+- A server can configure multiple repos. Requests route by the
+  `/v1/repos/{repo}/...` path segment to the matching repo backend.
 - PostgreSQL schema is auto-migrated on server startup. Missing GXFS tables are
   created with `CREATE TABLE IF NOT EXISTS`.
-- `cache_ttl` is optional. If omitted, the Postgres adapter keeps its loaded tree
-  until writes/deletes invalidate it or the process restarts.
+- `cache_ttl` is optional. If omitted, the Postgres adapter keeps each repo's
+  loaded tree until writes/deletes invalidate it or the process restarts.
 
 ## Common CLI Commands
 

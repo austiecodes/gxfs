@@ -6,14 +6,15 @@ import (
 )
 
 var (
-	ErrNotFound        = errors.New("path not found")
-	ErrIsDir           = errors.New("is a directory")
-	ErrNotDir          = errors.New("not a directory")
-	ErrContentNotReady = errors.New("content not loaded")
-	ErrEmptyOld        = errors.New("old string cannot be empty")
-	ErrOldNotFound     = errors.New("old string not found")
-	ErrReadOnlyMount   = errors.New("read-only mount")
+	ErrNotFound         = errors.New("path not found")
+	ErrIsDir            = errors.New("is a directory")
+	ErrNotDir           = errors.New("not a directory")
+	ErrContentNotReady  = errors.New("content not loaded")
+	ErrEmptyOld         = errors.New("old string cannot be empty")
+	ErrOldNotFound      = errors.New("old string not found")
+	ErrReadOnlyMount    = errors.New("read-only mount")
 	ErrCannotDeleteRoot = errors.New("cannot delete root")
+	ErrUnknownRepo      = errors.New("unknown repo")
 )
 
 type Node struct {
@@ -100,7 +101,7 @@ type FindRequest struct {
 	Type     string // "file" or "" = files only, "dir" = dirs only
 	MaxDepth int
 	MinDepth int
-	All      bool // include hidden files
+	All      bool   // include hidden files
 	IName    string // case-insensitive name glob (empty = use Name only)
 }
 
