@@ -138,9 +138,13 @@ func (a *Adapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResp
 func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
 	repo := a.repo(req.Repo)
 
-	// Verify root path exists (same as VFS grep's mustDir check).
-	if _, err := a.Stat(ctx, store.StatRequest{Repo: req.Repo, Path: req.Path}); err != nil {
+	// Verify root path exists and is a directory (same as VFS grep's mustDir check).
+	statResp, err := a.Stat(ctx, store.StatRequest{Repo: req.Repo, Path: req.Path})
+	if err != nil {
 		return nil, err
+	}
+	if statResp.Node.Kind != "dir" {
+		return nil, fmt.Errorf("%w: %s", store.ErrNotDir, req.Path)
 	}
 
 	// Streaming grep: SQL streams (path, content) rows for matching files,
