@@ -783,7 +783,7 @@ func newSyncPullCommand(adapter, rawAdapter store.Adapter, repo string, resolver
 				return err
 			}
 
-			plan, err := buildRemoteSyncPlan(cmd.Context(), adapter, repo, root, manifest, remoteSyncOptions{
+			plan, err := buildRemoteSyncPlanForRoot(cmd.Context(), adapter, rawAdapter, resolver, repo, root, manifest, remoteSyncOptions{
 				Materialize: materialize,
 				ForceLocal:  forceLocal,
 				ForceRemote: forceRemote,
@@ -863,6 +863,40 @@ type remoteSyncResult struct {
 	ForcePushed  int
 }
 
+// fetchFileContents fetches file content for a slice of file nodes using
+// bounded concurrent Cat calls, producing remoteSyncFiles at stable indices.
+func fetchFileContents(ctx context.Context, adapter store.Adapter, repo string, fileNodes []store.Node, localPathFn func(store.Node) string) ([]remoteSyncFile, error) {
+	files := make([]remoteSyncFile, len(fileNodes))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+
+	for i, node := range fileNodes {
+		i, node := i, node
+		g.Go(func() error {
+			if gctx.Err() != nil {
+				return gctx.Err()
+			}
+			cat, err := adapter.Cat(gctx, store.CatRequest{Repo: repo, Path: node.Path})
+			if err != nil {
+				return err
+			}
+			files[i] = remoteSyncFile{
+				LocalPath:   localPathFn(node),
+				RemotePath:  node.Path,
+				Content:     cat.Content,
+				ContentHash: syncmanifest.HashContent(cat.Content),
+				Size:        int64(len(cat.Content)),
+				MTime:       node.ModTime,
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
 func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root string) ([]remoteSyncFile, error) {
 	stat, err := adapter.Stat(ctx, store.StatRequest{Repo: repo, Path: root})
 	if err != nil {
@@ -878,7 +912,6 @@ func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root s
 		nodes = resp.Nodes
 	}
 
-	// Collect file nodes for concurrent Cat.
 	var fileNodes []store.Node
 	for _, node := range nodes {
 		if node.Kind == "file" {
@@ -886,36 +919,9 @@ func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root s
 		}
 	}
 
-	files := make([]remoteSyncFile, len(fileNodes))
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(8)
-
-	for i, node := range fileNodes {
-		i, node := i, node
-		g.Go(func() error {
-			if gctx.Err() != nil {
-				return gctx.Err()
-			}
-			cat, err := adapter.Cat(gctx, store.CatRequest{Repo: repo, Path: node.Path})
-			if err != nil {
-				return err
-			}
-			localPath := strings.Trim(strings.TrimPrefix(filepath.ToSlash(node.Path), "./"), "/")
-			files[i] = remoteSyncFile{
-				LocalPath:   localPath,
-				RemotePath:  node.Path,
-				Content:     cat.Content,
-				ContentHash: syncmanifest.HashContent(cat.Content),
-				Size:        int64(len(cat.Content)),
-				MTime:       node.ModTime,
-			}
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-	return files, nil
+	return fetchFileContents(ctx, adapter, repo, fileNodes, func(node store.Node) string {
+		return strings.Trim(strings.TrimPrefix(filepath.ToSlash(node.Path), "./"), "/")
+	})
 }
 
 // collectMountedRemoteFiles collects remote files for a mounted path by resolving
@@ -940,33 +946,24 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 		}
 		nodes = resp.Nodes
 	}
-	remoteRoot := strings.TrimSuffix(resolved.RemotePath, "/")
-	files := make([]remoteSyncFile, 0, len(nodes))
+
+	var fileNodes []store.Node
 	for _, node := range nodes {
-		if node.Kind != "file" {
-			continue
+		if node.Kind == "file" {
+			fileNodes = append(fileNodes, node)
 		}
-		cat, err := rawAdapter.Cat(ctx, store.CatRequest{Repo: repo, Path: node.Path})
-		if err != nil {
-			return nil, err
-		}
-		// Map real remote path back to local path using the mount prefix.
+	}
+
+	remoteRoot := strings.TrimSuffix(resolved.RemotePath, "/")
+	return fetchFileContents(ctx, rawAdapter, repo, fileNodes, func(node store.Node) string {
 		rel := strings.TrimPrefix(node.Path, remoteRoot+"/")
 		rel = strings.TrimPrefix(rel, remoteRoot)
 		localPath := localRoot
 		if rel != "" {
 			localPath = localRoot + "/" + rel
 		}
-		files = append(files, remoteSyncFile{
-			LocalPath:   localPath,
-			RemotePath:  node.Path,
-			Content:     cat.Content,
-			ContentHash: syncmanifest.HashContent(cat.Content),
-			Size:        int64(len(cat.Content)),
-			MTime:       node.ModTime,
-		})
-	}
-	return files, nil
+		return localPath
+	})
 }
 
 func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root string, manifest syncmanifest.Manifest, opts remoteSyncOptions) (remoteSyncPlan, error) {
@@ -975,6 +972,21 @@ func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root 
 		return remoteSyncPlan{}, err
 	}
 	return buildRemoteSyncPlanFromFiles(remoteFiles, manifest, opts, root)
+}
+
+// buildRemoteSyncPlanForRoot picks the correct collection strategy based on
+// whether a mount resolver is available, then builds the sync plan.
+// When resolver != nil, it uses the raw adapter + resolver so that RemotePath
+// contains the true server path (not the localized display path).
+func buildRemoteSyncPlanForRoot(ctx context.Context, adapter, rawAdapter store.Adapter, resolver *mountadapter.Resolver, repo, root string, manifest syncmanifest.Manifest, opts remoteSyncOptions) (remoteSyncPlan, error) {
+	if resolver != nil {
+		remoteFiles, err := collectMountedRemoteFiles(ctx, rawAdapter, resolver, repo, root)
+		if err != nil {
+			return remoteSyncPlan{}, err
+		}
+		return buildRemoteSyncPlanFromFiles(remoteFiles, manifest, opts, root)
+	}
+	return buildRemoteSyncPlan(ctx, adapter, repo, root, manifest, opts)
 }
 
 func buildRemoteSyncPlanFromFiles(remoteFiles []remoteSyncFile, manifest syncmanifest.Manifest, opts remoteSyncOptions, root string) (remoteSyncPlan, error) {
@@ -1152,22 +1164,9 @@ func refreshManifest(ctx context.Context, adapter, rawAdapter store.Adapter, rep
 		return remoteSyncResult{}, err
 	}
 
-	var plan remoteSyncPlan
-	if resolver != nil {
-		// Use raw adapter + resolver to get correct remote paths
-		remoteFiles, err := collectMountedRemoteFiles(ctx, rawAdapter, resolver, repo, root)
-		if err != nil {
-			return remoteSyncResult{}, err
-		}
-		plan, err = buildRemoteSyncPlanFromFiles(remoteFiles, manifest, remoteSyncOptions{Materialize: materialize}, root)
-		if err != nil {
-			return remoteSyncResult{}, err
-		}
-	} else {
-		plan, err = buildRemoteSyncPlan(ctx, adapter, repo, root, manifest, remoteSyncOptions{Materialize: materialize})
-		if err != nil {
-			return remoteSyncResult{}, err
-		}
+	plan, err := buildRemoteSyncPlanForRoot(ctx, adapter, rawAdapter, resolver, repo, root, manifest, remoteSyncOptions{Materialize: materialize})
+	if err != nil {
+		return remoteSyncResult{}, err
 	}
 	result, err := applyRemoteSyncPlan(ctx, adapter, repo, root, manifestPath, manifest, plan, resolver)
 	if err != nil {
