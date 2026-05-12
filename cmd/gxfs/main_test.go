@@ -1915,6 +1915,20 @@ func TestMountAddRejectsInvalidMode(t *testing.T) {
 	}
 }
 
+func TestMountAddRejectsDotLocalPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	_, err := executeWithClientErr(client, "mount", "add", "repo://self/docs", ".")
+	if err == nil {
+		t.Fatal("expected error for '.' local path")
+	}
+	if !strings.Contains(err.Error(), "non-empty relative path") {
+		t.Fatalf("error = %q, want non-empty path rejection", err)
+	}
+}
+
 func TestMountAddWritesMountsToml(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

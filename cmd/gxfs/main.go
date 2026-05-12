@@ -1395,7 +1395,11 @@ func cleanMountLocal(p string) string {
 	if p == "" {
 		return ""
 	}
-	return path.Clean(p)
+	p = path.Clean(p)
+	if p == "." {
+		return ""
+	}
+	return p
 }
 
 func defaultMountsPath() string {
