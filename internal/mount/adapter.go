@@ -241,6 +241,12 @@ func (a *Adapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditR
 	return resp, nil
 }
 
+func (a *Adapter) Search(ctx context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
+	// Search is discovery, not browsing. Delegate directly to base adapter,
+	// bypassing mount include/exclude filters.
+	return a.base.Search(ctx, req)
+}
+
 func (a *Adapter) localizeNodes(repo string, nodes []store.Node) {
 	for i := range nodes {
 		if local, ok := a.resolver.ToLocal(repo, nodes[i].Path); ok {

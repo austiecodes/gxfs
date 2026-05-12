@@ -45,6 +45,10 @@ func (fakeAdapter) Edit(context.Context, store.EditRequest) (*store.EditResponse
 	return nil, nil
 }
 
+func (fakeAdapter) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
+	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
+}
+
 var _ store.Adapter = fakeAdapter{}
 
 func TestCapabilityRequestTypesCarryRepoAndPath(t *testing.T) {

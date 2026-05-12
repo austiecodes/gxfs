@@ -133,6 +133,14 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 		})
 	case "stat":
 		return h.adapter.Stat(r.Context(), store.StatRequest{Repo: repo, Path: queryPath(q)})
+	case "search":
+		limit, _ := queryInt(q, "limit")
+		return h.adapter.Search(r.Context(), store.SearchRequest{
+			Repo:  repo,
+			Query: q.Get("q"),
+			Path:  queryPath(q),
+			Limit: limit,
+		})
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", op)
 	}
@@ -267,7 +275,8 @@ func mapError(err error) (int, string) {
 	case errors.Is(err, store.ErrReadOnlyMount):
 		return http.StatusForbidden, "FORBIDDEN"
 	case errors.Is(err, store.ErrIsDir), errors.Is(err, store.ErrNotDir),
-		errors.Is(err, store.ErrEmptyOld), errors.Is(err, store.ErrCannotDeleteRoot):
+		errors.Is(err, store.ErrEmptyOld), errors.Is(err, store.ErrCannotDeleteRoot),
+		errors.Is(err, store.ErrEmptyQuery):
 		return http.StatusBadRequest, "BAD_REQUEST"
 	case errors.Is(err, store.ErrContentNotReady):
 		return http.StatusNotFound, "CONTENT_NOT_READY"

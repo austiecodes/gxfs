@@ -193,6 +193,21 @@ func (c *Client) Edit(ctx context.Context, req store.EditRequest) (*store.EditRe
 	return &resp, nil
 }
 
+func (c *Client) Search(ctx context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
+	var resp store.SearchResponse
+	q := url.Values{"q": {req.Query}}
+	if req.Path != "" {
+		q.Set("path", req.Path)
+	}
+	if req.Limit > 0 {
+		q.Set("limit", strconv.Itoa(req.Limit))
+	}
+	if err := c.get(ctx, req.Repo, "search", q, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) get(ctx context.Context, repo, op string, q url.Values, out any) error {
 	endpoint, err := c.url(repo, op, q)
 	if err != nil {

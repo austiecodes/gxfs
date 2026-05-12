@@ -15,6 +15,7 @@ var (
 	ErrReadOnlyMount    = errors.New("read-only mount")
 	ErrCannotDeleteRoot = errors.New("cannot delete root")
 	ErrUnknownRepo      = errors.New("unknown repo")
+	ErrEmptyQuery       = errors.New("search query cannot be empty")
 )
 
 type Node struct {
@@ -182,6 +183,7 @@ type Adapter interface {
 	Statter
 	Writer
 	Editor
+	Searcher
 }
 
 type Writer interface {
@@ -191,6 +193,30 @@ type Writer interface {
 
 type Editor interface {
 	Edit(context.Context, EditRequest) (*EditResponse, error)
+}
+
+type SearchRequest struct {
+	Repo  string
+	Query string
+	Path  string // scope to this path prefix, empty = whole repo
+	Limit int    // max results, default 20
+}
+
+type SearchResult struct {
+	Path    string  `json:"path"`
+	Rank    float64 `json:"rank"`
+	Snippet string  `json:"snippet"`
+	Size    int64   `json:"size"`
+	ModTime string  `json:"mod_time,omitempty"`
+}
+
+type SearchResponse struct {
+	Results []SearchResult `json:"results"`
+	Total   int            `json:"total"`
+}
+
+type Searcher interface {
+	Search(ctx context.Context, req SearchRequest) (*SearchResponse, error)
 }
 
 type CacheInvalidator interface {

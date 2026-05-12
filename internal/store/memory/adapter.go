@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"strings"
 
 	"gxfs/internal/store"
 	"gxfs/internal/vfs"
@@ -124,4 +125,74 @@ func (a *Adapter) Edit(_ context.Context, req store.EditRequest) (*store.EditRes
 	}
 	content, _ := a.tree.Cat(req.Path)
 	return &store.EditResponse{Path: req.Path, Replaced: replaced, Content: content}, nil
+}
+
+func (a *Adapter) Search(_ context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
+	if req.Query == "" {
+		return nil, store.ErrEmptyQuery
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	lower := strings.ToLower(req.Query)
+	terms := strings.Fields(lower)
+
+	nodes, err := a.tree.Find(req.Path, "", vfs.FindOptions{Type: "file", All: true})
+	if err != nil {
+		return nil, err
+	}
+
+	var results []store.SearchResult
+	for _, n := range nodes {
+		content, err := a.tree.Cat(n.Path)
+		if err != nil {
+			continue
+		}
+		lowerContent := strings.ToLower(content)
+		match := true
+		for _, t := range terms {
+			if !strings.Contains(lowerContent, t) {
+				match = false
+				break
+			}
+		}
+		if !match {
+			continue
+		}
+		snippet := snippetFromContent(content, terms)
+		results = append(results, store.SearchResult{
+			Path:    n.Path,
+			Rank:    1.0,
+			Snippet: snippet,
+			Size:    n.Size,
+			ModTime: n.ModTime,
+		})
+		if len(results) >= limit {
+			break
+		}
+	}
+	if results == nil {
+		results = []store.SearchResult{}
+	}
+	return &store.SearchResponse{Results: results, Total: len(results)}, nil
+}
+
+func snippetFromContent(content string, terms []string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		for _, t := range terms {
+			if strings.Contains(lower, t) && len(strings.TrimSpace(line)) > 0 {
+				if len(line) > 200 {
+					return line[:200] + "..."
+				}
+				return line
+			}
+		}
+	}
+	if len(content) > 200 {
+		return content[:200] + "..."
+	}
+	return content
 }
