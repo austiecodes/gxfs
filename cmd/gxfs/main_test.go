@@ -2284,3 +2284,57 @@ func TestSyncPullMountedRemoteDocCorrect(t *testing.T) {
 		t.Errorf("remote_doc = %q, want %q", entry.RemoteDoc, wantRemoteDoc)
 	}
 }
+
+// TestRefreshMountedDirtyPathNormalizesLocal verifies that non-canonical
+// input paths like "./docs/api/" or "docs/api/" produce a clean manifest
+// local path "docs/api/endpoint.md" (not "./docs/api/..." or "docs/api//...").
+func TestRefreshMountedDirtyPathNormalizesLocal(t *testing.T) {
+	resolver, err := mount.NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/api", Remote: "repo://self/api", Mode: "readonly", Source: "manual"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/api", Name: "api", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/api/endpoint.md", Name: "endpoint.md", Kind: "file"},
+		},
+		catContent: "# API\n",
+	}
+
+	cases := []string{"./docs/api/", "docs/api/", "./docs/api", "docs/api"}
+
+	for _, input := range cases {
+		t.Run(input, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+
+			cmd := newRootCommand(client, client, "gxfs", resolver)
+			var out bytes.Buffer
+			cmd.SetOut(&out)
+			cmd.SetErr(&out)
+			cmd.SetArgs([]string{"refresh", input})
+
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("refresh %q error: %v", input, err)
+			}
+
+			manifest, err := syncmanifest.Load(filepath.Join(".gxfs", "manifest.toml"))
+			if err != nil {
+				t.Fatalf("load manifest: %v", err)
+			}
+			if len(manifest.Entries) != 1 {
+				t.Fatalf("entries = %d, want 1", len(manifest.Entries))
+			}
+			entry := manifest.Entries[0]
+			if entry.Local != "docs/api/endpoint.md" {
+				t.Errorf("input %q: local = %q, want %q", input, entry.Local, "docs/api/endpoint.md")
+			}
+			if entry.RemoteDoc != "repo://self/api/endpoint.md" {
+				t.Errorf("input %q: remote_doc = %q, want %q", input, entry.RemoteDoc, "repo://self/api/endpoint.md")
+			}
+		})
+	}
+}

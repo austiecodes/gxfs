@@ -955,12 +955,13 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 	}
 
 	remoteRoot := strings.TrimSuffix(resolved.RemotePath, "/")
+	localBase := resolved.LocalPath
 	return fetchFileContents(ctx, rawAdapter, repo, fileNodes, func(node store.Node) string {
 		rel := strings.TrimPrefix(node.Path, remoteRoot+"/")
 		rel = strings.TrimPrefix(rel, remoteRoot)
-		localPath := localRoot
+		localPath := localBase
 		if rel != "" {
-			localPath = localRoot + "/" + rel
+			localPath = localBase + "/" + rel
 		}
 		return localPath
 	})
