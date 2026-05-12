@@ -2,12 +2,15 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -134,29 +137,97 @@ func (a *Adapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResp
 
 func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
 	repo := a.repo(req.Repo)
-	tree, err := a.treeFor(ctx, repo)
+
+	// Streaming grep: SQL streams (path, content) rows for matching files,
+	// Go does line-level matching with full grep semantics.
+	query, err := StreamGrepSQL(a.cfg)
 	if err != nil {
 		return nil, err
 	}
-	if err := a.ensureContentUnder(ctx, tree, req.Path); err != nil {
-		return nil, err
+
+	prefix := path.Clean("/" + strings.TrimSuffix(req.Path, "/"))
+	if prefix != "/" {
+		prefix += "/"
 	}
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	opts := vfs.GrepOptions{
-		CaseInsensitive: req.CaseInsensitive,
-		Invert:          req.Invert,
-		WholeWord:       req.WholeWord,
-		WholeLine:       req.WholeLine,
-		ContextBefore:   req.ContextBefore,
-		ContextAfter:    req.ContextAfter,
-		All:             req.All,
-		Include:         req.Include,
-		Exclude:         req.Exclude,
-	}
-	matches, err := tree.Grep(req.Path, req.Pattern, req.Regex, opts)
+
+	rows, err := a.pool.Query(ctx, query, repo, prefix+"%")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("grep query: %w", err)
+	}
+	defer rows.Close()
+
+	// Compile regex once if needed.
+	effectivePattern := req.Pattern
+	if req.Regex {
+		if req.CaseInsensitive {
+			effectivePattern = "(?i)" + effectivePattern
+		}
+		if req.WholeWord {
+			effectivePattern = `\b` + effectivePattern + `\b`
+		}
+		if req.WholeLine {
+			effectivePattern = `^` + effectivePattern + `$`
+		}
+	}
+
+	var re *regexp.Regexp
+	if req.Regex {
+		compiled, err := regexp.Compile(effectivePattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex: %w", err)
+		}
+		re = compiled
+	}
+
+	// Build glob matchers for include/exclude.
+	includeRE := globToRegex(req.Include)
+	excludeRE := globToRegex(req.Exclude)
+
+	var matches []store.Match
+	for rows.Next() {
+		var filePath, content string
+		if err := rows.Scan(&filePath, &content); err != nil {
+			return nil, fmt.Errorf("grep scan: %w", err)
+		}
+
+		// Path-level filtering (same as VFS grep).
+		if !req.All && pathHasHidden(filePath, prefix) {
+			continue
+		}
+		if includeRE != nil && !includeRE.MatchString(filePath) {
+			continue
+		}
+		if excludeRE != nil && excludeRE.MatchString(filePath) {
+			continue
+		}
+
+		// Line-level matching (same logic as VFS grep).
+		lines := strings.Split(content, "\n")
+		for i, line := range lines {
+			matched := grepLineMatch(line, req.Pattern, re, req.CaseInsensitive, req.WholeWord, req.WholeLine)
+			if req.Invert {
+				matched = !matched
+			}
+			if matched {
+				m := store.Match{
+					Path: filePath,
+					Line: i + 1,
+					Text: line,
+				}
+				if req.ContextBefore > 0 {
+					start := max(0, i-req.ContextBefore)
+					m.Before = copyLines(lines[start:i])
+				}
+				if req.ContextAfter > 0 {
+					end := min(len(lines), i+1+req.ContextAfter)
+					m.After = copyLines(lines[i+1 : end])
+				}
+				matches = append(matches, m)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("grep rows: %w", err)
 	}
 	return &store.GrepResponse{Matches: matches}, nil
 }
@@ -550,6 +621,9 @@ func (a *Adapter) ensureContent(ctx context.Context, tree *vfs.Tree, path string
 	}
 	var content string
 	if err := a.pool.QueryRow(ctx, query, path).Scan(&content); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("load content for %s: %w", path, store.ErrNotFound)
+		}
 		return fmt.Errorf("load content for %s: %w", path, err)
 	}
 	a.mu.Lock()
@@ -597,4 +671,92 @@ func (a *Adapter) ensureContentUnder(ctx context.Context, tree *vfs.Tree, rootPa
 	}
 	a.mu.Unlock()
 	return nil
+}
+
+// grepLineMatch implements the same matching logic as vfs.grepLineMatches.
+func grepLineMatch(line, pattern string, re *regexp.Regexp, caseInsensitive, wholeWord, wholeLine bool) bool {
+	switch {
+	case wholeLine:
+		return wholeLineMatch(line, pattern, re, caseInsensitive)
+	case wholeWord:
+		return wholeWordMatch(line, pattern, re, caseInsensitive)
+	default:
+		return grepBasicMatch(line, pattern, re, caseInsensitive)
+	}
+}
+
+func grepBasicMatch(line, pattern string, re *regexp.Regexp, caseInsensitive bool) bool {
+	if re != nil {
+		return re.MatchString(line)
+	}
+	if caseInsensitive {
+		return strings.Contains(strings.ToLower(line), strings.ToLower(pattern))
+	}
+	return strings.Contains(line, pattern)
+}
+
+func wholeLineMatch(line, pattern string, re *regexp.Regexp, caseInsensitive bool) bool {
+	if re != nil {
+		return re.MatchString(line)
+	}
+	if caseInsensitive {
+		return strings.EqualFold(line, pattern)
+	}
+	return line == pattern
+}
+
+func wholeWordMatch(line, pattern string, re *regexp.Regexp, caseInsensitive bool) bool {
+	if re != nil {
+		return re.MatchString(line)
+	}
+	target := line
+	search := pattern
+	if caseInsensitive {
+		target = strings.ToLower(target)
+		search = strings.ToLower(search)
+	}
+	// Simple word boundary check.
+	for _, word := range strings.Fields(target) {
+		// Strip punctuation for word comparison.
+		word = strings.TrimFunc(word, func(r rune) bool {
+			return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_')
+		})
+		if word == search {
+			return true
+		}
+	}
+	return false
+}
+
+// globToRegex converts a glob pattern (e.g. "*.go", "*.md") to a regex.
+// Returns nil if the pattern is empty.
+func globToRegex(glob string) *regexp.Regexp {
+	if glob == "" {
+		return nil
+	}
+	escaped := regexp.QuoteMeta(glob)
+	escaped = strings.ReplaceAll(escaped, `\*`, `.*`)
+	escaped = strings.ReplaceAll(escaped, `\?`, `.`)
+	return regexp.MustCompile(`(?i)^` + escaped + `$`)
+}
+
+// pathHasHidden checks if a file path has a hidden component (starting with .).
+func pathHasHidden(filePath, root string) bool {
+	rel := strings.TrimPrefix(filePath, root)
+	parts := strings.Split(rel, "/")
+	for _, p := range parts {
+		if strings.HasPrefix(p, ".") && p != "." && p != ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func copyLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	cp := make([]string, len(lines))
+	copy(cp, lines)
+	return cp
 }

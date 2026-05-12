@@ -228,6 +228,44 @@ func quoteTable(schema, table string) (string, error) {
 	return schemaName + "." + tableName, nil
 }
 
+// StreamGrepSQL returns a query that streams (path, content) rows for all files
+// under a given repo and path prefix. The caller is responsible for path-level
+// include/exclude filtering and line-level grep matching in Go.
+func StreamGrepSQL(cfg Config) (string, error) {
+	nodesTable, err := quoteTable(cfg.Schema, cfg.NodesTable)
+	if err != nil {
+		return "", err
+	}
+	contentTable, err := quoteTable(cfg.Schema, cfg.ContentTable)
+	if err != nil {
+		return "", err
+	}
+	mappingTable, err := quoteTable(cfg.Schema, cfg.RepoNodesTable)
+	if err != nil {
+		return "", err
+	}
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	kindCol, err := quoteIdent(cfg.Files.KindColumn)
+	if err != nil {
+		return "", fmt.Errorf("kind column: %w", err)
+	}
+	return fmt.Sprintf(
+		"select n.%s, c.content from %s n "+
+			"join %s r on n.%s = r.%s "+
+			"join %s c on n.%s = c.%s "+
+			"where r.repo = $1 and n.%s = 'file' and n.%s like $2 "+
+			"order by n.%s",
+		pathCol, nodesTable,
+		mappingTable, pathCol, pathCol,
+		contentTable, pathCol, pathCol,
+		kindCol, pathCol,
+		pathCol,
+	), nil
+}
+
 func quoteIdent(s string) (string, error) {
 	if !identPattern.MatchString(s) {
 		return "", fmt.Errorf("unsafe identifier %q", s)
