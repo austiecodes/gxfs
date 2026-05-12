@@ -543,3 +543,28 @@ func TestHandlerSearchInvalidLimit(t *testing.T) {
 		t.Fatalf("status = %d, want 400 for invalid limit", rec.Code)
 	}
 }
+
+// TestHandlerCatContentNotFound verifies that Cat returns 404 when the
+// underlying adapter returns ErrNotFound (e.g. after delete).
+func TestHandlerCatContentNotFound(t *testing.T) {
+	adapter := &notFoundCatAdapter{}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/deleted.md", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"NOT_FOUND"`) {
+		t.Fatalf("body = %q, want NOT_FOUND code", rec.Body.String())
+	}
+}
+
+type notFoundCatAdapter struct {
+	fakeAdapter
+}
+
+func (n *notFoundCatAdapter) Cat(context.Context, store.CatRequest) (*store.CatResponse, error) {
+	return nil, store.ErrNotFound
+}

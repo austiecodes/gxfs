@@ -2,12 +2,15 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -134,29 +137,97 @@ func (a *Adapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResp
 
 func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
 	repo := a.repo(req.Repo)
-	tree, err := a.treeFor(ctx, repo)
+
+	// Verify root path exists (same as VFS grep's mustDir check).
+	if _, err := a.Stat(ctx, store.StatRequest{Repo: req.Repo, Path: req.Path}); err != nil {
+		return nil, err
+	}
+
+	// Streaming grep: SQL streams (path, content) rows for matching files,
+	// Go does line-level matching with full grep semantics.
+	query, err := StreamGrepSQL(a.cfg)
 	if err != nil {
 		return nil, err
 	}
-	if err := a.ensureContentUnder(ctx, tree, req.Path); err != nil {
-		return nil, err
+
+	prefix := path.Clean("/" + strings.TrimSuffix(req.Path, "/"))
+	if prefix != "/" {
+		prefix += "/"
 	}
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	opts := vfs.GrepOptions{
-		CaseInsensitive: req.CaseInsensitive,
-		Invert:          req.Invert,
-		WholeWord:       req.WholeWord,
-		WholeLine:       req.WholeLine,
-		ContextBefore:   req.ContextBefore,
-		ContextAfter:    req.ContextAfter,
-		All:             req.All,
-		Include:         req.Include,
-		Exclude:         req.Exclude,
-	}
-	matches, err := tree.Grep(req.Path, req.Pattern, req.Regex, opts)
+
+	rows, err := a.pool.Query(ctx, query, repo, prefix+"%")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("grep query: %w", err)
+	}
+	defer rows.Close()
+
+	// Compile regex once if needed.
+	effectivePattern := req.Pattern
+	if req.Regex {
+		if req.CaseInsensitive {
+			effectivePattern = "(?i)" + effectivePattern
+		}
+		if req.WholeWord {
+			effectivePattern = `\b` + effectivePattern + `\b`
+		}
+		if req.WholeLine {
+			effectivePattern = `^` + effectivePattern + `$`
+		}
+	}
+
+	var re *regexp.Regexp
+	if req.Regex {
+		compiled, err := regexp.Compile(effectivePattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex: %w", err)
+		}
+		re = compiled
+	}
+
+	// No pre-compiled regex needed; globMatch uses path.Match on basename.
+
+	var matches []store.Match
+	for rows.Next() {
+		var filePath, content string
+		if err := rows.Scan(&filePath, &content); err != nil {
+			return nil, fmt.Errorf("grep scan: %w", err)
+		}
+
+		// Path-level filtering (same as VFS grep).
+		if !req.All && pathHasHidden(filePath, prefix) {
+			continue
+		}
+		if !globMatch(filePath, req.Include, req.Exclude) {
+			continue
+		}
+
+		// Line-level matching (same logic as VFS grep).
+		lines := strings.Split(content, "\n")
+		for i, line := range lines {
+			matched := grepLineMatch(line, req.Pattern, re, req.CaseInsensitive, req.WholeWord, req.WholeLine)
+			if req.Invert {
+				matched = !matched
+			}
+			if matched {
+				m := store.Match{
+					Path: filePath,
+					Line: i + 1,
+					Text: line,
+				}
+				if req.ContextBefore > 0 {
+					start := max(0, i-req.ContextBefore)
+					m.Before = copyLines(lines[start:i])
+				}
+				if req.ContextAfter > 0 {
+					end := min(len(lines), i+1+req.ContextAfter)
+					m.After = copyLines(lines[i+1 : end])
+				}
+				matches = append(matches, m)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("grep rows: %w", err)
 	}
 	return &store.GrepResponse{Matches: matches}, nil
 }
@@ -550,6 +621,9 @@ func (a *Adapter) ensureContent(ctx context.Context, tree *vfs.Tree, path string
 	}
 	var content string
 	if err := a.pool.QueryRow(ctx, query, path).Scan(&content); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("load content for %s: %w", path, store.ErrNotFound)
+		}
 		return fmt.Errorf("load content for %s: %w", path, err)
 	}
 	a.mu.Lock()
@@ -558,43 +632,111 @@ func (a *Adapter) ensureContent(ctx context.Context, tree *vfs.Tree, path string
 	return nil
 }
 
-func (a *Adapter) ensureContentUnder(ctx context.Context, tree *vfs.Tree, rootPath string) error {
-	a.contentMu.Lock()
-	defer a.contentMu.Unlock()
+// grepLineMatch implements the same matching logic as vfs.grepLineMatches.
+func grepLineMatch(line, pattern string, re *regexp.Regexp, caseInsensitive, wholeWord, wholeLine bool) bool {
+	switch {
+	case wholeLine:
+		return wholeLineMatch(line, pattern, re, caseInsensitive)
+	case wholeWord:
+		return wholeWordMatch(line, pattern, re, caseInsensitive)
+	default:
+		return grepBasicMatch(line, pattern, re, caseInsensitive)
+	}
+}
 
-	query, err := LoadContentUnderSQL(a.cfg)
-	if err != nil {
-		return err
+func grepBasicMatch(line, pattern string, re *regexp.Regexp, caseInsensitive bool) bool {
+	if re != nil {
+		return re.MatchString(line)
 	}
-	prefix := rootPath
-	if !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
+	if caseInsensitive {
+		return strings.Contains(strings.ToLower(line), strings.ToLower(pattern))
 	}
-	if rootPath == "/" {
-		prefix = "/"
-	}
-	rows, err := a.pool.Query(ctx, query, prefix+"%")
-	if err != nil {
-		return fmt.Errorf("load content under %s: %w", rootPath, err)
-	}
-	defer rows.Close()
+	return strings.Contains(line, pattern)
+}
 
-	loaded := make(map[string]string)
-	for rows.Next() {
-		var path, content string
-		if err := rows.Scan(&path, &content); err != nil {
-			return fmt.Errorf("scan content: %w", err)
+func wholeLineMatch(line, pattern string, re *regexp.Regexp, caseInsensitive bool) bool {
+	if re != nil {
+		return re.MatchString(line)
+	}
+	if caseInsensitive {
+		return strings.EqualFold(line, pattern)
+	}
+	return line == pattern
+}
+
+func wholeWordMatch(line, pattern string, re *regexp.Regexp, caseInsensitive bool) bool {
+	if re != nil {
+		return re.MatchString(line)
+	}
+	if caseInsensitive {
+		return hasWholeWordSubstring(strings.ToLower(line), strings.ToLower(pattern))
+	}
+	return hasWholeWordSubstring(line, pattern)
+}
+
+// hasWholeWordSubstring checks if pattern exists in line with word boundaries.
+// Ported from vfs.hasWholeWordSubstring to keep semantics identical.
+func hasWholeWordSubstring(line, pattern string) bool {
+	idx := strings.Index(line, pattern)
+	for idx != -1 {
+		if isWordBoundary(line, idx) && isWordBoundary(line, idx+len(pattern)) {
+			return true
 		}
-		loaded[path] = content
+		next := strings.Index(line[idx+1:], pattern)
+		if next == -1 {
+			return false
+		}
+		idx = idx + 1 + next
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
+	return false
+}
 
-	a.mu.Lock()
-	for path, content := range loaded {
-		tree.SetContent(path, content)
+func isWordBoundary(s string, pos int) bool {
+	if pos <= 0 || pos >= len(s) {
+		return true
 	}
-	a.mu.Unlock()
-	return nil
+	return !isWordChar(s[pos-1]) || !isWordChar(s[pos])
+}
+
+func isWordChar(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_'
+}
+
+// globMatch matches a file path against include/exclude glob patterns.
+// Uses path.Base to extract the filename (same as VFS filterByGlob).
+// Returns false if include doesn't match or exclude matches.
+func globMatch(filePath, include, exclude string) bool {
+	name := path.Base(filePath)
+	if include != "" {
+		if ok, _ := path.Match(include, name); !ok {
+			return false
+		}
+	}
+	if exclude != "" {
+		if ok, _ := path.Match(exclude, name); ok {
+			return false
+		}
+	}
+	return true
+}
+
+// pathHasHidden checks if a file path has a hidden component (starting with .).
+func pathHasHidden(filePath, root string) bool {
+	rel := strings.TrimPrefix(filePath, root)
+	parts := strings.Split(rel, "/")
+	for _, p := range parts {
+		if strings.HasPrefix(p, ".") && p != "." && p != ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func copyLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	cp := make([]string, len(lines))
+	copy(cp, lines)
+	return cp
 }
