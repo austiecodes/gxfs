@@ -747,12 +747,12 @@ type remoteSyncOptions struct {
 	ForceRemote bool
 }
 
-type remoteSyncAction string
+type remoteSyncAction int
 
 const (
-	remoteSyncAccept      remoteSyncAction = "accept"
-	remoteSyncMaterialize remoteSyncAction = "materialize"
-	remoteSyncPushLocal   remoteSyncAction = "push-local"
+	remoteSyncAccept remoteSyncAction = iota
+	remoteSyncMaterialize
+	remoteSyncPushLocal
 )
 
 type remoteSyncPlan struct {
@@ -864,6 +864,8 @@ func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root,
 	entries := make([]syncmanifest.Entry, 0, len(plan.Changes))
 	for _, change := range plan.Changes {
 		switch change.Action {
+		case remoteSyncAccept:
+			entries = append(entries, change.Entry)
 		case remoteSyncPushLocal:
 			entry, err := pushLocalConflict(ctx, adapter, repo, *change.Local, change.Remote, root)
 			if err != nil {
@@ -878,7 +880,7 @@ func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root,
 			entries = append(entries, change.Entry)
 			result.Materialized++
 		default:
-			entries = append(entries, change.Entry)
+			return remoteSyncResult{}, fmt.Errorf("unknown sync action: %d", change.Action)
 		}
 	}
 
@@ -982,20 +984,20 @@ func loadManifest(path string) (syncmanifest.Manifest, error) {
 	return manifest, nil
 }
 
-func refreshManifest(ctx context.Context, adapter store.Adapter, repo, root, manifestPath string, materialize bool) (syncmanifest.Manifest, int, int, error) {
+func refreshManifest(ctx context.Context, adapter store.Adapter, repo, root, manifestPath string, materialize bool) (remoteSyncResult, error) {
 	manifest, err := loadManifest(manifestPath)
 	if err != nil {
-		return syncmanifest.Manifest{}, 0, 0, err
+		return remoteSyncResult{}, err
 	}
 	plan, err := buildRemoteSyncPlan(ctx, adapter, repo, root, manifest, remoteSyncOptions{Materialize: materialize})
 	if err != nil {
-		return syncmanifest.Manifest{}, 0, 0, err
+		return remoteSyncResult{}, err
 	}
 	result, err := applyRemoteSyncPlan(ctx, adapter, repo, root, manifestPath, manifest, plan)
 	if err != nil {
-		return syncmanifest.Manifest{}, 0, 0, err
+		return remoteSyncResult{}, err
 	}
-	return result.Manifest, result.RemoteFiles, result.Materialized, nil
+	return result, nil
 }
 
 func newRefreshCommand(adapter store.Adapter, repo string) *cobra.Command {
@@ -1007,11 +1009,11 @@ func newRefreshCommand(adapter store.Adapter, repo string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := args[0]
 			manifestPath = defaultManifestPath(manifestPath)
-			_, refreshed, _, err := refreshManifest(cmd.Context(), adapter, repo, root, manifestPath, false)
+			result, err := refreshManifest(cmd.Context(), adapter, repo, root, manifestPath, false)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "refreshed %d file%s under %s\n", refreshed, plural(refreshed), root)
+			fmt.Fprintf(cmd.OutOrStdout(), "refreshed %d file%s under %s\n", result.RemoteFiles, plural(result.RemoteFiles), root)
 			fmt.Fprintf(cmd.OutOrStdout(), "updated %s\n", manifestPath)
 			return nil
 		},
@@ -1029,12 +1031,12 @@ func newMaterializeCommand(adapter store.Adapter, repo string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := args[0]
 			manifestPath = defaultManifestPath(manifestPath)
-			_, refreshed, materialized, err := refreshManifest(cmd.Context(), adapter, repo, root, manifestPath, true)
+			result, err := refreshManifest(cmd.Context(), adapter, repo, root, manifestPath, true)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "refreshed %d file%s under %s\n", refreshed, plural(refreshed), root)
-			fmt.Fprintf(cmd.OutOrStdout(), "materialized %d file%s under %s\n", materialized, plural(materialized), root)
+			fmt.Fprintf(cmd.OutOrStdout(), "refreshed %d file%s under %s\n", result.RemoteFiles, plural(result.RemoteFiles), root)
+			fmt.Fprintf(cmd.OutOrStdout(), "materialized %d file%s under %s\n", result.Materialized, plural(result.Materialized), root)
 			fmt.Fprintf(cmd.OutOrStdout(), "updated %s\n", manifestPath)
 			return nil
 		},
@@ -1102,14 +1104,14 @@ func removeMaterializedFile(localPath, root string) error {
 func removeEmptyParents(localPath, root string) error {
 	dir := filepath.Clean(filepath.Dir(localPath))
 	stop := filepath.Clean(root)
-	if stop == "." || stop == "" {
+	if stop == "." {
 		return nil
-	}
-	if filepath.Clean(localPath) == stop {
-		stop = filepath.Clean(filepath.Dir(stop))
 	}
 
 	for dir != "." && dir != string(filepath.Separator) {
+		if dir == stop {
+			return nil
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -1123,14 +1125,7 @@ func removeEmptyParents(localPath, root string) error {
 		if err := os.Remove(dir); err != nil {
 			return fmt.Errorf("remove dir %s: %w", dir, err)
 		}
-		if dir == stop {
-			return nil
-		}
-		parent := filepath.Clean(filepath.Dir(dir))
-		if parent == dir {
-			return nil
-		}
-		dir = parent
+		dir = filepath.Dir(dir)
 	}
 	return nil
 }
