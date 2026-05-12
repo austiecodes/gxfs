@@ -260,6 +260,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		// Request root "docs/materialize" is preserved (only empty parents above root are cleaned)
 		if _, err := os.Stat(filepath.Join(projectDir, "docs", "materialize")); err != nil {
 			t.Fatalf("request root dir stat error = %v, want preserved", err)
+			}
 		manifest, err := os.ReadFile(filepath.Join(projectDir, ".gxfs", "manifest.toml"))
 		if err != nil {
 			t.Fatalf("read manifest: %v", err)
