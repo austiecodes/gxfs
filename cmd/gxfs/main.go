@@ -427,9 +427,7 @@ func newFindCommand(adapter store.Adapter, repo string) *cobra.Command {
 			for _, node := range resp.Nodes {
 				fmt.Fprintln(cmd.OutOrStdout(), node.Path)
 			}
-			if resp.Total > len(resp.Nodes) {
-				fmt.Fprintf(cmd.OutOrStdout(), "\nshowing %d-%d of %d\n", findOffset+1, findOffset+len(resp.Nodes), resp.Total)
-			}
+			printPaginationSummary(cmd.OutOrStdout(), findOffset, len(resp.Nodes), resp.Total)
 			return nil
 		},
 	}
