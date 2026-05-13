@@ -111,8 +111,8 @@ func (c *Client) Cat(ctx context.Context, req store.CatRequest) (*store.CatRespo
 	}
 
 	// doWithAllowed returns nil for allowed codes (304) without decoding.
-	// Check the response status to distinguish 304 from normal 200.
-	if catResp.Content == "" && req.IfNoneMatch != "" {
+	// Path is always populated on 200, zero-valued on undecoded 304.
+	if catResp.Path == "" && req.IfNoneMatch != "" {
 		return &store.CatResponse{Path: req.Path, Hash: req.IfNoneMatch}, store.ErrNotModified
 	}
 	return &catResp, nil
