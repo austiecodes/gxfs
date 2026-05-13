@@ -438,6 +438,11 @@ func (d *DocAdapter) Tree(ctx context.Context, req store.TreeRequest) (*store.Tr
 func (d *DocAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutResponse, error) {
 	repo := d.repo(req.Repo)
 	req.Path = cleanDocPath(req.Path)
+
+	if req.Path == "/" {
+		return nil, fmt.Errorf("doc put: %w", store.ErrIsDir)
+	}
+
 	size := int64(len(req.Content))
 	hash := store.HashContent(req.Content)
 	title := path.Base(req.Path)
@@ -516,6 +521,10 @@ func (d *DocAdapter) Delete(ctx context.Context, req store.DeleteRequest) (*stor
 	repo := d.repo(req.Repo)
 	req.Path = cleanDocPath(req.Path)
 
+	if req.Path == "/" {
+		return nil, store.ErrCannotDeleteRoot
+	}
+
 	tree, err := d.buildTree(ctx, repo)
 	if err != nil {
 		return nil, err
@@ -572,6 +581,13 @@ func (d *DocAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.Ed
 	repo := d.repo(req.Repo)
 	req.Path = cleanDocPath(req.Path)
 
+	if req.Path == "/" {
+		return nil, fmt.Errorf("doc edit: %w", store.ErrIsDir)
+	}
+	if req.Old == "" {
+		return nil, store.ErrEmptyOld
+	}
+
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("doc edit begin: %w", err)
@@ -593,18 +609,25 @@ func (d *DocAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.Ed
 		return nil, fmt.Errorf("doc edit select: %w", err)
 	}
 
-	// Perform string replacement.
-	newContent := content
+	// Perform string replacement (matching vfs.Tree.Edit semantics).
 	var replaced int
-	if !strings.Contains(content, req.Old) {
-		// No match — return content unchanged.
-		replaced = 0
-		newContent = content
-	} else if req.All {
+	if req.All {
 		replaced = strings.Count(content, req.Old)
+	} else {
+		replaced = strings.Count(content, req.Old)
+		if replaced == 0 {
+			return nil, store.ErrOldNotFound
+		}
+		replaced = 1
+	}
+	if replaced == 0 {
+		return nil, store.ErrOldNotFound
+	}
+
+	var newContent string
+	if req.All {
 		newContent = strings.ReplaceAll(content, req.Old, req.New)
 	} else {
-		replaced = 1
 		newContent = strings.Replace(content, req.Old, req.New, 1)
 	}
 

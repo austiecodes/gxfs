@@ -61,11 +61,6 @@ func TestDocAdapterIntegration(t *testing.T) {
 
 	docAdapter := postgres.NewDocAdapter(pool, cfg)
 
-	// --- Write methods must return ErrReadOnlyMount ---
-	t.Run("WriteMethods", func(t *testing.T) {
-		testWriteMethodsReturnReadOnly(t, ctx, docAdapter)
-	})
-
 	// --- Comparison tests: old vs new ---
 	t.Run("Cat", func(t *testing.T) {
 		compareCat(t, ctx, oldAdapter, docAdapter)
@@ -107,26 +102,6 @@ func TestDocAdapterIntegration(t *testing.T) {
 	t.Run("RelativePath", func(t *testing.T) {
 		compareRelativePath(t, ctx, oldAdapter, docAdapter)
 	})
-}
-
-// testWriteMethodsReturnReadOnly verifies Put, Delete, Edit return ErrReadOnlyMount.
-func testWriteMethodsReturnReadOnly(t *testing.T, ctx context.Context, da store.Adapter) {
-	t.Helper()
-
-	_, err := da.Put(ctx, store.PutRequest{Path: "/test.txt", Content: "hello"})
-	if err != store.ErrReadOnlyMount {
-		t.Fatalf("Put error = %v, want ErrReadOnlyMount", err)
-	}
-
-	_, err = da.Delete(ctx, store.DeleteRequest{Path: "/test.txt"})
-	if err != store.ErrReadOnlyMount {
-		t.Fatalf("Delete error = %v, want ErrReadOnlyMount", err)
-	}
-
-	_, err = da.Edit(ctx, store.EditRequest{Path: "/README.md", Old: "Hello", New: "Hi"})
-	if err != store.ErrReadOnlyMount {
-		t.Fatalf("Edit error = %v, want ErrReadOnlyMount", err)
-	}
 }
 
 // --- Comparison helpers ---
@@ -1048,7 +1023,7 @@ func TestDocAdapterWritePath(t *testing.T) {
 			t.Fatalf("Put newdir/file2: %v", err)
 		}
 
-		resp, err := da.Tree(ctx, store.TreeRequest{Path: "/newdir"})
+		resp, err := da.Tree(ctx, store.TreeRequest{Path: "/newdir", Depth: 1})
 		if err != nil {
 			t.Fatalf("Tree /newdir: %v", err)
 		}
