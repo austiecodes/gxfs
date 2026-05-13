@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +147,63 @@ alter table "public"."vfs_content" add column if not exists content_search tsvec
 
 create index if not exists idx_content_search on "public"."vfs_content" using gin (content_search);`,
 		`alter table "public"."vfs_content" add column if not exists content_hash text;`,
+		`-- Phase 1A: Document-centric schema (parallel to existing path-centric tables)
+-- These tables are created empty and populated by backfill.
+
+-- Core document table: one row per logical file (not per content blob).
+-- legacy_path tracks the original vfs_nodes path for idempotent backfill.
+create table if not exists "public".gxfs_docs (
+    id uuid primary key default gen_random_uuid(),
+    legacy_path text unique not null,
+    title text not null default '',
+    content text not null default '',
+    content_hash text not null,
+    content_search tsvector generated always as (to_tsvector('english', coalesce(content, ''))) stored,
+    revision bigint not null default 1,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+-- Full-text search GIN index on content_search
+create index if not exists idx_docs_content_search on "public".gxfs_docs using gin (content_search);
+
+-- Index on content_hash for BatchHashes lookups
+create index if not exists idx_docs_content_hash on "public".gxfs_docs (content_hash);
+
+-- Repo → Doc mapping: replaces vfs_nodes + vfs_repo_nodes for file paths.
+-- Directories are implicit from path prefix (no dir rows needed).
+create table if not exists "public".gxfs_repo_paths (
+    repo text not null,
+    path text not null,
+    doc_id uuid not null references "public".gxfs_docs(id),
+    size bigint not null default 0,
+    mtime timestamptz not null default now(),
+    primary key (repo, path)
+);
+
+-- Index for prefix queries (LS/Find/BatchHashes)
+create index if not exists idx_repo_paths_prefix on "public".gxfs_repo_paths (repo, path text_pattern_ops);
+
+-- Index for finding all paths pointing to a doc (for orphan detection)
+create index if not exists idx_repo_paths_doc_id on "public".gxfs_repo_paths (doc_id);
+
+-- Collections: empty tables, no API in Phase 1A
+create table if not exists "public".gxfs_collections (
+    id uuid primary key default gen_random_uuid(),
+    name text not null unique,
+    description text not null default '',
+    visibility text not null default 'private',
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists "public".gxfs_collection_docs (
+    collection_id uuid not null references "public".gxfs_collections(id),
+    doc_id uuid not null references "public".gxfs_docs(id),
+    path text not null,
+    primary key (collection_id, path),
+    unique (collection_id, doc_id)
+);`,
 	}
 	if len(statements) != len(want) {
 		t.Fatalf("SchemaSQL() len = %d, want %d: %v", len(statements), len(want), statements)
@@ -191,5 +249,85 @@ func TestBackfillHashSQL(t *testing.T) {
 	want := `update "public"."vfs_content" set content_hash = $2 where "path" = $1 and content_hash is null`
 	if sql != want {
 		t.Fatalf("BackfillHashSQL() = %q, want %q", sql, want)
+	}
+}
+
+func TestBackfillSourceSQLJoinsAllTables(t *testing.T) {
+	sql, err := backfillSourceSQL(Config{
+		Schema:         "myschema",
+		NodesTable:     "vfs_nodes",
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
+		Files: FileTableConfig{
+			PathColumn:  "path",
+			KindColumn:  "kind",
+			SizeColumn:  "size",
+			MTimeColumn: "updated_at",
+		},
+	})
+	if err != nil {
+		t.Fatalf("backfillSourceSQL() error = %v", err)
+	}
+
+	want := `select r.repo, n."path", c.content, c.content_hash, n."size", n."updated_at" ` +
+		`from "myschema"."vfs_nodes" n ` +
+		`join "myschema"."vfs_content" c on n."path" = c."path" ` +
+		`join "myschema"."vfs_repo_nodes" r on n."path" = r."path" ` +
+		`where n."kind" = 'file' ` +
+		`order by n."path"`
+	if sql != want {
+		t.Fatalf("backfillSourceSQL() =\n%s\nwant:\n%s", sql, want)
+	}
+}
+
+func TestBackfillSourceSQLWithoutSizeOrMtime(t *testing.T) {
+	sql, err := backfillSourceSQL(Config{
+		Schema:         "public",
+		NodesTable:     "vfs_nodes",
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
+		Files: FileTableConfig{
+			PathColumn: "path",
+			KindColumn: "kind",
+		},
+	})
+	if err != nil {
+		t.Fatalf("backfillSourceSQL() error = %v", err)
+	}
+
+	if !strings.Contains(sql, ", 0,") {
+		t.Fatalf("expected '0' fallback for missing size column, got: %s", sql)
+	}
+	if !strings.Contains(sql, "now()") {
+		t.Fatalf("expected 'now()' fallback for missing mtime column, got: %s", sql)
+	}
+}
+
+func TestBackfillDocInsertSQL(t *testing.T) {
+	sql, err := backfillDocInsertSQL(Config{Schema: "myschema"})
+	if err != nil {
+		t.Fatalf("backfillDocInsertSQL() error = %v", err)
+	}
+
+	want := `insert into "myschema"."gxfs_docs"(legacy_path, title, content, content_hash) ` +
+		`values($1, $2, $3, $4) ` +
+		`on conflict(legacy_path) do update set content_hash = excluded.content_hash ` +
+		`returning id`
+	if sql != want {
+		t.Fatalf("backfillDocInsertSQL() =\n%s\nwant:\n%s", sql, want)
+	}
+}
+
+func TestBackfillPathInsertSQL(t *testing.T) {
+	sql, err := backfillPathInsertSQL(Config{Schema: "myschema"})
+	if err != nil {
+		t.Fatalf("backfillPathInsertSQL() error = %v", err)
+	}
+
+	want := `insert into "myschema"."gxfs_repo_paths"(repo, path, doc_id, size, mtime) ` +
+		`values($1, $2, $3, $4, $5) ` +
+		`on conflict(repo, path) do update set doc_id = excluded.doc_id, size = excluded.size, mtime = excluded.mtime`
+	if sql != want {
+		t.Fatalf("backfillPathInsertSQL() =\n%s\nwant:\n%s", sql, want)
 	}
 }
