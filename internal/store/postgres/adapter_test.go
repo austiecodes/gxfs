@@ -380,3 +380,164 @@ func TestBackfillPathInsertSQL(t *testing.T) {
 		t.Fatalf("backfillPathInsertSQL() =\n%s\nwant:\n%s", sql, want)
 	}
 }
+
+// --- Doc query SQL builder tests ---
+
+func testDocConfig() Config {
+	return Config{Schema: "docschema"}
+}
+
+func TestDocListPathsSQL(t *testing.T) {
+	sql, err := DocListPathsSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocListPathsSQL() error = %v", err)
+	}
+
+	want := `select path, size, mtime from "docschema"."gxfs_repo_paths" where repo = $1 and path like $2 order by path`
+	if sql != want {
+		t.Fatalf("DocListPathsSQL() = %q, want %q", sql, want)
+	}
+}
+
+func TestDocListPathsSQLNoSchema(t *testing.T) {
+	sql, err := DocListPathsSQL(Config{})
+	if err != nil {
+		t.Fatalf("DocListPathsSQL() error = %v", err)
+	}
+
+	want := `select path, size, mtime from "gxfs_repo_paths" where repo = $1 and path like $2 order by path`
+	if sql != want {
+		t.Fatalf("DocListPathsSQL() = %q, want %q", sql, want)
+	}
+}
+
+func TestDocCatSQL(t *testing.T) {
+	sql, err := DocCatSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocCatSQL() error = %v", err)
+	}
+
+	want := `select d.content, d.content_hash from "docschema"."gxfs_repo_paths" rp join "docschema"."gxfs_docs" d on rp.doc_id = d.id where rp.repo = $1 and rp.path = $2`
+	if sql != want {
+		t.Fatalf("DocCatSQL() = %q, want %q", sql, want)
+	}
+}
+
+func TestDocStatSQL(t *testing.T) {
+	sql, err := DocStatSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocStatSQL() error = %v", err)
+	}
+
+	want := `select rp.path, rp.size, rp.mtime, d.content_hash from "docschema"."gxfs_repo_paths" rp join "docschema"."gxfs_docs" d on rp.doc_id = d.id where rp.repo = $1 and rp.path = $2`
+	if sql != want {
+		t.Fatalf("DocStatSQL() = %q, want %q", sql, want)
+	}
+}
+
+func TestDocStatDirSQL(t *testing.T) {
+	sql, err := DocStatDirSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocStatDirSQL() error = %v", err)
+	}
+
+	want := `select count(*) from "docschema"."gxfs_repo_paths" where repo = $1 and path like $2`
+	if sql != want {
+		t.Fatalf("DocStatDirSQL() = %q, want %q", sql, want)
+	}
+}
+
+func TestDocSearchCountSQL(t *testing.T) {
+	sql, err := DocSearchCountSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocSearchCountSQL() error = %v", err)
+	}
+
+	// Must use plainto_tsquery and tsvector match.
+	if !strings.Contains(sql, "plainto_tsquery") {
+		t.Fatalf("DocSearchCountSQL() missing plainto_tsquery: %q", sql)
+	}
+	if !strings.Contains(sql, `@@ query`) {
+		t.Fatalf("DocSearchCountSQL() missing @@ query match: %q", sql)
+	}
+	// Must include path filter.
+	if !strings.Contains(sql, `$3 = ''`) {
+		t.Fatalf("DocSearchCountSQL() missing path filter: %q", sql)
+	}
+	// Tables must be schema-qualified.
+	if !strings.Contains(sql, `"docschema"."gxfs_repo_paths"`) {
+		t.Fatalf("DocSearchCountSQL() missing schema-qualified paths table: %q", sql)
+	}
+	if !strings.Contains(sql, `"docschema"."gxfs_docs"`) {
+		t.Fatalf("DocSearchCountSQL() missing schema-qualified docs table: %q", sql)
+	}
+}
+
+func TestDocSearchDataSQL(t *testing.T) {
+	sql, err := DocSearchDataSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocSearchDataSQL() error = %v", err)
+	}
+
+	// Must include rank, snippet, limit/offset.
+	if !strings.Contains(sql, "ts_rank_cd") {
+		t.Fatalf("DocSearchDataSQL() missing ts_rank_cd: %q", sql)
+	}
+	if !strings.Contains(sql, "ts_headline") {
+		t.Fatalf("DocSearchDataSQL() missing ts_headline: %q", sql)
+	}
+	if !strings.Contains(sql, "limit $4 offset $5") {
+		t.Fatalf("DocSearchDataSQL() missing limit/offset: %q", sql)
+	}
+}
+
+func TestDocBatchHashesSQL(t *testing.T) {
+	sql, err := DocBatchHashesSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocBatchHashesSQL() error = %v", err)
+	}
+
+	want := `select rp.path, d.content_hash from "docschema"."gxfs_repo_paths" rp join "docschema"."gxfs_docs" d on rp.doc_id = d.id ` +
+		`where rp.repo = $1 and d.content_hash is not null ` +
+		`and ($2 = '' or rp.path = $2 or rp.path like $2 || '/%%') ` +
+		`order by rp.path`
+	if sql != want {
+		t.Fatalf("DocBatchHashesSQL() =\n%s\nwant:\n%s", sql, want)
+	}
+}
+
+func TestDocStreamGrepSQL(t *testing.T) {
+	sql, err := DocStreamGrepSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocStreamGrepSQL() error = %v", err)
+	}
+
+	want := `select rp.path, d.content from "docschema"."gxfs_repo_paths" rp join "docschema"."gxfs_docs" d on rp.doc_id = d.id ` +
+		`where rp.repo = $1 and rp.path like $2 ` +
+		`order by rp.path`
+	if sql != want {
+		t.Fatalf("DocStreamGrepSQL() =\n%s\nwant:\n%s", sql, want)
+	}
+}
+
+func TestDocQuerySQLRejectsUnsafeSchema(t *testing.T) {
+	bad := Config{Schema: "drop table users; --"}
+	for _, fn := range []struct {
+		name string
+		fn   func(Config) (string, error)
+	}{
+		{"DocListPathsSQL", DocListPathsSQL},
+		{"DocCatSQL", DocCatSQL},
+		{"DocStatSQL", DocStatSQL},
+		{"DocStatDirSQL", DocStatDirSQL},
+		{"DocSearchCountSQL", DocSearchCountSQL},
+		{"DocSearchDataSQL", DocSearchDataSQL},
+		{"DocBatchHashesSQL", DocBatchHashesSQL},
+		{"DocStreamGrepSQL", DocStreamGrepSQL},
+	} {
+		_, err := fn.fn(bad)
+		if err == nil {
+			t.Fatalf("%s() error = nil for unsafe schema, want rejection", fn.name)
+		}
+	}
+}
