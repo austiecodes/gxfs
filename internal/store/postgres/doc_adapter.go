@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"gxfs/internal/store"
 	"gxfs/internal/vfs"
 )
 
-// DocAdapter implements store.Adapter as a read-only query layer over the
-// document-centric tables (gxfs_docs, gxfs_repo_paths). Write methods
-// (Put, Delete, Edit) return ErrReadOnlyMount.
+// DocAdapter implements store.Adapter over the document-centric tables
+// (gxfs_docs, gxfs_repo_paths).
 //
 // Read methods fall into two categories:
 //  1. Structure queries (LS, Find, Stat, Tree): build a vfs.Tree from
@@ -26,6 +26,10 @@ import (
 //     This guarantees exact behavioral compatibility with the old adapter.
 //  2. Content queries (Cat, Search, BatchHashes, Grep): query gxfs_docs
 //     directly for content, hashes, and full-text search.
+//
+// Write methods (Put, Delete, Edit) operate on gxfs_docs + gxfs_repo_paths
+// within transactions. Delete removes repo_path only (doc preserved for
+// potential cross-repo references). Put/Edit increment revision.
 type DocAdapter struct {
 	pool *pgxpool.Pool
 	cfg  Config
@@ -429,18 +433,209 @@ func (d *DocAdapter) Tree(ctx context.Context, req store.TreeRequest) (*store.Tr
 	}, nil
 }
 
-// --- Write methods (read-only) ---
+// --- Write methods ---
 
 func (d *DocAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutResponse, error) {
-	return nil, store.ErrReadOnlyMount
+	repo := d.repo(req.Repo)
+	req.Path = cleanDocPath(req.Path)
+	size := int64(len(req.Content))
+	hash := store.HashContent(req.Content)
+	title := path.Base(req.Path)
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("doc put begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Check if path already exists.
+	lookupSQL, err := DocLookupPathSQL(d.cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var existingDocID pgtype.UUID
+	err = tx.QueryRow(ctx, lookupSQL, repo, req.Path).Scan(&existingDocID)
+
+	if err == nil {
+		// Path exists — update the doc in-place to avoid orphans.
+		updateSQL, err := DocUpdateByPathSQL(d.cfg)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, updateSQL, repo, req.Path, req.Content, hash, title); err != nil {
+			return nil, fmt.Errorf("doc put update: %w", err)
+		}
+		// Update repo_path size/mtime.
+		upsertPathSQL, err := DocUpsertPathSQL(d.cfg)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, upsertPathSQL, repo, req.Path, existingDocID, size); err != nil {
+			return nil, fmt.Errorf("doc put path update: %w", err)
+		}
+	} else if errors.Is(err, pgx.ErrNoRows) {
+		// New file — insert doc + repo_path.
+		insertSQL, err := DocInsertSQL(d.cfg)
+		if err != nil {
+			return nil, err
+		}
+		var docID pgtype.UUID
+		if err := tx.QueryRow(ctx, insertSQL, title, req.Content, hash).Scan(&docID); err != nil {
+			return nil, fmt.Errorf("doc put insert: %w", err)
+		}
+
+		upsertPathSQL, err := DocUpsertPathSQL(d.cfg)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, upsertPathSQL, repo, req.Path, docID, size); err != nil {
+			return nil, fmt.Errorf("doc put path: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("doc put lookup: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("doc put commit: %w", err)
+	}
+
+	return &store.PutResponse{
+		Node: store.Node{
+			Path:    req.Path,
+			Name:    path.Base(req.Path),
+			Kind:    "file",
+			Size:    size,
+			ModTime: time.Now().UTC().Format(time.RFC3339),
+			Hash:    hash,
+		},
+	}, nil
 }
 
 func (d *DocAdapter) Delete(ctx context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
-	return nil, store.ErrReadOnlyMount
+	repo := d.repo(req.Repo)
+	req.Path = cleanDocPath(req.Path)
+
+	tree, err := d.buildTree(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if path exists (file or implicit dir).
+	stat, err := tree.Stat(req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("doc delete: %w", err)
+	}
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("doc delete begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if stat.Kind == "dir" {
+		// Recursive delete: delete path + all descendants.
+		deleteSQL, err := DocDeletePathRecursiveSQL(d.cfg)
+		if err != nil {
+			return nil, err
+		}
+		tag, err := tx.Exec(ctx, deleteSQL, repo, req.Path)
+		if err != nil {
+			return nil, fmt.Errorf("doc delete dir: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return nil, fmt.Errorf("doc delete %s: %w", req.Path, store.ErrNotFound)
+		}
+	} else {
+		// Single file delete.
+		deleteSQL, err := DocDeletePathSQL(d.cfg)
+		if err != nil {
+			return nil, err
+		}
+		tag, err := tx.Exec(ctx, deleteSQL, repo, req.Path)
+		if err != nil {
+			return nil, fmt.Errorf("doc delete file: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return nil, fmt.Errorf("doc delete %s: %w", req.Path, store.ErrNotFound)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("doc delete commit: %w", err)
+	}
+
+	return &store.DeleteResponse{}, nil
 }
 
 func (d *DocAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditResponse, error) {
-	return nil, store.ErrReadOnlyMount
+	repo := d.repo(req.Repo)
+	req.Path = cleanDocPath(req.Path)
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("doc edit begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Lock the doc row for read-modify-write.
+	selectSQL, err := DocSelectForUpdateSQL(d.cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var docID pgtype.UUID
+	var content string
+	if err := tx.QueryRow(ctx, selectSQL, repo, req.Path).Scan(&docID, &content); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("doc edit %s: %w", req.Path, store.ErrNotFound)
+		}
+		return nil, fmt.Errorf("doc edit select: %w", err)
+	}
+
+	// Perform string replacement.
+	newContent := content
+	var replaced int
+	if !strings.Contains(content, req.Old) {
+		// No match — return content unchanged.
+		replaced = 0
+		newContent = content
+	} else if req.All {
+		replaced = strings.Count(content, req.Old)
+		newContent = strings.ReplaceAll(content, req.Old, req.New)
+	} else {
+		replaced = 1
+		newContent = strings.Replace(content, req.Old, req.New, 1)
+	}
+
+	// Update doc content.
+	hash := store.HashContent(newContent)
+	updateSQL, err := DocUpdateByIDSQL(d.cfg)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, updateSQL, docID, newContent, hash); err != nil {
+		return nil, fmt.Errorf("doc edit update: %w", err)
+	}
+
+	// Update repo_path size/mtime.
+	upsertPathSQL, err := DocUpsertPathSQL(d.cfg)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, upsertPathSQL, repo, req.Path, docID, int64(len(newContent))); err != nil {
+		return nil, fmt.Errorf("doc edit path: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("doc edit commit: %w", err)
+	}
+
+	return &store.EditResponse{
+		Path:     req.Path,
+		Replaced: replaced,
+		Content:  newContent,
+	}, nil
 }
 
 // --- Helpers ---

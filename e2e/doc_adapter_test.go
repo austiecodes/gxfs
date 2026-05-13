@@ -717,3 +717,343 @@ func TestDocAdapterMirrorRepo(t *testing.T) {
 		t.Fatalf("mirror BatchHashes: old=%d new=%d (new should have >= old)", len(oldHashes.Hashes), len(newHashes.Hashes))
 	}
 }
+
+// TestDocAdapterWritePath verifies Put/Delete/Edit on DocAdapter work correctly.
+func TestDocAdapterWritePath(t *testing.T) {
+	requireDocker(t)
+
+	pgPort := freePort(t)
+	containerName := fmt.Sprintf("gxfs-doc-write-test-%d", pgPort)
+	startPostgres(t, containerName, pgPort)
+
+	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	ctx := context.Background()
+
+	cfg := postgres.Config{
+		DSN:            dsn,
+		Schema:         "public",
+		NodesTable:     "vfs_nodes",
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
+		Files: postgres.FileTableConfig{
+			PathColumn:  "path",
+			KindColumn:  "kind",
+			SizeColumn:  "size",
+			MTimeColumn: "updated_at",
+		},
+		Repo: "test-repo",
+	}
+
+	pool := connectPool(t, ctx, dsn)
+	defer pool.Close()
+
+	applyMigrations(t, ctx, pool, cfg)
+	seedBackfillData(t, containerName)
+
+	if _, err := postgres.BackfillDocs(ctx, pool, cfg); err != nil {
+		t.Fatalf("BackfillDocs: %v", err)
+	}
+
+	da := postgres.NewDocAdapter(pool, cfg)
+
+	t.Run("PutNewFile", func(t *testing.T) {
+		resp, err := da.Put(ctx, store.PutRequest{Path: "/new.txt", Content: "hello world"})
+		if err != nil {
+			t.Fatalf("Put new: %v", err)
+		}
+		if resp.Node.Kind != "file" {
+			t.Fatalf("Put node kind = %q, want file", resp.Node.Kind)
+		}
+		if resp.Node.Hash == "" {
+			t.Fatal("Put node hash is empty")
+		}
+
+		// Verify via Cat.
+		cat, err := da.Cat(ctx, store.CatRequest{Path: "/new.txt"})
+		if err != nil {
+			t.Fatalf("Cat new file: %v", err)
+		}
+		if cat.Content != "hello world" {
+			t.Fatalf("Cat content = %q, want %q", cat.Content, "hello world")
+		}
+
+		// Verify via Search.
+		sr, err := da.Search(ctx, store.SearchRequest{Query: "hello world"})
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if sr.Total < 1 {
+			t.Fatal("Search 'hello world' found nothing after Put")
+		}
+
+		// Verify via BatchHashes.
+		hr, err := da.BatchHashes(ctx, store.HashRequest{Path: "/new.txt"})
+		if err != nil {
+			t.Fatalf("BatchHashes: %v", err)
+		}
+		if len(hr.Hashes) != 1 {
+			t.Fatalf("BatchHashes for /new.txt = %d, want 1", len(hr.Hashes))
+		}
+
+		// Verify via Stat.
+		st, err := da.Stat(ctx, store.StatRequest{Path: "/new.txt"})
+		if err != nil {
+			t.Fatalf("Stat new file: %v", err)
+		}
+		if st.Node.Hash != resp.Node.Hash {
+			t.Fatalf("Stat hash = %q, Put hash = %q", st.Node.Hash, resp.Node.Hash)
+		}
+	})
+
+	t.Run("PutOverwrite", func(t *testing.T) {
+		// Overwrite existing file.
+		resp, err := da.Put(ctx, store.PutRequest{Path: "/README.md", Content: "Updated content"})
+		if err != nil {
+			t.Fatalf("Put overwrite: %v", err)
+		}
+
+		cat, err := da.Cat(ctx, store.CatRequest{Path: "/README.md"})
+		if err != nil {
+			t.Fatalf("Cat after overwrite: %v", err)
+		}
+		if cat.Content != "Updated content" {
+			t.Fatalf("Cat content = %q, want %q", cat.Content, "Updated content")
+		}
+		// Hash should be updated.
+		if cat.Hash == "sha256:abc123" {
+			t.Fatal("Cat hash still has pre-set value, should be updated")
+		}
+		if cat.Hash != resp.Node.Hash {
+			t.Fatalf("Cat hash = %q, Put hash = %q", cat.Hash, resp.Node.Hash)
+		}
+	})
+
+	t.Run("Edit", func(t *testing.T) {
+		// Edit the file we just overwrote.
+		editResp, err := da.Edit(ctx, store.EditRequest{Path: "/README.md", Old: "Updated", New: "Modified"})
+		if err != nil {
+			t.Fatalf("Edit: %v", err)
+		}
+		if editResp.Replaced < 1 {
+			t.Fatalf("Edit replaced = %d, want >= 1", editResp.Replaced)
+		}
+
+		cat, err := da.Cat(ctx, store.CatRequest{Path: "/README.md"})
+		if err != nil {
+			t.Fatalf("Cat after edit: %v", err)
+		}
+		if cat.Content != "Modified content" {
+			t.Fatalf("Cat content = %q, want %q", cat.Content, "Modified content")
+		}
+
+		// Verify Search picks up the edit.
+		sr, err := da.Search(ctx, store.SearchRequest{Query: "Modified"})
+		if err != nil {
+			t.Fatalf("Search after edit: %v", err)
+		}
+		if sr.Total < 1 {
+			t.Fatal("Search 'Modified' found nothing after Edit")
+		}
+	})
+
+	t.Run("DeleteFile", func(t *testing.T) {
+		// Delete a file.
+		_, err := da.Delete(ctx, store.DeleteRequest{Path: "/new.txt"})
+		if err != nil {
+			t.Fatalf("Delete file: %v", err)
+		}
+
+		// Verify 404.
+		_, err = da.Cat(ctx, store.CatRequest{Path: "/new.txt"})
+		if err == nil {
+			t.Fatal("Cat after delete: expected error")
+		}
+	})
+
+	t.Run("DeleteNonexistent", func(t *testing.T) {
+		_, err := da.Delete(ctx, store.DeleteRequest{Path: "/nonexistent.txt"})
+		if err == nil {
+			t.Fatal("Delete nonexistent: expected error")
+		}
+	})
+
+	t.Run("DeleteDir", func(t *testing.T) {
+		// Delete a directory recursively.
+		_, err := da.Delete(ctx, store.DeleteRequest{Path: "/docs"})
+		if err != nil {
+			t.Fatalf("Delete dir: %v", err)
+		}
+
+		// Verify all files under /docs are gone.
+		for _, p := range []string{"/docs/readme.md", "/docs/api/reference.md", "/docs/api/guide.md"} {
+			_, err := da.Cat(ctx, store.CatRequest{Path: p})
+			if err == nil {
+				t.Fatalf("Cat %s after dir delete: expected error", p)
+			}
+		}
+
+		// Verify LS / no longer shows docs.
+		ls, err := da.LS(ctx, store.LSRequest{Path: "/"})
+		if err != nil {
+			t.Fatalf("LS / after dir delete: %v", err)
+		}
+		for _, n := range ls.Nodes {
+			if n.Name == "docs" {
+				t.Fatal("LS / still shows 'docs' after dir delete")
+			}
+		}
+	})
+
+	t.Run("RevisionIncrement", func(t *testing.T) {
+		// Put a new file — revision should be 1.
+		_, err := da.Put(ctx, store.PutRequest{Path: "/revision-test.txt", Content: "v1"})
+		if err != nil {
+			t.Fatalf("Put revision-test: %v", err)
+		}
+
+		// Check revision via direct query.
+		docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
+		pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+		var rev1 int
+		if err := pool.QueryRow(ctx, fmt.Sprintf(
+			"select d.revision from %s rp join %s d on rp.doc_id = d.id where rp.repo = 'test-repo' and rp.path = '/revision-test.txt'",
+			pathsTable, docsTable,
+		)).Scan(&rev1); err != nil {
+			t.Fatalf("get revision 1: %v", err)
+		}
+		if rev1 != 1 {
+			t.Fatalf("initial revision = %d, want 1", rev1)
+		}
+
+		// Edit — revision should increment.
+		_, err = da.Edit(ctx, store.EditRequest{Path: "/revision-test.txt", Old: "v1", New: "v2"})
+		if err != nil {
+			t.Fatalf("Edit revision-test: %v", err)
+		}
+		var rev2 int
+		if err := pool.QueryRow(ctx, fmt.Sprintf(
+			"select d.revision from %s rp join %s d on rp.doc_id = d.id where rp.repo = 'test-repo' and rp.path = '/revision-test.txt'",
+			pathsTable, docsTable,
+		)).Scan(&rev2); err != nil {
+			t.Fatalf("get revision 2: %v", err)
+		}
+		if rev2 != 2 {
+			t.Fatalf("after edit revision = %d, want 2", rev2)
+		}
+
+		// Overwrite Put — revision should increment again.
+		_, err = da.Put(ctx, store.PutRequest{Path: "/revision-test.txt", Content: "v3"})
+		if err != nil {
+			t.Fatalf("Put overwrite revision-test: %v", err)
+		}
+		var rev3 int
+		if err := pool.QueryRow(ctx, fmt.Sprintf(
+			"select d.revision from %s rp join %s d on rp.doc_id = d.id where rp.repo = 'test-repo' and rp.path = '/revision-test.txt'",
+			pathsTable, docsTable,
+		)).Scan(&rev3); err != nil {
+			t.Fatalf("get revision 3: %v", err)
+		}
+		if rev3 != 3 {
+			t.Fatalf("after overwrite revision = %d, want 3", rev3)
+		}
+	})
+
+	t.Run("EditNonexistent", func(t *testing.T) {
+		_, err := da.Edit(ctx, store.EditRequest{Path: "/nope.txt", Old: "a", New: "b"})
+		if err == nil {
+			t.Fatal("Edit nonexistent: expected error")
+		}
+	})
+
+	t.Run("DocPreservedAfterDelete", func(t *testing.T) {
+		// Put a file, delete it, verify doc still exists (orphan).
+		_, err := da.Put(ctx, store.PutRequest{Path: "/orphan-test.txt", Content: "will be orphaned"})
+		if err != nil {
+			t.Fatalf("Put orphan-test: %v", err)
+		}
+
+		// Get the doc_id.
+		pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+		docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
+		var docID string
+		if err := pool.QueryRow(ctx, fmt.Sprintf(
+			"select d.id::text from %s rp join %s d on rp.doc_id = d.id where rp.repo = 'test-repo' and rp.path = '/orphan-test.txt'",
+			pathsTable, docsTable,
+		)).Scan(&docID); err != nil {
+			t.Fatalf("get doc_id: %v", err)
+		}
+
+		// Delete.
+		_, err = da.Delete(ctx, store.DeleteRequest{Path: "/orphan-test.txt"})
+		if err != nil {
+			t.Fatalf("Delete orphan-test: %v", err)
+		}
+
+		// Verify repo_path is gone.
+		var count int
+		if err := pool.QueryRow(ctx, fmt.Sprintf(
+			"select count(*) from %s where repo = 'test-repo' and path = '/orphan-test.txt'",
+			pathsTable,
+		)).Scan(&count); err != nil {
+			t.Fatalf("count paths: %v", err)
+		}
+		if count != 0 {
+			t.Fatalf("repo_path still exists after delete (count=%d)", count)
+		}
+
+		// Verify doc still exists (orphan).
+		var docCount int
+		if err := pool.QueryRow(ctx, fmt.Sprintf(
+			"select count(*) from %s where id::text = '%s'",
+			docsTable, docID,
+		)).Scan(&docCount); err != nil {
+			t.Fatalf("count docs: %v", err)
+		}
+		if docCount != 1 {
+			t.Fatalf("doc was deleted (should be preserved as orphan), count=%d", docCount)
+		}
+	})
+
+	t.Run("GrepNewContent", func(t *testing.T) {
+		// Put a file, then grep for its content.
+		_, err := da.Put(ctx, store.PutRequest{Path: "/grep-target.txt", Content: "line one\nfindme here\nline three"})
+		if err != nil {
+			t.Fatalf("Put grep-target: %v", err)
+		}
+
+		resp, err := da.Grep(ctx, store.GrepRequest{Path: "/", Pattern: "findme"})
+		if err != nil {
+			t.Fatalf("Grep findme: %v", err)
+		}
+		found := false
+		for _, m := range resp.Matches {
+			if m.Path == "/grep-target.txt" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatal("Grep did not find /grep-target.txt")
+		}
+	})
+
+	t.Run("TreeAfterWrite", func(t *testing.T) {
+		// Put files in a new dir, verify Tree shows them.
+		_, err := da.Put(ctx, store.PutRequest{Path: "/newdir/file1.txt", Content: "f1"})
+		if err != nil {
+			t.Fatalf("Put newdir/file1: %v", err)
+		}
+		_, err = da.Put(ctx, store.PutRequest{Path: "/newdir/file2.txt", Content: "f2"})
+		if err != nil {
+			t.Fatalf("Put newdir/file2: %v", err)
+		}
+
+		resp, err := da.Tree(ctx, store.TreeRequest{Path: "/newdir"})
+		if err != nil {
+			t.Fatalf("Tree /newdir: %v", err)
+		}
+		if !strings.Contains(resp.Text, "file1.txt") || !strings.Contains(resp.Text, "file2.txt") {
+			t.Fatalf("Tree /newdir text missing files:\n%s", resp.Text)
+		}
+	})
+}

@@ -534,10 +534,76 @@ func TestDocQuerySQLRejectsUnsafeSchema(t *testing.T) {
 		{"DocSearchDataSQL", DocSearchDataSQL},
 		{"DocBatchHashesSQL", DocBatchHashesSQL},
 		{"DocStreamGrepSQL", DocStreamGrepSQL},
+		{"DocInsertSQL", DocInsertSQL},
+		{"DocUpdateByPathSQL", DocUpdateByPathSQL},
+		{"DocSelectForUpdateSQL", DocSelectForUpdateSQL},
+		{"DocUpdateByIDSQL", DocUpdateByIDSQL},
+		{"DocUpsertPathSQL", DocUpsertPathSQL},
+		{"DocLookupPathSQL", DocLookupPathSQL},
+		{"DocDeletePathSQL", DocDeletePathSQL},
+		{"DocDeletePathRecursiveSQL", DocDeletePathRecursiveSQL},
 	} {
 		_, err := fn.fn(bad)
 		if err == nil {
 			t.Fatalf("%s() error = nil for unsafe schema, want rejection", fn.name)
 		}
+	}
+}
+
+// --- Doc write SQL builder tests ---
+
+func TestDocInsertSQL(t *testing.T) {
+	sql, err := DocInsertSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocInsertSQL() error = %v", err)
+	}
+	if !strings.Contains(sql, "returning id") {
+		t.Fatalf("DocInsertSQL() missing returning id: %q", sql)
+	}
+	if !strings.Contains(sql, `"docschema"."gxfs_docs"`) {
+		t.Fatalf("DocInsertSQL() missing schema-qualified table: %q", sql)
+	}
+}
+
+func TestDocUpdateByPathSQL(t *testing.T) {
+	sql, err := DocUpdateByPathSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocUpdateByPathSQL() error = %v", err)
+	}
+	if !strings.Contains(sql, "revision = revision + 1") {
+		t.Fatalf("DocUpdateByPathSQL() missing revision increment: %q", sql)
+	}
+	if !strings.Contains(sql, "for update") {
+		// Not FOR UPDATE — this is a direct update via join.
+	}
+}
+
+func TestDocSelectForUpdateSQL(t *testing.T) {
+	sql, err := DocSelectForUpdateSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocSelectForUpdateSQL() error = %v", err)
+	}
+	if !strings.Contains(sql, "for update of d") {
+		t.Fatalf("DocSelectForUpdateSQL() missing FOR UPDATE: %q", sql)
+	}
+}
+
+func TestDocUpsertPathSQL(t *testing.T) {
+	sql, err := DocUpsertPathSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocUpsertPathSQL() error = %v", err)
+	}
+	if !strings.Contains(sql, "on conflict(repo, path)") {
+		t.Fatalf("DocUpsertPathSQL() missing ON CONFLICT: %q", sql)
+	}
+}
+
+func TestDocDeletePathRecursiveSQL(t *testing.T) {
+	sql, err := DocDeletePathRecursiveSQL(testDocConfig())
+	if err != nil {
+		t.Fatalf("DocDeletePathRecursiveSQL() error = %v", err)
+	}
+	if !strings.Contains(sql, "path like $2 || '/%%'") {
+		t.Fatalf("DocDeletePathRecursiveSQL() missing LIKE prefix: %q", sql)
 	}
 }

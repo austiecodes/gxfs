@@ -142,3 +142,118 @@ func DocStreamGrepSQL(cfg Config) (string, error) {
 		pathsTable, docsTable,
 	), nil
 }
+
+// --- Write SQL builders ---
+
+// DocInsertSQL inserts a new doc row with content and hash, returning the doc ID.
+// content_search is GENERATED and auto-updated.
+func DocInsertSQL(cfg Config) (string, error) {
+	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"insert into %s(title, content, content_hash) values($1, $2, $3) returning id",
+		docsTable,
+	), nil
+}
+
+// DocUpdateByPathSQL updates the doc linked to a specific repo_path.
+// Used when Put overwrites an existing file — updates in-place to avoid orphans.
+// content_search is GENERATED and auto-updated.
+func DocUpdateByPathSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"update %s d set content = $3, content_hash = $4, "+
+			"title = $5, revision = revision + 1, updated_at = now() "+
+			"from %s rp where rp.repo = $1 and rp.path = $2 and rp.doc_id = d.id",
+		docsTable, pathsTable,
+	), nil
+}
+
+// DocSelectForUpdateSQL locks the doc row for Edit's read-modify-write cycle.
+func DocSelectForUpdateSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"select d.id, d.content from %s rp join %s d on rp.doc_id = d.id "+
+			"where rp.repo = $1 and rp.path = $2 for update of d",
+		pathsTable, docsTable,
+	), nil
+}
+
+// DocUpdateByIDSQL updates a doc by its ID (used after FOR UPDATE).
+func DocUpdateByIDSQL(cfg Config) (string, error) {
+	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"update %s set content = $2, content_hash = $3, revision = revision + 1, updated_at = now() "+
+			"where id = $1",
+		docsTable,
+	), nil
+}
+
+// DocUpsertPathSQL inserts or updates a repo_path row.
+func DocUpsertPathSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"insert into %s(repo, path, doc_id, size, mtime) values($1, $2, $3, $4, now()) "+
+			"on conflict(repo, path) do update set doc_id = excluded.doc_id, "+
+			"size = excluded.size, mtime = excluded.mtime",
+		pathsTable,
+	), nil
+}
+
+// DocLookupPathSQL checks if a repo_path exists and returns the doc_id.
+func DocLookupPathSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"select doc_id from %s where repo = $1 and path = $2",
+		pathsTable,
+	), nil
+}
+
+// DocDeletePathSQL deletes a single repo_path row.
+func DocDeletePathSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"delete from %s where repo = $1 and path = $2",
+		pathsTable,
+	), nil
+}
+
+// DocDeletePathRecursiveSQL deletes all repo_path rows under a prefix.
+func DocDeletePathRecursiveSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"delete from %s where repo = $1 and (path = $2 or path like $2 || '/%%%%')",
+		pathsTable,
+	), nil
+}
