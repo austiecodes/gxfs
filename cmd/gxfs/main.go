@@ -64,6 +64,9 @@ func newLSCommand(adapter store.Adapter, repo string) *cobra.Command {
 		Short: "List VFS directory contents",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateNonNeg([]string{"limit", "offset"}, lsLimit, lsOffset); err != nil {
+				return err
+			}
 			p := argPath(args, "/")
 
 			sortField := "name"
@@ -95,6 +98,8 @@ func newLSCommand(adapter store.Adapter, repo string) *cobra.Command {
 				Reverse:   sortReverse,
 				Recursive: recursive,
 				All:       allFiles,
+				Limit:     lsLimit,
+				Offset:    lsOffset,
 			})
 			if err != nil {
 				return err
@@ -102,6 +107,7 @@ func newLSCommand(adapter store.Adapter, repo string) *cobra.Command {
 			for _, node := range resp.Nodes {
 				fmt.Fprintln(cmd.OutOrStdout(), formatLSLine(node, longFmt, classify, slashDir))
 			}
+			printPaginationSummary(cmd.OutOrStdout(), lsOffset, len(resp.Nodes), resp.Total)
 			return nil
 		},
 	}
@@ -387,6 +393,9 @@ func newFindCommand(adapter store.Adapter, repo string) *cobra.Command {
 		Short: "Find VFS files by name",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateNonNeg([]string{"limit", "offset"}, findLimit, findOffset); err != nil {
+				return err
+			}
 			if name == "" && iname == "" {
 				return fmt.Errorf("-name or -iname is required")
 			}
@@ -580,6 +589,9 @@ func newSearchCommand(adapter store.Adapter, repo string) *cobra.Command {
 		Long:  "Search documents by keyword using full-text search.\nReturns ranked results with relevance scores and matching snippets.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateNonNeg([]string{"limit", "offset"}, limit, searchOffset); err != nil {
+				return err
+			}
 			resp, err := adapter.Search(cmd.Context(), store.SearchRequest{
 				Repo:   repo,
 				Query:  args[0],
@@ -593,7 +605,7 @@ func newSearchCommand(adapter store.Adapter, repo string) *cobra.Command {
 			if jsonOutput {
 				return printSearchJSON(cmd, resp)
 			}
-			return printSearchHuman(cmd, resp)
+			return printSearchHuman(cmd, resp, searchOffset)
 		},
 	}
 	cmd.Flags().StringVar(&searchPath, "path", "", "scope search to path prefix")
@@ -603,7 +615,7 @@ func newSearchCommand(adapter store.Adapter, repo string) *cobra.Command {
 	return cmd
 }
 
-func printSearchHuman(cmd *cobra.Command, resp *store.SearchResponse) error {
+func printSearchHuman(cmd *cobra.Command, resp *store.SearchResponse, offset int) error {
 	if len(resp.Results) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "no results found")
 		return nil
@@ -621,9 +633,7 @@ func printSearchHuman(cmd *cobra.Command, resp *store.SearchResponse) error {
 		}
 		fmt.Fprintln(cmd.OutOrStdout())
 	}
-	if resp.Total > len(resp.Results) {
-		fmt.Fprintf(cmd.OutOrStdout(), "... %d more results (total %d)\n", resp.Total-len(resp.Results), resp.Total)
-	}
+	printPaginationSummary(cmd.OutOrStdout(), offset, len(resp.Results), resp.Total)
 	return nil
 }
 
@@ -683,6 +693,25 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// printPaginationSummary prints a "showing X-Y of Z" line when results are
+// paginated and there are more items beyond the current page.
+func printPaginationSummary(out io.Writer, offset, shown, total int) {
+	if total <= shown || shown == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nshowing %d-%d of %d\n", offset+1, offset+shown, total)
+}
+
+// validateNonNeg returns an error if any of the named int values are negative.
+func validateNonNeg(names []string, vals ...int) error {
+	for i, v := range vals {
+		if v < 0 {
+			return fmt.Errorf("--%s must be non-negative", names[i])
+		}
+	}
+	return nil
 }
 
 func newSyncCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {

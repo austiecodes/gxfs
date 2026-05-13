@@ -569,7 +569,6 @@ func (n *notFoundCatAdapter) Cat(context.Context, store.CatRequest) (*store.CatR
 	return nil, store.ErrNotFound
 }
 
-
 func TestHandlerLSLimitOffset(t *testing.T) {
 	tests := []struct {
 		name        string

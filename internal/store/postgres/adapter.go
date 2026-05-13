@@ -246,26 +246,39 @@ func (a *Adapter) Search(ctx context.Context, req store.SearchRequest) (*store.S
 		limit = 20
 	}
 	repo := a.repo(req.Repo)
-	searchQuery, err := SearchSQL(a.cfg)
-	if err != nil {
-		return nil, err
-	}
 	pathFilter := ""
 	if req.Path != "" && req.Path != "/" {
 		pathFilter = path.Clean("/" + strings.TrimSpace(req.Path))
 	}
-	rows, err := a.pool.Query(ctx, searchQuery, repo, query, pathFilter, limit, req.Offset)
+
+	// Run count query first so total is correct even when offset >= total.
+	countQuery, err := SearchCountSQL(a.cfg)
+	if err != nil {
+		return nil, err
+	}
+	var total int
+	if err := a.pool.QueryRow(ctx, countQuery, repo, query, pathFilter).Scan(&total); err != nil {
+		return nil, fmt.Errorf("search count: %w", err)
+	}
+	if total == 0 {
+		return &store.SearchResponse{Results: []store.SearchResult{}, Total: 0}, nil
+	}
+
+	dataQuery, err := SearchDataSQL(a.cfg)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := a.pool.Query(ctx, dataQuery, repo, query, pathFilter, limit, req.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("search postgres: %w", err)
 	}
 	defer rows.Close()
 
 	var results []store.SearchResult
-	total := 0
 	for rows.Next() {
 		var r store.SearchResult
 		var mtime pgtype.Timestamptz
-		if err := rows.Scan(&r.Path, &r.Rank, &r.Snippet, &r.Size, &mtime, &total); err != nil {
+		if err := rows.Scan(&r.Path, &r.Rank, &r.Snippet, &r.Size, &mtime); err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
 		}
 		if mtime.Valid {

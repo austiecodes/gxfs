@@ -79,7 +79,6 @@ func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 	}
 }
 
-
 func TestAdapterLSLimitOffset(t *testing.T) {
 	tree, err := vfs.New([]vfs.File{
 		{Path: "/docs/a.md", Content: "a"},
