@@ -1032,3 +1032,172 @@ func TestDocAdapterWritePath(t *testing.T) {
 		}
 	})
 }
+
+// TestDocAdapterCacheInvalidation verifies that DocAdapter cache invalidation
+// works correctly with a real database: reads populate the cache, writes
+// invalidate it, and subsequent reads see fresh data.
+func TestDocAdapterCacheInvalidation(t *testing.T) {
+	requireDocker(t)
+
+	pgPort := freePort(t)
+	containerName := fmt.Sprintf("gxfs-doc-cache-test-%d", pgPort)
+	startPostgres(t, containerName, pgPort)
+
+	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	ctx := context.Background()
+
+	cfg := postgres.Config{
+		DSN:            dsn,
+		Schema:         "public",
+		NodesTable:     "vfs_nodes",
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
+		Files: postgres.FileTableConfig{
+			PathColumn:  "path",
+			KindColumn:  "kind",
+			SizeColumn:  "size",
+			MTimeColumn: "updated_at",
+		},
+		Repo: "test-repo",
+		// CacheTTL = 0 means never expire — cache persists until invalidated.
+	}
+
+	pool := connectPool(t, ctx, dsn)
+	defer pool.Close()
+
+	applyMigrations(t, ctx, pool, cfg)
+	seedBackfillData(t, containerName)
+
+	if _, err := postgres.BackfillDocs(ctx, pool, cfg); err != nil {
+		t.Fatalf("BackfillDocs: %v", err)
+	}
+
+	da := postgres.NewDocAdapter(pool, cfg)
+
+	t.Run("LSAfterPut", func(t *testing.T) {
+		// LS to populate cache.
+		ls1, err := da.LS(ctx, store.LSRequest{Path: "/"})
+		if err != nil {
+			t.Fatalf("LS 1: %v", err)
+		}
+
+		// Put new file — should invalidate cache.
+		_, err = da.Put(ctx, store.PutRequest{Path: "/cache-test.txt", Content: "cached"})
+		if err != nil {
+			t.Fatalf("Put cache-test: %v", err)
+		}
+
+		// LS again — should see the new file (cache was invalidated).
+		ls2, err := da.LS(ctx, store.LSRequest{Path: "/"})
+		if err != nil {
+			t.Fatalf("LS 2: %v", err)
+		}
+
+		if ls2.Total <= ls1.Total {
+			t.Fatalf("LS total after Put: before=%d after=%d (should increase)", ls1.Total, ls2.Total)
+		}
+
+		found := false
+		for _, n := range ls2.Nodes {
+			if n.Name == "cache-test.txt" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatal("LS after Put does not show cache-test.txt")
+		}
+	})
+
+	t.Run("CatAfterEdit", func(t *testing.T) {
+		// Cat to read content.
+		_, err := da.Cat(ctx, store.CatRequest{Path: "/cache-test.txt"})
+		if err != nil {
+			t.Fatalf("Cat 1: %v", err)
+		}
+
+		// Edit content — should invalidate cache.
+		_, err = da.Edit(ctx, store.EditRequest{Path: "/cache-test.txt", Old: "cached", New: "edited"})
+		if err != nil {
+			t.Fatalf("Edit: %v", err)
+		}
+
+		// Cat again — should see edited content.
+		cat2, err := da.Cat(ctx, store.CatRequest{Path: "/cache-test.txt"})
+		if err != nil {
+			t.Fatalf("Cat 2: %v", err)
+		}
+		if cat2.Content != "edited" {
+			t.Fatalf("Cat after Edit = %q, want %q", cat2.Content, "edited")
+		}
+	})
+
+	t.Run("TreeAfterDelete", func(t *testing.T) {
+		// Put files for tree test.
+		_, err := da.Put(ctx, store.PutRequest{Path: "/cache-dir/a.txt", Content: "a"})
+		if err != nil {
+			t.Fatalf("Put a: %v", err)
+		}
+		_, err = da.Put(ctx, store.PutRequest{Path: "/cache-dir/b.txt", Content: "b"})
+		if err != nil {
+			t.Fatalf("Put b: %v", err)
+		}
+
+		// Tree to populate cache.
+		tree1, err := da.Tree(ctx, store.TreeRequest{Path: "/cache-dir", Depth: 1})
+		if err != nil {
+			t.Fatalf("Tree 1: %v", err)
+		}
+		if !strings.Contains(tree1.Text, "a.txt") {
+			t.Fatalf("Tree 1 missing a.txt:\n%s", tree1.Text)
+		}
+
+		// Delete directory — should invalidate cache.
+		_, err = da.Delete(ctx, store.DeleteRequest{Path: "/cache-dir"})
+		if err != nil {
+			t.Fatalf("Delete cache-dir: %v", err)
+		}
+
+		// Tree on root should no longer show cache-dir.
+		tree2, err := da.Tree(ctx, store.TreeRequest{Path: "/", Depth: 1})
+		if err != nil {
+			t.Fatalf("Tree 2: %v", err)
+		}
+		if strings.Contains(tree2.Text, "cache-dir") {
+			t.Fatalf("Tree after delete still shows cache-dir:\n%s", tree2.Text)
+		}
+	})
+
+	t.Run("InvalidateClearsAll", func(t *testing.T) {
+		// Populate cache via LS.
+		_, err := da.LS(ctx, store.LSRequest{Path: "/"})
+		if err != nil {
+			t.Fatalf("LS: %v", err)
+		}
+
+		// Explicit invalidate.
+		da.Invalidate()
+
+		// Put a file (no invalidation needed since cache is already clear).
+		_, err = da.Put(ctx, store.PutRequest{Path: "/invalidate-test.txt", Content: "test"})
+		if err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+
+		// LS should see the new file.
+		ls, err := da.LS(ctx, store.LSRequest{Path: "/"})
+		if err != nil {
+			t.Fatalf("LS after invalidate: %v", err)
+		}
+		found := false
+		for _, n := range ls.Nodes {
+			if n.Name == "invalidate-test.txt" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatal("LS after Invalidate+Put does not show new file")
+		}
+	})
+}

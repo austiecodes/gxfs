@@ -728,3 +728,158 @@ func freePort(t *testing.T) int {
 
 	return listener.Addr().(*net.TCPAddr).Port
 }
+
+// --- doc_postgres server config ---
+
+func docPostgresServerConfigText(serverPort, pgPort int) string {
+	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	return fmt.Sprintf(`addr = "127.0.0.1:%d"
+
+[[repos]]
+name = "e2e-test"
+
+[repos.backend]
+type = "doc_postgres"
+
+[repos.backend.postgres]
+dsn = %q
+schema = "public"
+nodes_table = "vfs_nodes"
+content_table = "vfs_content"
+repo_nodes_table = "vfs_repo_nodes"
+
+[repos.backend.postgres.files]
+path_column = "path"
+kind_column = "kind"
+size_column = "size"
+mtime_column = "updated_at"
+`, serverPort, dsn)
+}
+
+// TestDocPostgresServerE2E verifies that gxfs-server with type = "doc_postgres"
+// correctly auto-migrates, backfills legacy data, and serves full CRUD through CLI.
+// Also verifies backfill idempotency on restart and old postgres regression.
+func TestDocPostgresServerE2E(t *testing.T) {
+	requireDocker(t)
+
+	repoRoot := repositoryRoot(t)
+	tmp := t.TempDir()
+
+	pgPort := freePort(t)
+	containerName := fmt.Sprintf("gxfs-doc-postgres-e2e-%d-%d", os.Getpid(), time.Now().UnixNano())
+	startPostgres(t, containerName, pgPort)
+
+	// Seed legacy data so backfill has something to migrate.
+	seedPostgres(t, containerName)
+
+	cliPath := filepath.Join(tmp, "gxfs")
+	serverPath := filepath.Join(tmp, "gxfs-server")
+	buildBinary(t, repoRoot, cliPath, "./cmd/gxfs")
+	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
+
+	// --- Phase 1: Start server with doc_postgres, verify legacy data readable ---
+	serverPort := freePort(t)
+	serverConfig := filepath.Join(tmp, "conf", "server.toml")
+	os.MkdirAll(filepath.Join(tmp, "conf"), 0o755)
+	writeFile(t, serverConfig, docPostgresServerConfigText(serverPort, pgPort))
+
+	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
+
+	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
+	cliMounts := filepath.Join(tmp, ".gxfs", "mounts.toml")
+	os.MkdirAll(filepath.Join(tmp, ".gxfs"), 0o755)
+	writeFile(t, cliConfig, cliConfigText(serverPort))
+	writeFile(t, cliMounts, cliMountsText())
+
+	// Legacy data should be backfilled and readable.
+	t.Run("LegacyDataReadable", func(t *testing.T) {
+		ls := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/")
+		if !strings.Contains(ls, "docs") || !strings.Contains(ls, "src") {
+			t.Fatalf("ls / after backfill = %q, expected docs and src", ls)
+		}
+		cat := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/README.md")
+		if cat == "" {
+			t.Fatal("cat /README.md empty after backfill")
+		}
+	})
+
+	// Full CRUD through doc_postgres.
+	t.Run("CRUD", func(t *testing.T) {
+		// Write new file.
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/new-file.txt", "hello doc_postgres")
+
+		// Cat it back.
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/new-file.txt")
+		if got != "hello doc_postgres" {
+			t.Fatalf("cat new-file.txt = %q, want %q", got, "hello doc_postgres")
+		}
+
+		// Overwrite.
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/new-file.txt", "updated content")
+		got = runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/new-file.txt")
+		if got != "updated content" {
+			t.Fatalf("cat after overwrite = %q, want %q", got, "updated content")
+		}
+
+		// Delete.
+		runCLI(t, repoRoot, cliPath, cliConfig, "rm", "/new-file.txt")
+	})
+
+	// Search should work (doc_postgres uses content_search tsvector).
+	t.Run("Search", func(t *testing.T) {
+		out := runCLI(t, repoRoot, cliPath, cliConfig, "search", "Hello")
+		if out == "" {
+			t.Fatal("search Hello returned nothing")
+		}
+	})
+
+	// --- Phase 2: Restart server, verify backfill idempotency ---
+	// Use a separate subtest with its own server on a new port.
+	t.Run("RestartIdempotent", func(t *testing.T) {
+		restartPort := freePort(t)
+		restartConfig := filepath.Join(tmp, "conf", "restart.toml")
+		writeFile(t, restartConfig, docPostgresServerConfigText(restartPort, pgPort))
+
+		startServer(t, repoRoot, serverPath, restartConfig, restartPort)
+
+		restartCLIConfig := filepath.Join(tmp, ".gxfs", "restart-settings.toml")
+		writeFile(t, restartCLIConfig, cliConfigText(restartPort))
+
+		// Data should still be intact after restart (backfill idempotent).
+		cat := runCLI(t, repoRoot, cliPath, restartCLIConfig, "cat", "/README.md")
+		if cat == "" {
+			t.Fatal("cat /README.md empty after restart")
+		}
+
+		// Write should still work.
+		runCLI(t, repoRoot, cliPath, restartCLIConfig, "write", "/post-restart.txt", "still works")
+		got := runCLI(t, repoRoot, cliPath, restartCLIConfig, "cat", "/post-restart.txt")
+		if got != "still works" {
+			t.Fatalf("post-restart write = %q, want %q", got, "still works")
+		}
+	})
+
+	// --- Phase 3: old postgres regression ---
+	t.Run("PostgresRegression", func(t *testing.T) {
+		regPort := freePort(t)
+		regConfig := filepath.Join(tmp, "conf", "regression.toml")
+		writeFile(t, regConfig, serverConfigText(regPort, pgPort))
+
+		startServer(t, repoRoot, serverPath, regConfig, regPort)
+
+		regCLIConfig := filepath.Join(tmp, ".gxfs", "reg-settings.toml")
+		writeFile(t, regCLIConfig, cliConfigText(regPort))
+
+		// Old postgres should still work.
+		cat := runCLI(t, repoRoot, cliPath, regCLIConfig, "cat", "/README.md")
+		if cat == "" {
+			t.Fatal("old postgres cat /README.md empty")
+		}
+
+		runCLI(t, repoRoot, cliPath, regCLIConfig, "write", "/regression-test.txt", "old adapter works")
+		got := runCLI(t, repoRoot, cliPath, regCLIConfig, "cat", "/regression-test.txt")
+		if got != "old adapter works" {
+			t.Fatalf("old postgres write = %q, want %q", got, "old adapter works")
+		}
+	})
+}
