@@ -58,6 +58,8 @@ func adapterFromRepoConfig(ctx context.Context, repo config.RepoConfig) (store.A
 	switch repo.Backend.Type {
 	case "postgres":
 		return postgres.Connect(ctx, postgresConfigFromRepo(repo))
+	case "doc_postgres":
+		return postgres.ConnectDoc(ctx, postgresConfigFromRepo(repo))
 	default:
 		return nil, fmt.Errorf("unsupported backend type: %s", repo.Backend.Type)
 	}

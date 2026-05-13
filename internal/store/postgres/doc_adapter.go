@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,15 +33,60 @@ import (
 // within transactions. Delete removes repo_path only (doc preserved for
 // potential cross-repo references). Put/Edit increment revision.
 type DocAdapter struct {
-	pool *pgxpool.Pool
-	cfg  Config
+	pool        *pgxpool.Pool
+	cfg         Config
+	mu          sync.RWMutex
+	cachedTrees map[string]*docCachedTree
+}
+
+type docCachedTree struct {
+	tree     *vfs.Tree
+	loadedAt time.Time
 }
 
 var _ store.Adapter = (*DocAdapter)(nil)
 
-// NewDocAdapter creates a read-only adapter backed by document-centric tables.
+// NewDocAdapter creates a DocAdapter backed by document-centric tables.
 func NewDocAdapter(pool *pgxpool.Pool, cfg Config) *DocAdapter {
-	return &DocAdapter{pool: pool, cfg: cfg}
+	return &DocAdapter{pool: pool, cfg: cfg, cachedTrees: make(map[string]*docCachedTree)}
+}
+
+// ConnectDoc creates a DocAdapter by connecting to Postgres, running schema
+// migrations, and performing an idempotent backfill from legacy tables.
+// This is the doc_postgres equivalent of Connect.
+func ConnectDoc(ctx context.Context, cfg Config) (*DocAdapter, error) {
+	pool, err := pgxpool.New(ctx, cfg.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("connect doc postgres: %w", err)
+	}
+
+	// Run all schema migrations (including legacy tables needed for backfill).
+	statements, err := SchemaSQL(cfg)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("doc schema sql: %w", err)
+	}
+	for _, stmt := range statements {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("doc schema exec: %w", err)
+		}
+	}
+
+	// Idempotent backfill from legacy tables.
+	result, err := BackfillDocs(ctx, pool, cfg)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("doc backfill: %w", err)
+	}
+	slog.Info("doc adapter backfill",
+		"repo", cfg.Repo,
+		"docs_inserted", result.DocsInserted,
+		"paths_inserted", result.PathsInserted,
+		"hashes_computed", result.HashesComputed,
+	)
+
+	return NewDocAdapter(pool, cfg), nil
 }
 
 func (d *DocAdapter) repo(reqRepo string) string {
@@ -100,13 +147,61 @@ func (d *DocAdapter) buildTree(ctx context.Context, repo string) (*vfs.Tree, err
 	return tree, nil
 }
 
+// treeFor returns a cached vfs.Tree for the repo, rebuilding if expired or missing.
+// This matches the old adapter's caching pattern exactly.
+func (d *DocAdapter) treeFor(ctx context.Context, repo string) (*vfs.Tree, error) {
+	d.mu.RLock()
+	if cache := d.cachedTrees[repo]; cache != nil && !d.cacheExpired(cache) {
+		tree := cache.tree
+		d.mu.RUnlock()
+		return tree, nil
+	}
+	d.mu.RUnlock()
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Double-check after acquiring write lock.
+	if cache := d.cachedTrees[repo]; cache != nil && !d.cacheExpired(cache) {
+		return cache.tree, nil
+	}
+
+	tree, err := d.buildTree(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	d.cachedTrees[repo] = &docCachedTree{tree: tree, loadedAt: time.Now()}
+	return tree, nil
+}
+
+func (d *DocAdapter) cacheExpired(cache *docCachedTree) bool {
+	if d.cfg.CacheTTL <= 0 {
+		return false
+	}
+	return time.Since(cache.loadedAt) >= d.cfg.CacheTTL
+}
+
+// Invalidate clears all cached trees, forcing fresh builds on next access.
+func (d *DocAdapter) Invalidate() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cachedTrees = make(map[string]*docCachedTree)
+}
+
+// invalidateRepo clears the cached tree for a specific repo after a write.
+func (d *DocAdapter) invalidateRepo(repo string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.cachedTrees, repo)
+}
+
 // --- Read methods ---
 
 func (d *DocAdapter) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
 	repo := d.repo(req.Repo)
 	req.Path = cleanDocPath(req.Path)
 
-	tree, err := d.buildTree(ctx, repo)
+	tree, err := d.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +246,7 @@ func (d *DocAdapter) Stat(ctx context.Context, req store.StatRequest) (*store.St
 	repo := d.repo(req.Repo)
 	req.Path = cleanDocPath(req.Path)
 
-	tree, err := d.buildTree(ctx, repo)
+	tree, err := d.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +278,7 @@ func (d *DocAdapter) Find(ctx context.Context, req store.FindRequest) (*store.Fi
 	repo := d.repo(req.Repo)
 	req.Path = cleanDocPath(req.Path)
 
-	tree, err := d.buildTree(ctx, repo)
+	tree, err := d.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +400,7 @@ func (d *DocAdapter) Grep(ctx context.Context, req store.GrepRequest) (*store.Gr
 	repo := d.repo(req.Repo)
 	req.Path = cleanDocPath(req.Path)
 
-	tree, err := d.buildTree(ctx, repo)
+	tree, err := d.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +499,7 @@ func (d *DocAdapter) Tree(ctx context.Context, req store.TreeRequest) (*store.Tr
 	repo := d.repo(req.Repo)
 	req.Path = cleanDocPath(req.Path)
 
-	tree, err := d.buildTree(ctx, repo)
+	tree, err := d.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -505,6 +600,8 @@ func (d *DocAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutR
 		return nil, fmt.Errorf("doc put commit: %w", err)
 	}
 
+	d.invalidateRepo(repo)
+
 	return &store.PutResponse{
 		Node: store.Node{
 			Path:    req.Path,
@@ -525,7 +622,7 @@ func (d *DocAdapter) Delete(ctx context.Context, req store.DeleteRequest) (*stor
 		return nil, store.ErrCannotDeleteRoot
 	}
 
-	tree, err := d.buildTree(ctx, repo)
+	tree, err := d.treeFor(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -573,6 +670,8 @@ func (d *DocAdapter) Delete(ctx context.Context, req store.DeleteRequest) (*stor
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("doc delete commit: %w", err)
 	}
+
+	d.invalidateRepo(repo)
 
 	return &store.DeleteResponse{}, nil
 }
@@ -653,6 +752,8 @@ func (d *DocAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.Ed
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("doc edit commit: %w", err)
 	}
+
+	d.invalidateRepo(repo)
 
 	return &store.EditResponse{
 		Path:     req.Path,

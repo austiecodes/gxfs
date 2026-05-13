@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"gxfs/internal/store"
+	"gxfs/internal/vfs"
 )
 
 var _ store.Adapter = (*Adapter)(nil)
@@ -606,4 +608,138 @@ func TestDocDeletePathRecursiveSQL(t *testing.T) {
 	if !strings.Contains(sql, "path like $2 || '/%%'") {
 		t.Fatalf("DocDeletePathRecursiveSQL() missing LIKE prefix: %q", sql)
 	}
+}
+
+// --- DocAdapter cache tests ---
+
+func TestDocAdapterCacheHit(t *testing.T) {
+	d := &DocAdapter{
+		cfg:         Config{Repo: "test"},
+		cachedTrees: make(map[string]*docCachedTree),
+	}
+
+	// Pre-populate cache.
+	tree, err := vfs.New([]vfs.File{{Path: "/a.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.cachedTrees["test"] = &docCachedTree{tree: tree, loadedAt: time.Now()}
+
+	// treeFor should return cached tree (no pool needed).
+	got, err := d.treeFor(nil, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != tree {
+		t.Fatal("treeFor did not return cached tree")
+	}
+}
+
+func TestDocAdapterCacheExpiry(t *testing.T) {
+	d := &DocAdapter{
+		cfg:         Config{Repo: "test", CacheTTL: 1 * time.Millisecond},
+		cachedTrees: make(map[string]*docCachedTree),
+	}
+
+	// Pre-populate expired cache.
+	tree, err := vfs.New([]vfs.File{{Path: "/a.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.cachedTrees["test"] = &docCachedTree{tree: tree, loadedAt: time.Now().Add(-1 * time.Second)}
+
+	// treeFor should detect expiry — but without a pool it will fail.
+	// That's fine: we just verify the expiry check works.
+	if !d.cacheExpired(d.cachedTrees["test"]) {
+		t.Fatal("cache should be expired")
+	}
+}
+
+func TestDocAdapterCacheNoExpiry(t *testing.T) {
+	d := &DocAdapter{
+		cfg:         Config{Repo: "test"}, // CacheTTL = 0 → never expire
+		cachedTrees: make(map[string]*docCachedTree),
+	}
+
+	tree, err := vfs.New([]vfs.File{{Path: "/a.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.cachedTrees["test"] = &docCachedTree{tree: tree, loadedAt: time.Now().Add(-1 * time.Hour)}
+
+	if d.cacheExpired(d.cachedTrees["test"]) {
+		t.Fatal("cache with TTL=0 should never expire")
+	}
+}
+
+func TestDocAdapterInvalidate(t *testing.T) {
+	d := &DocAdapter{
+		cfg:         Config{Repo: "test"},
+		cachedTrees: make(map[string]*docCachedTree),
+	}
+
+	tree, err := vfs.New([]vfs.File{{Path: "/a.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.cachedTrees["test"] = &docCachedTree{tree: tree, loadedAt: time.Now()}
+
+	d.Invalidate()
+
+	if len(d.cachedTrees) != 0 {
+		t.Fatalf("Invalidate left %d entries", len(d.cachedTrees))
+	}
+}
+
+func TestDocAdapterInvalidateRepo(t *testing.T) {
+	d := &DocAdapter{
+		cfg:         Config{Repo: "test"},
+		cachedTrees: make(map[string]*docCachedTree),
+	}
+
+	tree1, _ := vfs.New([]vfs.File{{Path: "/a.txt"}})
+	tree2, _ := vfs.New([]vfs.File{{Path: "/b.txt"}})
+	d.cachedTrees["repo1"] = &docCachedTree{tree: tree1, loadedAt: time.Now()}
+	d.cachedTrees["repo2"] = &docCachedTree{tree: tree2, loadedAt: time.Now()}
+
+	d.invalidateRepo("repo1")
+
+	if _, ok := d.cachedTrees["repo1"]; ok {
+		t.Fatal("repo1 should be invalidated")
+	}
+	if _, ok := d.cachedTrees["repo2"]; !ok {
+		t.Fatal("repo2 should still be cached")
+	}
+}
+
+func TestDocAdapterConcurrentTreeFor(t *testing.T) {
+	d := &DocAdapter{
+		cfg:         Config{Repo: "test"},
+		cachedTrees: make(map[string]*docCachedTree),
+	}
+
+	// Pre-populate.
+	tree, err := vfs.New([]vfs.File{{Path: "/a.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.cachedTrees["test"] = &docCachedTree{tree: tree, loadedAt: time.Now()}
+
+	// Concurrent reads should all get the same cached tree.
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := d.treeFor(nil, "test")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if got != tree {
+				t.Error("concurrent treeFor did not return cached tree")
+			}
+		}()
+	}
+	wg.Wait()
 }
