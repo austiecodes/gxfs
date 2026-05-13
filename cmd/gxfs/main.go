@@ -830,7 +830,7 @@ func newSyncPullCommand(adapter, rawAdapter store.Adapter, repo string, resolver
 			if err != nil {
 				return err
 			}
-			result, err := applyRemoteSyncPlan(cmd.Context(), adapter, repo, root, manifestPath, manifest, plan, resolver)
+			result, err := applyRemoteSyncPlan(cmd.Context(), adapter, rawAdapter, repo, root, manifestPath, manifest, plan, resolver)
 			if err != nil {
 				return err
 			}
@@ -1163,7 +1163,7 @@ func buildRemoteSyncPlanFromFiles(remoteFiles []remoteSyncFile, manifest syncman
 	return remoteSyncPlan{Changes: changes}, nil
 }
 
-func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root, manifestPath string, manifest syncmanifest.Manifest, plan remoteSyncPlan, resolver *mountadapter.Resolver) (remoteSyncResult, error) {
+func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, rawAdapter store.Adapter, repo, root, manifestPath string, manifest syncmanifest.Manifest, plan remoteSyncPlan, resolver *mountadapter.Resolver) (remoteSyncResult, error) {
 	result := remoteSyncResult{RemoteFiles: len(plan.Changes)}
 	entries := make([]syncmanifest.Entry, 0, len(plan.Changes))
 	for _, change := range plan.Changes {
@@ -1178,7 +1178,22 @@ func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root,
 			entries = append(entries, entry)
 			result.ForcePushed++
 		case remoteSyncMaterialize:
-			if err := writeMaterializedFile(change.Remote.LocalPath, change.Remote.Content); err != nil {
+			content := change.Remote.Content
+			if content == "" {
+				// Hash-skipped file: fetch content on demand for materialization.
+				// Use rawAdapter + RemotePath when available (mounted paths),
+				// otherwise use the regular adapter.
+				catAdapter := adapter
+				if rawAdapter != nil {
+					catAdapter = rawAdapter
+				}
+				cat, err := catAdapter.Cat(ctx, store.CatRequest{Repo: repo, Path: change.Remote.RemotePath})
+				if err != nil {
+					return remoteSyncResult{}, fmt.Errorf("cat %s for materialize: %w", change.Remote.RemotePath, err)
+				}
+				content = cat.Content
+			}
+			if err := writeMaterializedFile(change.Remote.LocalPath, content); err != nil {
 				return remoteSyncResult{}, err
 			}
 			entries = append(entries, change.Entry)
@@ -1298,7 +1313,7 @@ func refreshManifest(ctx context.Context, adapter, rawAdapter store.Adapter, rep
 	if err != nil {
 		return remoteSyncResult{}, err
 	}
-	result, err := applyRemoteSyncPlan(ctx, adapter, repo, root, manifestPath, manifest, plan, resolver)
+	result, err := applyRemoteSyncPlan(ctx, adapter, rawAdapter, repo, root, manifestPath, manifest, plan, resolver)
 	if err != nil {
 		return remoteSyncResult{}, err
 	}
@@ -1679,7 +1694,7 @@ func refreshAfterMount(cmd *cobra.Command, rawAdapter store.Adapter, repo, local
 	// For mount add, we only accept remote files — no materialization or conflict resolution.
 	// Use the mounted adapter for any write operations (pushLocalConflict).
 	mountedAdapter := mountadapter.NewAdapter(rawAdapter, resolver)
-	if _, err := applyRemoteSyncPlan(cmd.Context(), mountedAdapter, repo, localPath, manifestPath, manifest, plan, resolver); err != nil {
+	if _, err := applyRemoteSyncPlan(cmd.Context(), mountedAdapter, rawAdapter, repo, localPath, manifestPath, manifest, plan, resolver); err != nil {
 		return fmt.Errorf("refresh manifest after mount: %w", err)
 	}
 	return nil

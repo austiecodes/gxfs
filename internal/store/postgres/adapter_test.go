@@ -176,3 +176,20 @@ func TestAdapterCacheTTLPositiveExpires(t *testing.T) {
 		t.Fatal("expired() = false, want true when cache is older than TTL")
 	}
 }
+
+func TestBackfillHashSQL(t *testing.T) {
+	sql, err := BackfillHashSQL(Config{
+		Schema:       "public",
+		ContentTable: "vfs_content",
+		Files: FileTableConfig{
+			PathColumn: "path",
+		},
+	})
+	if err != nil {
+		t.Fatalf("BackfillHashSQL() error = %v", err)
+	}
+	want := `update "public"."vfs_content" set content_hash = $2 where "path" = $1 and content_hash is null`
+	if sql != want {
+		t.Fatalf("BackfillHashSQL() = %q, want %q", sql, want)
+	}
+}

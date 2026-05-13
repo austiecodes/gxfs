@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"gxfs/internal/vfs"
@@ -34,6 +35,7 @@ type fakeClient struct {
 	treeReq         store.TreeRequest
 	treeText        string
 	catReqs         []store.CatRequest
+	catMu           sync.Mutex
 	catContents     map[string]string
 	putReqs         []store.PutRequest
 	searchReq       store.SearchRequest
@@ -91,7 +93,9 @@ func (f *fakeClient) Tree(_ context.Context, req store.TreeRequest) (*store.Tree
 }
 
 func (f *fakeClient) Cat(_ context.Context, req store.CatRequest) (*store.CatResponse, error) {
+	f.catMu.Lock()
 	f.catReqs = append(f.catReqs, req)
+	f.catMu.Unlock()
 	if f.catContents != nil {
 		return &store.CatResponse{Path: req.Path, Content: f.catContents[req.Path]}, nil
 	}
@@ -2484,23 +2488,16 @@ func TestRefreshHashSkipOnlyCatsChangedFiles(t *testing.T) {
 	}
 
 	// All files share the same base content "content-N" with known hash.
-	// Changed files get a different hash.
+	// Changed files (0..nChanged-1) get a different hash to force Cat.
 	hashes := make([]store.ContentHash, nFiles)
 	for i := 0; i < nFiles; i++ {
-		content := fmt.Sprintf("content-%d", i)
-		hash := store.HashContent(content)
-		if i < nChanged || i == nChanged-1 {
-			// first nChanged files: changed hash → different from manifest
-			hash = store.HashContent("changed-" + fmt.Sprintf("%d", i))
-		}
-		// Fix: only files 0,1,2 are "changed"
-		if i >= 3 {
-			content = fmt.Sprintf("content-%d", i)
-			hash = store.HashContent(content)
+		hash := store.HashContent(fmt.Sprintf("content-%d", i))
+		if i < nChanged {
+			// Hash differs from manifest entry -> must Cat
+			hash = store.HashContent(fmt.Sprintf("changed-%d", i))
 		}
 		hashes[i] = store.ContentHash{Path: "/docs/" + fmt.Sprintf("file_%02d.md", i), Hash: hash}
 	}
-
 	// Cat contents: only called for changed/unknown files
 	catContents := make(map[string]string)
 	for i := 0; i < nChanged; i++ {
@@ -2635,6 +2632,83 @@ func TestRefreshMountBatchHashesPathMapping(t *testing.T) {
 		// Verify hash was populated
 		if entry.ContentHash == "" {
 			t.Errorf("entry %q has empty content_hash", entry.Local)
+		}
+	}
+}
+
+// TestMaterializeAfterRefreshWritesRealContent verifies that running refresh
+// (which hash-skips Cat for unchanged files) followed by materialize on the
+// same root writes the actual file content, NOT empty content.
+// This is the regression test for the Phase 3D materialize blocker.
+func TestMaterializeAfterRefreshWritesRealContent(t *testing.T) {
+	// Set up 5 files, all with matching hashes in manifest (so refresh skips Cat)
+	const nFiles = 5
+	lsNodes := make([]store.Node, nFiles)
+	hashes := make([]store.ContentHash, nFiles)
+	catContents := make(map[string]string, nFiles)
+	manifestEntries := make([]string, nFiles)
+
+	for i := 0; i < nFiles; i++ {
+		name := fmt.Sprintf("file_%02d.md", i)
+		path := "/docs/" + name
+		content := fmt.Sprintf("content-%d", i)
+		hash := store.HashContent(content)
+
+		lsNodes[i] = store.Node{Path: path, Name: name, Kind: "file", Size: int64(len(content)), ModTime: "2026-05-12T00:00:00Z"}
+		hashes[i] = store.ContentHash{Path: path, Hash: hash}
+		catContents[path] = content
+		manifestEntries[i] = fmt.Sprintf(
+			`[[entries]]
+local = 'docs/%s'
+remote_doc = 'repo://self/docs/%s'
+mount = 'docs'
+content_hash = '%s'
+size = %d
+mtime = '2026-05-12T00:00:00Z'
+materialized = false
+`, name, name, hash, len(content))
+	}
+
+	client := &fakeClient{
+		statNode:        &store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		lsNodes:         lsNodes,
+		catContents:     catContents,
+		batchHashesResp: &store.HashResponse{Hashes: hashes},
+	}
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	writeTestFile(t, manifestPath, "version = 1\n\n"+strings.Join(manifestEntries, "\n"))
+
+	// Step 1: refresh — should skip Cat (all hashes match)
+	refreshOut := executeWithClient(t, client, "refresh", "docs", "--manifest", manifestPath)
+	if !strings.Contains(refreshOut, "refreshed") {
+		t.Fatalf("refresh output = %q, want refreshed", refreshOut)
+	}
+	// Verify refresh did NOT Cat (all hashes matched)
+	if len(client.catReqs) != 0 {
+		t.Fatalf("refresh Cat requests = %d, want 0 (all hashes matched); got paths = %v",
+			len(client.catReqs), client.catReqs)
+	}
+
+	// Step 2: materialize same root — must write real content, not empty
+	matOut := executeWithClient(t, client, "materialize", "docs", "--manifest", manifestPath)
+	if !strings.Contains(matOut, "materialized") {
+		t.Fatalf("materialize output = %q, want materialized", matOut)
+	}
+
+	// Verify files on disk have real content (not empty)
+	for i := 0; i < nFiles; i++ {
+		name := fmt.Sprintf("file_%02d.md", i)
+		localPath := filepath.Join(dir, "docs", name)
+		got, err := os.ReadFile(localPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", localPath, err)
+		}
+		want := fmt.Sprintf("content-%d", i)
+		if string(got) != want {
+			t.Errorf("materialized %s = %q, want %q (hash-skipped files must be Cat'd on demand)", name, string(got), want)
 		}
 	}
 }

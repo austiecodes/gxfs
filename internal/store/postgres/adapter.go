@@ -679,6 +679,12 @@ func (a *Adapter) ensureContent(ctx context.Context, tree *vfs.Tree, path string
 	a.mu.Lock()
 	tree.SetContent(path, content)
 	a.mu.Unlock()
+
+	// Lazy backfill: if content_hash was NULL, update it now.
+	if bfQuery, err := BackfillHashSQL(a.cfg); err == nil {
+		_ = a.pool.QueryRow(ctx, bfQuery, path, store.HashContent(content)).Scan()
+	}
+
 	return nil
 }
 

@@ -288,11 +288,9 @@ func BatchHashesSQL(cfg Config) (string, error) {
 	), nil
 }
 
-func LoadNodeWithHashSQL(cfg Config) (string, error) {
-	nodesTable, err := quoteTable(cfg.Schema, cfg.NodesTable)
-	if err != nil {
-		return "", err
-	}
+// BackfillHashSQL returns a query that updates content_hash for a single row
+// where content_hash IS NULL. Called lazily by Cat after loading content.
+func BackfillHashSQL(cfg Config) (string, error) {
 	contentTable, err := quoteTable(cfg.Schema, cfg.ContentTable)
 	if err != nil {
 		return "", err
@@ -301,30 +299,9 @@ func LoadNodeWithHashSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("path column: %w", err)
 	}
-	kindCol, err := quoteIdent(cfg.Files.KindColumn)
-	if err != nil {
-		return "", fmt.Errorf("kind column: %w", err)
-	}
-	sizeExpr := "0"
-	if cfg.Files.SizeColumn != "" {
-		sizeCol, err := quoteIdent(cfg.Files.SizeColumn)
-		if err != nil {
-			return "", fmt.Errorf("size column: %w", err)
-		}
-		sizeExpr = "n." + sizeCol
-	}
-	mtimeExpr := "null::timestamptz"
-	if cfg.Files.MTimeColumn != "" {
-		mtimeCol, err := quoteIdent(cfg.Files.MTimeColumn)
-		if err != nil {
-			return "", fmt.Errorf("mtime column: %w", err)
-		}
-		mtimeExpr = "n." + mtimeCol
-	}
 	return fmt.Sprintf(
-		"select n.%s, n.%s, %s, %s, c.content_hash from %s n left join %s c on n.%s = c.%s where n.%s = $1",
-		pathCol, kindCol, sizeExpr, mtimeExpr,
-		nodesTable, contentTable, pathCol, pathCol, pathCol,
+		"update %s set content_hash = $2 where %s = $1 and content_hash is null",
+		contentTable, pathCol,
 	), nil
 }
 

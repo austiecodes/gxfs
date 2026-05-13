@@ -17,7 +17,6 @@ var (
 	ErrUnknownRepo      = errors.New("unknown repo")
 	ErrEmptyQuery       = errors.New("search query cannot be empty")
 	ErrInvalidParam     = errors.New("invalid parameter")
-	ErrNotModified      = errors.New("not modified")
 )
 
 type Node struct {
@@ -26,7 +25,7 @@ type Node struct {
 	Kind    string            `json:"kind"`
 	Size    int64             `json:"size,omitempty"`
 	ModTime string            `json:"mod_time,omitempty"`
-	Hash    string            `json:"hash,omitempty"`
+	Hash    string            `json:"hash,omitempty"` // Deferred: not populated by Stat yet; see Phase 3E
 	Meta    map[string]string `json:"meta,omitempty"`
 }
 
