@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -96,6 +97,10 @@ func defaultString(value, fallback string) string {
 }
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
 	path := os.Getenv("GXFS_SERVER_CONFIG")
 	if path == "" {
 		path = "conf/server.toml"
