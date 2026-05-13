@@ -23,21 +23,22 @@ import (
 )
 
 type fakeClient struct {
-	grepReq     store.GrepRequest
-	grepMatches []store.Match
-	lsNodes     []store.Node
-	statNode    *store.Node
-	catContent  string
-	lsReq       store.LSRequest
-	findReq     store.FindRequest
-	findNodes   []store.Node
-	treeReq     store.TreeRequest
-	treeText    string
-	catReqs     []store.CatRequest
-	catContents map[string]string
-	putReqs     []store.PutRequest
-	searchReq   store.SearchRequest
-	searchResp  *store.SearchResponse
+	grepReq         store.GrepRequest
+	grepMatches     []store.Match
+	lsNodes         []store.Node
+	statNode        *store.Node
+	catContent      string
+	lsReq           store.LSRequest
+	findReq         store.FindRequest
+	findNodes       []store.Node
+	treeReq         store.TreeRequest
+	treeText        string
+	catReqs         []store.CatRequest
+	catContents     map[string]string
+	putReqs         []store.PutRequest
+	searchReq       store.SearchRequest
+	searchResp      *store.SearchResponse
+	batchHashesResp *store.HashResponse
 }
 
 func defaultLSNodes() []store.Node {
@@ -143,6 +144,9 @@ func (f *fakeClient) Edit(context.Context, store.EditRequest) (*store.EditRespon
 }
 
 func (f *fakeClient) BatchHashes(_ context.Context, _ store.HashRequest) (*store.HashResponse, error) {
+	if f.batchHashesResp != nil {
+		return f.batchHashesResp, nil
+	}
 	return &store.HashResponse{Hashes: []store.ContentHash{}}, nil
 }
 
@@ -2460,5 +2464,177 @@ func TestCLISearchNegativeOffset(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "non-negative") {
 		t.Fatalf("error = %q, want non-negative message", err.Error())
+	}
+}
+
+// --- Hash-skip sync behavior tests ---
+
+// TestRefreshHashSkipOnlyCatsChangedFiles verifies that refresh on a 12-file
+// directory only Cats the files with unknown or changed hashes. Files whose
+// content_hash matches the existing manifest entry must NOT trigger a Cat call.
+func TestRefreshHashSkipOnlyCatsChangedFiles(t *testing.T) {
+	const nFiles = 12
+	const nChanged = 3 // files 0, 5, 11 have changed or unknown hashes
+
+	// Build LS nodes for /docs with 12 files
+	lsNodes := make([]store.Node, nFiles)
+	for i := 0; i < nFiles; i++ {
+		name := fmt.Sprintf("file_%02d.md", i)
+		lsNodes[i] = store.Node{Path: "/docs/" + name, Name: name, Kind: "file", Size: 10, ModTime: "2026-05-12T00:00:00Z"}
+	}
+
+	// All files share the same base content "content-N" with known hash.
+	// Changed files get a different hash.
+	hashes := make([]store.ContentHash, nFiles)
+	for i := 0; i < nFiles; i++ {
+		content := fmt.Sprintf("content-%d", i)
+		hash := store.HashContent(content)
+		if i < nChanged || i == nChanged-1 {
+			// first nChanged files: changed hash → different from manifest
+			hash = store.HashContent("changed-" + fmt.Sprintf("%d", i))
+		}
+		// Fix: only files 0,1,2 are "changed"
+		if i >= 3 {
+			content = fmt.Sprintf("content-%d", i)
+			hash = store.HashContent(content)
+		}
+		hashes[i] = store.ContentHash{Path: "/docs/" + fmt.Sprintf("file_%02d.md", i), Hash: hash}
+	}
+
+	// Cat contents: only called for changed/unknown files
+	catContents := make(map[string]string)
+	for i := 0; i < nChanged; i++ {
+		name := fmt.Sprintf("file_%02d.md", i)
+		catContents["/docs/"+name] = fmt.Sprintf("changed-content-%d", i)
+	}
+
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		lsNodes:  lsNodes,
+		catContents: func() map[string]string {
+			// Cat returns content only for changed files
+			m := make(map[string]string)
+			for i := 0; i < nChanged; i++ {
+				name := fmt.Sprintf("file_%02d.md", i)
+				m["/docs/"+name] = fmt.Sprintf("changed-content-%d", i)
+			}
+			// Also provide content for files without manifest entry (unknown hash)
+			// In this test, files 0,1,2 are "changed", rest match manifest
+			return m
+		}(),
+		batchHashesResp: &store.HashResponse{Hashes: hashes},
+	}
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	// Write a pre-existing manifest with all 12 files having the original hash
+	var manifestEntries []string
+	for i := 0; i < nFiles; i++ {
+		name := fmt.Sprintf("file_%02d.md", i)
+		content := fmt.Sprintf("content-%d", i)
+		origHash := store.HashContent(content)
+		manifestEntries = append(manifestEntries, fmt.Sprintf(
+			`[[entries]]
+local = 'docs/%s'
+remote_doc = 'repo://self/docs/%s'
+mount = 'docs'
+content_hash = '%s'
+size = 10
+mtime = '2026-05-12T00:00:00Z'
+materialized = false
+`, name, name, origHash))
+	}
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	writeTestFile(t, manifestPath, "version = 1\n\n"+strings.Join(manifestEntries, "\n"))
+
+	got := executeWithClient(t, client, "refresh", "docs", "--manifest", manifestPath)
+
+	// Verify only nChanged files were Cat'd
+	if len(client.catReqs) != nChanged {
+		t.Fatalf("Cat requests = %d, want %d (only changed files); paths = %v",
+			len(client.catReqs), nChanged, client.catReqs)
+	}
+
+	// Verify the refreshed manifest has updated hashes for changed files
+	manifest := readTextFile(t, manifestPath)
+	for i := 0; i < nChanged; i++ {
+		name := fmt.Sprintf("file_%02d.md", i)
+		newHash := store.HashContent(fmt.Sprintf("changed-content-%d", i))
+		if !strings.Contains(manifest, newHash) {
+			t.Errorf("manifest missing updated hash for %s: %s", name, manifest)
+		}
+	}
+
+	if !strings.Contains(got, "refreshed") {
+		t.Fatalf("refresh output = %q, want refreshed count", got)
+	}
+}
+
+// TestRefreshMountBatchHashesPathMapping verifies that when a mount maps
+// repo://self/api to local docs/api, BatchHashes returns/consumes paths
+// using the true server path (/api/...), and the manifest correctly maps
+// them to local paths (docs/api/...).
+func TestRefreshMountBatchHashesPathMapping(t *testing.T) {
+	resolver, err := mount.NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/api", Remote: "repo://self/api", Mode: "readonly", Source: "manual"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	// Server paths are under /api (the remote path), NOT /docs/api
+	apiFiles := []store.Node{
+		{Path: "/api/endpoint.md", Name: "endpoint.md", Kind: "file", Size: 20},
+		{Path: "/api/schema.md", Name: "schema.md", Kind: "file", Size: 30},
+	}
+
+	hashes := []store.ContentHash{
+		{Path: "/api/endpoint.md", Hash: store.HashContent("endpoint content")},
+		{Path: "/api/schema.md", Hash: store.HashContent("schema content")},
+	}
+
+	client := &fakeClient{
+		statNode:        &store.Node{Path: "/api", Name: "api", Kind: "dir"},
+		lsNodes:         apiFiles,
+		catContents:     map[string]string{"/api/endpoint.md": "endpoint content", "/api/schema.md": "schema content"},
+		batchHashesResp: &store.HashResponse{Hashes: hashes},
+	}
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	cmd := newRootCommand(client, client, "gxfs", resolver)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"refresh", "docs/api"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("refresh error: %v", err)
+	}
+
+	// Verify manifest has correct local paths (docs/api/...) and remote_doc (repo://self/api/...)
+	manifest, err := syncmanifest.Load(filepath.Join(".gxfs", "manifest.toml"))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if len(manifest.Entries) != 2 {
+		t.Fatalf("manifest entries = %d, want 2", len(manifest.Entries))
+	}
+
+	for _, entry := range manifest.Entries {
+		// Local path must use the mounted local prefix
+		if !strings.HasPrefix(entry.Local, "docs/api/") {
+			t.Errorf("local = %q, want prefix docs/api/", entry.Local)
+		}
+		// remote_doc must use the true server path, NOT the local display path
+		if !strings.HasPrefix(entry.RemoteDoc, "repo://self/api/") {
+			t.Errorf("remote_doc = %q, want prefix repo://self/api/", entry.RemoteDoc)
+		}
+		// Verify hash was populated
+		if entry.ContentHash == "" {
+			t.Errorf("entry %q has empty content_hash", entry.Local)
+		}
 	}
 }
