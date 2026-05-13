@@ -31,7 +31,8 @@ func (f *fakeAdapter) Tree(_ context.Context, req store.TreeRequest) (*store.Tre
 }
 
 func (f *fakeAdapter) Cat(context.Context, store.CatRequest) (*store.CatResponse, error) {
-	return &store.CatResponse{Path: "/docs/readme.md", Content: "# Readme\n"}, nil
+	content := "# Readme\n"
+	return &store.CatResponse{Path: "/docs/readme.md", Content: content, Hash: store.HashContent(content)}, nil
 }
 
 func (f *fakeAdapter) Grep(_ context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
@@ -784,4 +785,127 @@ func TestHandlerSearchLimitOffset(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- ETag / If-None-Match tests ---
+
+func TestHandlerCatReturnsETag(t *testing.T) {
+	adapter := &fakeAdapter{}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("ETag header missing")
+	}
+	wantHash := store.HashContent("# Readme\n")
+	wantETag := `"` + wantHash + `"`
+	if etag != wantETag {
+		t.Fatalf("ETag = %q, want %q", etag, wantETag)
+	}
+	var resp store.CatResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Content != "# Readme\n" {
+		t.Fatalf("content = %q, want readme content", resp.Content)
+	}
+}
+
+func TestHandlerCatIfNoneMatchReturns304(t *testing.T) {
+	adapter := &fakeAdapter{}
+	hash := store.HashContent("# Readme\n")
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req.Header.Set("If-None-Match", `"`+hash+`"`)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotModified, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("304 body should be empty, got %q", rec.Body.String())
+	}
+	etag := rec.Header().Get("ETag")
+	if etag != `"`+hash+`"` {
+		t.Fatalf("304 ETag = %q, want quoted hash", etag)
+	}
+}
+
+func TestHandlerCatIfNoneMatchMismatchReturns200(t *testing.T) {
+	adapter := &fakeAdapter{}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req.Header.Set("If-None-Match", `"sha256:0000000000"`)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp store.CatResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Content != "# Readme\n" {
+		t.Fatalf("content = %q, want readme content", resp.Content)
+	}
+}
+
+func TestHandlerCatIfNoneMatchUnquoted(t *testing.T) {
+	adapter := &fakeAdapter{}
+	hash := store.HashContent("# Readme\n")
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req.Header.Set("If-None-Match", hash)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want %d (unquoted ETag should match)", rec.Code, http.StatusNotModified)
+	}
+}
+
+func TestHandlerCatIfNoneMatchMultipleETags(t *testing.T) {
+	adapter := &fakeAdapter{}
+	hash := store.HashContent("# Readme\n")
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req.Header.Set("If-None-Match", `"sha256:other", "`+hash+`"`)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want %d (comma-separated ETags should match)", rec.Code, http.StatusNotModified)
+	}
+}
+
+func TestHandlerCatNoHashNoETag(t *testing.T) {
+	adapter := &noHashCatAdapter{}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req.Header.Set("If-None-Match", `"sha256:whatever"`)
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (no hash -> normal response)", rec.Code, http.StatusOK)
+	}
+	if etag := rec.Header().Get("ETag"); etag != "" {
+		t.Fatalf("ETag should be empty when adapter returns no hash, got %q", etag)
+	}
+}
+
+type noHashCatAdapter struct {
+	fakeAdapter
+}
+
+func (n *noHashCatAdapter) Cat(context.Context, store.CatRequest) (*store.CatResponse, error) {
+	return &store.CatResponse{Path: "/docs/readme.md", Content: "no hash"}, nil
 }

@@ -3,6 +3,8 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -419,5 +421,81 @@ func TestClientSearchParams(t *testing.T) {
 	}
 	if resp.Results[0].Path != "/docs/gotchas.md" {
 		t.Fatalf("result path = %q, want /docs/gotchas.md", resp.Results[0].Path)
+	}
+}
+
+func TestClientCatWithoutIfNoneMatch(t *testing.T) {
+	var gotIfNoneMatch string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIfNoneMatch = r.Header.Get("If-None-Match")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"path":"/docs/readme.md","content":"hello","hash":"sha256:abc"}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	resp, err := c.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "/docs/readme.md"})
+	if err != nil {
+		t.Fatalf("Cat error: %v", err)
+	}
+	if gotIfNoneMatch != "" {
+		t.Fatalf("If-None-Match = %q, want empty (no known hash)", gotIfNoneMatch)
+	}
+	if resp.Content != "hello" {
+		t.Fatalf("content = %q, want hello", resp.Content)
+	}
+	if resp.Hash != "sha256:abc" {
+		t.Fatalf("hash = %q, want sha256:abc", resp.Hash)
+	}
+}
+
+func TestClientCatWithIfNoneMatchSendsHeader(t *testing.T) {
+	var gotIfNoneMatch string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIfNoneMatch = r.Header.Get("If-None-Match")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"path":"/docs/readme.md","content":"hello","hash":"sha256:abc"}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	_, err := c.Cat(context.Background(), store.CatRequest{
+		Repo:        "gxfs",
+		Path:        "/docs/readme.md",
+		IfNoneMatch: "sha256:abc",
+	})
+	if err != nil {
+		t.Fatalf("Cat error: %v", err)
+	}
+	want := `"sha256:abc"`
+	if gotIfNoneMatch != want {
+		t.Fatalf("If-None-Match = %q, want %q", gotIfNoneMatch, want)
+	}
+}
+
+func TestClientCat304ReturnsErrNotModified(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"sha256:abc"`)
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	resp, err := c.Cat(context.Background(), store.CatRequest{
+		Repo:        "gxfs",
+		Path:        "/docs/readme.md",
+		IfNoneMatch: "sha256:abc",
+	})
+	if err == nil {
+		t.Fatal("expected error for 304, got nil")
+	}
+	if !errors.Is(err, store.ErrNotModified) {
+		t.Fatalf("error = %v, want ErrNotModified", err)
+	}
+	if resp == nil {
+		t.Fatal("resp should not be nil on 304")
+	}
+	if resp.Hash != "sha256:abc" {
+		t.Fatalf("304 resp hash = %q, want sha256:abc", resp.Hash)
 	}
 }

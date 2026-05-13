@@ -17,6 +17,7 @@ var (
 	ErrUnknownRepo      = errors.New("unknown repo")
 	ErrEmptyQuery       = errors.New("search query cannot be empty")
 	ErrInvalidParam     = errors.New("invalid parameter")
+	ErrNotModified      = errors.New("not modified")
 )
 
 type Node struct {
@@ -71,8 +72,9 @@ type TreeResponse struct {
 }
 
 type CatRequest struct {
-	Repo string
-	Path string
+	Repo        string
+	Path        string
+	IfNoneMatch string // optional: known hash; server returns 304 if content unchanged
 }
 
 type CatResponse struct {

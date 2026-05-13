@@ -86,12 +86,42 @@ func (c *Client) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeRe
 }
 
 func (c *Client) Cat(ctx context.Context, req store.CatRequest) (*store.CatResponse, error) {
-	var resp store.CatResponse
 	q := url.Values{"path": {req.Path}}
-	if err := c.get(ctx, req.Repo, "cat", q, &resp); err != nil {
+	endpoint, err := c.url(req.Repo, "cat", q)
+	if err != nil {
 		return nil, err
 	}
-	return &resp, nil
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build cat request: %w", err)
+	}
+
+	// Send If-None-Match header if caller provides a known hash.
+	if req.IfNoneMatch != "" {
+		httpReq.Header.Set("If-None-Match", `"`+req.IfNoneMatch+`"`)
+	}
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("call cat: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotModified {
+		return &store.CatResponse{Path: req.Path, Hash: req.IfNoneMatch}, store.ErrNotModified
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("cat failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var catResp store.CatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&catResp); err != nil {
+		return nil, fmt.Errorf("decode cat response: %w", err)
+	}
+	return &catResp, nil
 }
 
 func (c *Client) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {

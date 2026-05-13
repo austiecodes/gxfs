@@ -66,6 +66,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err)
 		return
 	}
+
+	// ETag support for Cat: set ETag header and handle If-None-Match → 304.
+	if cat, ok := resp.(*store.CatResponse); ok && cat.Hash != "" {
+		etag := `"` + cat.Hash + `"`
+		w.Header().Set("ETag", etag)
+		if ifNoneMatch := r.Header.Get("If-None-Match"); ifNoneMatch != "" {
+			if etagMatch(ifNoneMatch, cat.Hash) {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+	}
+
 	writeJSON(w, resp)
 }
 
@@ -302,6 +315,20 @@ func writeJSON(w http.ResponseWriter, resp any) {
 func writeJSONError(w http.ResponseWriter, err error) {
 	status, code := mapError(err)
 	writeJSONErrorCode(w, status, code, err.Error())
+}
+
+// etagMatch checks whether the If-None-Match header value matches the given
+// content hash. Supports both quoted ("sha256:...") and unquoted forms,
+// as well as comma-separated multiple ETags per RFC 7232.
+func etagMatch(ifNoneMatch, hash string) bool {
+	quoted := `"` + hash + `"`
+	for _, tag := range strings.Split(ifNoneMatch, ",") {
+		t := strings.TrimSpace(tag)
+		if t == hash || t == quoted {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSONErrorCode(w http.ResponseWriter, status int, code, message string) {
