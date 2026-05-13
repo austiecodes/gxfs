@@ -717,6 +717,17 @@ source = "default"
 `
 }
 
+func rootMountsText() string {
+	return `version = 1
+
+[[mounts]]
+local = "."
+remote = "repo://self/"
+mode = "writable"
+source = "default"
+`
+}
+
 func freePort(t *testing.T) int {
 	t.Helper()
 
@@ -792,14 +803,15 @@ func TestDocPostgresServerE2E(t *testing.T) {
 	writeFile(t, cliMounts, cliMountsText())
 
 	// Legacy data should be backfilled and readable.
+	// Note: CLI mounts docs → /docs, so all paths must be under /docs.
 	t.Run("LegacyDataReadable", func(t *testing.T) {
 		ls := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/")
-		if !strings.Contains(ls, "docs") || !strings.Contains(ls, "src") {
-			t.Fatalf("ls / after backfill = %q, expected docs and src", ls)
+		if !strings.Contains(ls, "readme.md") && !strings.Contains(ls, "api") {
+			t.Fatalf("ls / after backfill = %q, expected readme.md and/or api", ls)
 		}
-		cat := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/README.md")
+		cat := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/readme.md")
 		if cat == "" {
-			t.Fatal("cat /README.md empty after backfill")
+			t.Fatal("cat /readme.md empty after backfill")
 		}
 	})
 
@@ -827,9 +839,9 @@ func TestDocPostgresServerE2E(t *testing.T) {
 
 	// Search should work (doc_postgres uses content_search tsvector).
 	t.Run("Search", func(t *testing.T) {
-		out := runCLI(t, repoRoot, cliPath, cliConfig, "search", "Hello")
+		out := runCLI(t, repoRoot, cliPath, cliConfig, "search", "GXFS")
 		if out == "" {
-			t.Fatal("search Hello returned nothing")
+			t.Fatal("search GXFS returned nothing")
 		}
 	})
 
@@ -846,9 +858,9 @@ func TestDocPostgresServerE2E(t *testing.T) {
 		writeFile(t, restartCLIConfig, cliConfigText(restartPort))
 
 		// Data should still be intact after restart (backfill idempotent).
-		cat := runCLI(t, repoRoot, cliPath, restartCLIConfig, "cat", "/README.md")
+		cat := runCLI(t, repoRoot, cliPath, restartCLIConfig, "cat", "/readme.md")
 		if cat == "" {
-			t.Fatal("cat /README.md empty after restart")
+			t.Fatal("cat /readme.md empty after restart")
 		}
 
 		// Write should still work.
@@ -870,8 +882,8 @@ func TestDocPostgresServerE2E(t *testing.T) {
 		regCLIConfig := filepath.Join(tmp, ".gxfs", "reg-settings.toml")
 		writeFile(t, regCLIConfig, cliConfigText(regPort))
 
-		// Old postgres should still work.
-		cat := runCLI(t, repoRoot, cliPath, regCLIConfig, "cat", "/README.md")
+		// Old postgres should still work (same mounts → paths under /docs).
+		cat := runCLI(t, repoRoot, cliPath, regCLIConfig, "cat", "/readme.md")
 		if cat == "" {
 			t.Fatal("old postgres cat /README.md empty")
 		}

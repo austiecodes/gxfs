@@ -1200,4 +1200,36 @@ func TestDocAdapterCacheInvalidation(t *testing.T) {
 			t.Fatal("LS after Invalidate+Put does not show new file")
 		}
 	})
+
+	t.Run("StatAfterEdit", func(t *testing.T) {
+		// Put a file with known content.
+		_, err := da.Put(ctx, store.PutRequest{Path: "/stat-edit-test.txt", Content: "short"})
+		if err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+
+		// Stat to populate tree cache (Stat uses treeFor).
+		stat1, err := da.Stat(ctx, store.StatRequest{Path: "/stat-edit-test.txt"})
+		if err != nil {
+			t.Fatalf("Stat 1: %v", err)
+		}
+		if stat1.Node.Size != 5 { // len("short") = 5
+			t.Fatalf("Stat 1 size = %d, want 5", stat1.Node.Size)
+		}
+
+		// Edit to change content length — should invalidate cache.
+		_, err = da.Edit(ctx, store.EditRequest{Path: "/stat-edit-test.txt", Old: "short", New: "much longer content here"})
+		if err != nil {
+			t.Fatalf("Edit: %v", err)
+		}
+
+		// Stat again — should see updated size (cache was invalidated).
+		stat2, err := da.Stat(ctx, store.StatRequest{Path: "/stat-edit-test.txt"})
+		if err != nil {
+			t.Fatalf("Stat 2: %v", err)
+		}
+		if stat2.Node.Size != 24 { // len("much longer content here") = 24
+			t.Fatalf("Stat 2 size = %d, want 24 (cache not invalidated after Edit?)", stat2.Node.Size)
+		}
+	})
 }
