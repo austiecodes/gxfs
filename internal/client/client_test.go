@@ -499,3 +499,24 @@ func TestClientCat304ReturnsErrNotModified(t *testing.T) {
 		t.Fatalf("304 resp hash = %q, want sha256:abc", resp.Hash)
 	}
 }
+
+func TestClientCatErrorParsesJSONMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintln(w, `{"error":{"code":"NOT_FOUND","message":"path not found: /missing.md"}}`)
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL).Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "/missing.md"})
+	if err == nil {
+		t.Fatal("expected error for 404, got nil")
+	}
+	// Must contain the parsed message, not raw JSON
+	if !strings.Contains(err.Error(), "path not found: /missing.md") {
+		t.Fatalf("error = %q, want parsed message", err.Error())
+	}
+	if strings.Contains(err.Error(), `{"error"`) {
+		t.Fatalf("error = %q, should not contain raw JSON (regression: Cat must use shared error parsing)", err.Error())
+	}
+}

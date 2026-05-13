@@ -102,24 +102,18 @@ func (c *Client) Cat(ctx context.Context, req store.CatRequest) (*store.CatRespo
 		httpReq.Header.Set("If-None-Match", `"`+req.IfNoneMatch+`"`)
 	}
 
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("call cat: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotModified {
-		return &store.CatResponse{Path: req.Path, Hash: req.IfNoneMatch}, store.ErrNotModified
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("cat failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
+	// Use doWithAllowed so 304 is handled gracefully while preserving
+	// the shared JSON error parsing for non-2xx responses.
 	var catResp store.CatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&catResp); err != nil {
-		return nil, fmt.Errorf("decode cat response: %w", err)
+	err = c.doWithAllowed(httpReq, "cat", &catResp, []int{http.StatusNotModified})
+	if err != nil {
+		return nil, err
+	}
+
+	// doWithAllowed returns nil for allowed codes (304) without decoding.
+	// Check the response status to distinguish 304 from normal 200.
+	if catResp.Content == "" && req.IfNoneMatch != "" {
+		return &store.CatResponse{Path: req.Path, Hash: req.IfNoneMatch}, store.ErrNotModified
 	}
 	return &catResp, nil
 }
@@ -320,11 +314,25 @@ func (c *Client) delete(ctx context.Context, repo string, q url.Values) error {
 }
 
 func (c *Client) do(req *http.Request, op string, out any) error {
+	return c.doWithAllowed(req, op, out, nil)
+}
+
+// doWithAllowed is like do but accepts additional allowed status codes
+// beyond the normal 2xx range. For allowed codes, no JSON decode is attempted
+// and the caller handles the response.
+func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []int) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("call %s: %w", op, err)
 	}
 	defer resp.Body.Close()
+
+	// Check if this is an explicitly allowed non-2xx status (e.g. 304).
+	for _, code := range allowed {
+		if resp.StatusCode == code {
+			return nil
+		}
+	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(resp.Body)
