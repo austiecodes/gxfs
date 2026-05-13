@@ -73,6 +73,14 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 	q := r.URL.Query()
 	switch op {
 	case "ls":
+		limit, err := queryIntNonNeg(q, "limit")
+		if err != nil {
+			return nil, err
+		}
+		offset, err := queryIntNonNeg(q, "offset")
+		if err != nil {
+			return nil, err
+		}
 		return h.adapter.LS(r.Context(), store.LSRequest{
 			Repo:      repo,
 			Path:      queryPath(q),
@@ -80,6 +88,8 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 			Reverse:   queryBoolOr(q, "reverse"),
 			Recursive: queryBoolOr(q, "recursive"),
 			All:       queryBoolOr(q, "all"),
+			Limit:     limit,
+			Offset:    offset,
 		})
 	case "tree":
 		depth, err := queryInt(q, "depth")
@@ -124,6 +134,14 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 	case "find":
 		maxDepth, _ := queryInt(q, "maxdepth")
 		minDepth, _ := queryInt(q, "mindepth")
+		limit, err := queryIntNonNeg(q, "limit")
+		if err != nil {
+			return nil, err
+		}
+		offset, err := queryIntNonNeg(q, "offset")
+		if err != nil {
+			return nil, err
+		}
 		return h.adapter.Find(r.Context(), store.FindRequest{
 			Repo:     repo,
 			Path:     queryPath(q),
@@ -133,19 +151,26 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 			MinDepth: minDepth,
 			All:      queryBoolOr(q, "all"),
 			IName:    q.Get("iname"),
+			Limit:    limit,
+			Offset:   offset,
 		})
 	case "stat":
 		return h.adapter.Stat(r.Context(), store.StatRequest{Repo: repo, Path: queryPath(q)})
 	case "search":
-		limit, err := queryInt(q, "limit")
+		limit, err := queryIntNonNeg(q, "limit")
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s", store.ErrInvalidParam, err)
+			return nil, err
+		}
+		offset, err := queryIntNonNeg(q, "offset")
+		if err != nil {
+			return nil, err
 		}
 		return h.adapter.Search(r.Context(), store.SearchRequest{
-			Repo:  repo,
-			Query: q.Get("q"),
-			Path:  queryPath(q),
-			Limit: limit,
+			Repo:   repo,
+			Query:  q.Get("q"),
+			Path:   queryPath(q),
+			Limit:  limit,
+			Offset: offset,
 		})
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", op)
@@ -220,6 +245,22 @@ func queryPath(q url.Values) string {
 		return p
 	}
 	return "/"
+}
+
+// queryIntNonNeg parses a non-negative integer query parameter.
+func queryIntNonNeg(q url.Values, key string) (int, error) {
+	raw := q.Get(key)
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%w: invalid %s", store.ErrInvalidParam, key)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("%w: %s must be non-negative", store.ErrInvalidParam, key)
+	}
+	return value, nil
 }
 
 func queryInt(q url.Values, key string) (int, error) {

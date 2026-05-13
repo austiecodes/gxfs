@@ -568,3 +568,217 @@ type notFoundCatAdapter struct {
 func (n *notFoundCatAdapter) Cat(context.Context, store.CatRequest) (*store.CatResponse, error) {
 	return nil, store.ErrNotFound
 }
+
+
+func TestHandlerLSLimitOffset(t *testing.T) {
+	tests := []struct {
+		name        string
+		url         string
+		wantLimit   int
+		wantOffset  int
+		expectError bool
+	}{
+		{
+			name:       "defaults",
+			url:        "/v1/repos/test/ls?path=/docs",
+			wantLimit:  0,
+			wantOffset: 0,
+		},
+		{
+			name:       "limit",
+			url:        "/v1/repos/test/ls?path=/docs&limit=10",
+			wantLimit:  10,
+			wantOffset: 0,
+		},
+		{
+			name:       "offset",
+			url:        "/v1/repos/test/ls?path=/docs&offset=20",
+			wantLimit:  0,
+			wantOffset: 20,
+		},
+		{
+			name:       "both",
+			url:        "/v1/repos/test/ls?path=/docs&limit=5&offset=10",
+			wantLimit:  5,
+			wantOffset: 10,
+		},
+		{
+			name:        "negative limit rejected",
+			url:         "/v1/repos/test/ls?path=/docs&limit=-1",
+			expectError: true,
+		},
+		{
+			name:        "negative offset rejected",
+			url:         "/v1/repos/test/ls?path=/docs&offset=-5",
+			expectError: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := &fakeAdapter{}
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+
+			NewHandler(adapter).ServeHTTP(rec, req)
+
+			if tt.expectError {
+				if rec.Code == http.StatusOK {
+					t.Fatal("expected error status, got 200")
+				}
+				if !strings.Contains(rec.Body.String(), "BAD_REQUEST") {
+					t.Fatalf("body = %q, want BAD_REQUEST", rec.Body.String())
+				}
+				return
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if adapter.lsReq.Limit != tt.wantLimit {
+				t.Fatalf("limit = %d, want %d", adapter.lsReq.Limit, tt.wantLimit)
+			}
+			if adapter.lsReq.Offset != tt.wantOffset {
+				t.Fatalf("offset = %d, want %d", adapter.lsReq.Offset, tt.wantOffset)
+			}
+		})
+	}
+}
+
+func TestHandlerFindLimitOffset(t *testing.T) {
+	tests := []struct {
+		name        string
+		url         string
+		wantLimit   int
+		wantOffset  int
+		expectError bool
+	}{
+		{
+			name:       "defaults",
+			url:        "/v1/repos/test/find?path=/src&name=*.go",
+			wantLimit:  0,
+			wantOffset: 0,
+		},
+		{
+			name:       "limit",
+			url:        "/v1/repos/test/find?path=/src&name=*.go&limit=10",
+			wantLimit:  10,
+			wantOffset: 0,
+		},
+		{
+			name:       "offset",
+			url:        "/v1/repos/test/find?path=/src&name=*.go&offset=5",
+			wantLimit:  0,
+			wantOffset: 5,
+		},
+		{
+			name:        "negative limit rejected",
+			url:         "/v1/repos/test/find?path=/src&name=*.go&limit=-1",
+			expectError: true,
+		},
+		{
+			name:        "negative offset rejected",
+			url:         "/v1/repos/test/find?path=/src&name=*.go&offset=-3",
+			expectError: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := &fakeAdapter{}
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+
+			NewHandler(adapter).ServeHTTP(rec, req)
+
+			if tt.expectError {
+				if rec.Code == http.StatusOK {
+					t.Fatal("expected error status, got 200")
+				}
+				if !strings.Contains(rec.Body.String(), "BAD_REQUEST") {
+					t.Fatalf("body = %q, want BAD_REQUEST", rec.Body.String())
+				}
+				return
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if adapter.findReq.Limit != tt.wantLimit {
+				t.Fatalf("limit = %d, want %d", adapter.findReq.Limit, tt.wantLimit)
+			}
+			if adapter.findReq.Offset != tt.wantOffset {
+				t.Fatalf("offset = %d, want %d", adapter.findReq.Offset, tt.wantOffset)
+			}
+		})
+	}
+}
+
+func TestHandlerSearchLimitOffset(t *testing.T) {
+	tests := []struct {
+		name        string
+		url         string
+		wantLimit   int
+		wantOffset  int
+		expectError bool
+	}{
+		{
+			name:       "defaults",
+			url:        "/v1/repos/test/search?q=hello",
+			wantLimit:  0,
+			wantOffset: 0,
+		},
+		{
+			name:       "limit",
+			url:        "/v1/repos/test/search?q=hello&limit=10",
+			wantLimit:  10,
+			wantOffset: 0,
+		},
+		{
+			name:       "offset",
+			url:        "/v1/repos/test/search?q=hello&offset=20",
+			wantLimit:  0,
+			wantOffset: 20,
+		},
+		{
+			name:       "both",
+			url:        "/v1/repos/test/search?q=hello&limit=5&offset=10",
+			wantLimit:  5,
+			wantOffset: 10,
+		},
+		{
+			name:        "negative limit rejected",
+			url:         "/v1/repos/test/search?q=hello&limit=-1",
+			expectError: true,
+		},
+		{
+			name:        "negative offset rejected",
+			url:         "/v1/repos/test/search?q=hello&offset=-5",
+			expectError: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := &fakeAdapter{}
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			rec := httptest.NewRecorder()
+
+			NewHandler(adapter).ServeHTTP(rec, req)
+
+			if tt.expectError {
+				if rec.Code == http.StatusOK {
+					t.Fatal("expected error status, got 200")
+				}
+				if !strings.Contains(rec.Body.String(), "BAD_REQUEST") {
+					t.Fatalf("body = %q, want BAD_REQUEST", rec.Body.String())
+				}
+				return
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if adapter.searchReq.Limit != tt.wantLimit {
+				t.Fatalf("limit = %d, want %d", adapter.searchReq.Limit, tt.wantLimit)
+			}
+			if adapter.searchReq.Offset != tt.wantOffset {
+				t.Fatalf("offset = %d, want %d", adapter.searchReq.Offset, tt.wantOffset)
+			}
+		})
+	}
+}

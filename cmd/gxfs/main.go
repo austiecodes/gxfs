@@ -57,6 +57,7 @@ func newLSCommand(adapter store.Adapter, repo string) *cobra.Command {
 	var longFmt, classify, slashDir bool
 	var sortByTime, sortBySize, reverse bool
 	var recursive, allFiles, dirOnly bool
+	var lsLimit, lsOffset int
 
 	cmd := &cobra.Command{
 		Use:   "ls [path]",
@@ -114,6 +115,8 @@ func newLSCommand(adapter store.Adapter, repo string) *cobra.Command {
 	cmd.Flags().BoolVarP(&recursive, "recursive", "R", false, "list subdirectories recursively")
 	cmd.Flags().BoolVarP(&allFiles, "all", "a", false, "show hidden files")
 	cmd.Flags().BoolVarP(&dirOnly, "directory", "d", false, "list directory entries instead of contents")
+	cmd.Flags().IntVar(&lsLimit, "limit", 0, "max results (0 = unlimited)")
+	cmd.Flags().IntVar(&lsOffset, "offset", 0, "skip first N results")
 	return cmd
 }
 
@@ -377,7 +380,7 @@ func newGrepCommand(adapter store.Adapter, repo string) *cobra.Command {
 
 func newFindCommand(adapter store.Adapter, repo string) *cobra.Command {
 	var name, findType, iname string
-	var maxDepth, minDepth int
+	var maxDepth, minDepth, findLimit, findOffset int
 	var allFiles bool
 	cmd := &cobra.Command{
 		Use:   "find [path] -name <glob>",
@@ -406,12 +409,17 @@ func newFindCommand(adapter store.Adapter, repo string) *cobra.Command {
 				MinDepth: minDepth,
 				All:      allFiles,
 				IName:    iname,
+				Limit:    findLimit,
+				Offset:   findOffset,
 			})
 			if err != nil {
 				return err
 			}
 			for _, node := range resp.Nodes {
 				fmt.Fprintln(cmd.OutOrStdout(), node.Path)
+			}
+			if resp.Total > len(resp.Nodes) {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nshowing %d-%d of %d\n", findOffset+1, findOffset+len(resp.Nodes), resp.Total)
 			}
 			return nil
 		},
@@ -422,6 +430,8 @@ func newFindCommand(adapter store.Adapter, repo string) *cobra.Command {
 	cmd.Flags().IntVar(&minDepth, "mindepth", 0, "minimum descent depth")
 	cmd.Flags().BoolVarP(&allFiles, "all", "a", false, "search hidden files")
 	cmd.Flags().StringVar(&iname, "iname", "", "case-insensitive name glob")
+	cmd.Flags().IntVar(&findLimit, "limit", 0, "max results (0 = unlimited)")
+	cmd.Flags().IntVar(&findOffset, "offset", 0, "skip first N results")
 	return cmd
 }
 
@@ -561,7 +571,7 @@ func newDeleteCommand(adapter store.Adapter, repo string) *cobra.Command {
 
 func newSearchCommand(adapter store.Adapter, repo string) *cobra.Command {
 	var searchPath string
-	var limit int
+	var limit, searchOffset int
 	var jsonOutput bool
 
 	cmd := &cobra.Command{
@@ -571,10 +581,11 @@ func newSearchCommand(adapter store.Adapter, repo string) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resp, err := adapter.Search(cmd.Context(), store.SearchRequest{
-				Repo:  repo,
-				Query: args[0],
-				Path:  searchPath,
-				Limit: limit,
+				Repo:   repo,
+				Query:  args[0],
+				Path:   searchPath,
+				Limit:  limit,
+				Offset: searchOffset,
 			})
 			if err != nil {
 				return err
@@ -587,6 +598,7 @@ func newSearchCommand(adapter store.Adapter, repo string) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&searchPath, "path", "", "scope search to path prefix")
 	cmd.Flags().IntVar(&limit, "limit", 20, "max results")
+	cmd.Flags().IntVar(&searchOffset, "offset", 0, "skip first N results")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output as JSON")
 	return cmd
 }

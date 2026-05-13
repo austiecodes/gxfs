@@ -43,6 +43,12 @@ func (c *Client) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse
 	if req.All {
 		q.Set("all", "true")
 	}
+	if req.Limit > 0 {
+		q.Set("limit", strconv.Itoa(req.Limit))
+	}
+	if req.Offset > 0 {
+		q.Set("offset", strconv.Itoa(req.Offset))
+	}
 	if err := c.get(ctx, req.Repo, "ls", q, &resp); err != nil {
 		return nil, err
 	}
@@ -151,6 +157,12 @@ func (c *Client) Find(ctx context.Context, req store.FindRequest) (*store.FindRe
 	if req.IName != "" {
 		q.Set("iname", req.IName)
 	}
+	if req.Limit > 0 {
+		q.Set("limit", strconv.Itoa(req.Limit))
+	}
+	if req.Offset > 0 {
+		q.Set("offset", strconv.Itoa(req.Offset))
+	}
 	if err := c.get(ctx, req.Repo, "find", q, &resp); err != nil {
 		return nil, err
 	}
@@ -201,6 +213,9 @@ func (c *Client) Search(ctx context.Context, req store.SearchRequest) (*store.Se
 	}
 	if req.Limit > 0 {
 		q.Set("limit", strconv.Itoa(req.Limit))
+	}
+	if req.Offset > 0 {
+		q.Set("offset", strconv.Itoa(req.Offset))
 	}
 	if err := c.get(ctx, req.Repo, "search", q, &resp); err != nil {
 		return nil, err

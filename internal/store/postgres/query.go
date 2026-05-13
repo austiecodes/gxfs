@@ -204,7 +204,7 @@ func SearchSQL(cfg Config) (string, error) {
 			"plainto_tsquery('english', $2) as query "+
 			"where r.repo = $1 and n.%s = 'file' and c.content_search @@ query "+
 			"and ($3 = '' or n.%s = $3 or n.%s like $3 || '/%%') "+
-			"order by rank desc limit $4",
+			"order by rank desc limit $4 offset $5",
 		pathCol, sizeExpr, mtimeExpr,
 		contentTable,
 		nodesTable, pathCol, pathCol,

@@ -87,7 +87,7 @@ func (a *Adapter) LS(ctx context.Context, req store.LSRequest) (*store.LSRespons
 	if err != nil {
 		return nil, err
 	}
-	return &store.LSResponse{Nodes: nodes}, nil
+	return &store.LSResponse{Nodes: paginateNodes(nodes, req.Limit, req.Offset), Total: len(nodes)}, nil
 }
 
 func (a *Adapter) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeResponse, error) {
@@ -254,7 +254,7 @@ func (a *Adapter) Search(ctx context.Context, req store.SearchRequest) (*store.S
 	if req.Path != "" && req.Path != "/" {
 		pathFilter = path.Clean("/" + strings.TrimSpace(req.Path))
 	}
-	rows, err := a.pool.Query(ctx, searchQuery, repo, query, pathFilter, limit)
+	rows, err := a.pool.Query(ctx, searchQuery, repo, query, pathFilter, limit, req.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("search postgres: %w", err)
 	}
@@ -301,7 +301,7 @@ func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindR
 	if err != nil {
 		return nil, err
 	}
-	return &store.FindResponse{Nodes: nodes}, nil
+	return &store.FindResponse{Nodes: paginateNodes(nodes, req.Limit, req.Offset), Total: len(nodes)}, nil
 }
 
 func (a *Adapter) Stat(ctx context.Context, req store.StatRequest) (*store.StatResponse, error) {
@@ -743,4 +743,20 @@ func copyLines(lines []string) []string {
 	cp := make([]string, len(lines))
 	copy(cp, lines)
 	return cp
+}
+
+// paginateNodes applies limit/offset to a node slice.
+// Limit <= 0 means unlimited; Offset is clamped to [0, len(nodes)].
+func paginateNodes(nodes []store.Node, limit, offset int) []store.Node {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(nodes) {
+		offset = len(nodes)
+	}
+	nodes = nodes[offset:]
+	if limit > 0 && len(nodes) > limit {
+		nodes = nodes[:limit]
+	}
+	return nodes
 }

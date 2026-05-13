@@ -43,10 +43,13 @@ type LSRequest struct {
 	Reverse   bool
 	Recursive bool
 	All       bool // show hidden files (names starting with .)
+	Limit     int  // max results (0 = unlimited)
+	Offset    int  // skip first N results
 }
 
 type LSResponse struct {
 	Nodes []Node `json:"nodes"`
+	Total int    `json:"total,omitempty"` // total matching (pre-limit/offset)
 }
 
 type TreeRequest struct {
@@ -105,10 +108,13 @@ type FindRequest struct {
 	MinDepth int
 	All      bool   // include hidden files
 	IName    string // case-insensitive name glob (empty = use Name only)
+	Limit    int    // max results (0 = unlimited)
+	Offset   int    // skip first N results
 }
 
 type FindResponse struct {
 	Nodes []Node `json:"nodes"`
+	Total int    `json:"total,omitempty"` // total matching (pre-limit/offset)
 }
 
 type StatRequest struct {
@@ -197,10 +203,11 @@ type Editor interface {
 }
 
 type SearchRequest struct {
-	Repo  string
-	Query string
-	Path  string // scope to this path prefix, empty = whole repo
-	Limit int    // max results, default 20
+	Repo   string
+	Query  string
+	Path   string // scope to this path prefix, empty = whole repo
+	Limit  int    // max results, default 20
+	Offset int    // skip first N results
 }
 
 type SearchResult struct {

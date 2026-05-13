@@ -29,7 +29,7 @@ func (a *Adapter) LS(_ context.Context, req store.LSRequest) (*store.LSResponse,
 	if err != nil {
 		return nil, err
 	}
-	return &store.LSResponse{Nodes: nodes}, nil
+	return &store.LSResponse{Nodes: paginateNodes(nodes, req.Limit, req.Offset), Total: len(nodes)}, nil
 }
 
 func (a *Adapter) Tree(_ context.Context, req store.TreeRequest) (*store.TreeResponse, error) {
@@ -91,7 +91,7 @@ func (a *Adapter) Find(_ context.Context, req store.FindRequest) (*store.FindRes
 	if err != nil {
 		return nil, err
 	}
-	return &store.FindResponse{Nodes: nodes}, nil
+	return &store.FindResponse{Nodes: paginateNodes(nodes, req.Limit, req.Offset), Total: len(nodes)}, nil
 }
 
 func (a *Adapter) Stat(_ context.Context, req store.StatRequest) (*store.StatResponse, error) {
@@ -162,16 +162,20 @@ func (a *Adapter) Search(_ context.Context, req store.SearchRequest) (*store.Sea
 			continue
 		}
 		total++
-		if len(results) < limit {
-			snippet := snippetFromContent(content, terms)
-			results = append(results, store.SearchResult{
-				Path:    n.Path,
-				Rank:    1.0,
-				Snippet: snippet,
-				Size:    n.Size,
-				ModTime: n.ModTime,
-			})
+		if total <= req.Offset {
+			continue
 		}
+		if len(results) >= limit {
+			continue
+		}
+		snippet := snippetFromContent(content, terms)
+		results = append(results, store.SearchResult{
+			Path:    n.Path,
+			Rank:    1.0,
+			Snippet: snippet,
+			Size:    n.Size,
+			ModTime: n.ModTime,
+		})
 	}
 	if results == nil {
 		results = []store.SearchResult{}
@@ -196,4 +200,19 @@ func snippetFromContent(content string, terms []string) string {
 		return content[:200] + "..."
 	}
 	return content
+}
+
+// paginateNodes applies limit/offset to a node slice.
+func paginateNodes(nodes []store.Node, limit, offset int) []store.Node {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(nodes) {
+		offset = len(nodes)
+	}
+	nodes = nodes[offset:]
+	if limit > 0 && len(nodes) > limit {
+		nodes = nodes[:limit]
+	}
+	return nodes
 }

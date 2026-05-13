@@ -36,7 +36,7 @@ func (a *Adapter) LS(ctx context.Context, req store.LSRequest) (*store.LSRespons
 		if err != nil {
 			return nil, err
 		}
-		return &store.LSResponse{Nodes: nodes}, nil
+		return &store.LSResponse{Nodes: paginateNodes(nodes, req.Limit, req.Offset), Total: len(nodes)}, nil
 	}
 
 	resolved, err := a.resolver.Resolve(req.Path, OpRead)
@@ -149,7 +149,7 @@ func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindR
 		if err != nil {
 			return nil, err
 		}
-		return &store.FindResponse{Nodes: nodes}, nil
+		return &store.FindResponse{Nodes: paginateNodes(nodes, req.Limit, req.Offset), Total: len(nodes)}, nil
 	}
 
 	resolved, err := a.resolver.Resolve(req.Path, OpRead)
@@ -495,4 +495,19 @@ func shadowedByMount(localPath, kind string, shadows []resolvedMount) bool {
 
 func fmtNotFound(local string) error {
 	return fmt.Errorf("%w: %s", store.ErrNotFound, local)
+}
+
+// paginateNodes applies limit/offset to a node slice.
+func paginateNodes(nodes []store.Node, limit, offset int) []store.Node {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(nodes) {
+		offset = len(nodes)
+	}
+	nodes = nodes[offset:]
+	if limit > 0 && len(nodes) > limit {
+		nodes = nodes[:limit]
+	}
+	return nodes
 }
