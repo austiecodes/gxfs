@@ -835,7 +835,7 @@ func TestDocPostgresServerE2E(t *testing.T) {
 		}
 
 		// Delete.
-		runCLI(t, repoRoot, cliPath, cliConfig, "rm", "/docs/new-file.txt")
+		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/docs/new-file.txt")
 	})
 
 	// Search should work (doc_postgres uses content_search tsvector).
