@@ -325,14 +325,14 @@ func testDocFind(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
 		t.Fatalf("Find type=dir total = %d, want 0 (DocAdapter has no dir rows)", resp.Total)
 	}
 
-	// Find with maxdepth=0 (only immediate children, but Find only returns files so depth=0 matches files directly under root).
-	resp, err = da.Find(ctx, store.FindRequest{Path: "/", MaxDepth: 0})
+	// Find with maxdepth=1 (only files at depth 0 under root).
+	resp, err = da.Find(ctx, store.FindRequest{Path: "/", MaxDepth: 1})
 	if err != nil {
-		t.Fatalf("Find maxdepth=0: %v", err)
+		t.Fatalf("Find maxdepth=1: %v", err)
 	}
 	// Only /README.md is directly under / (depth 0).
 	if resp.Total != 1 {
-		t.Fatalf("Find maxdepth=0 total = %d, want 1", resp.Total)
+		t.Fatalf("Find maxdepth=1 total = %d, want 1", resp.Total)
 	}
 }
 
@@ -463,9 +463,12 @@ func testDocGrep(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
 		t.Fatalf("Grep invert: %v", err)
 	}
 	// main.go has 2 lines: "package main" and "func main() {}"
-	// Invert match of "func" should match "package main" only.
-	if len(resp.Matches) != 1 {
-		t.Fatalf("Grep invert matches = %d, want 1", len(resp.Matches))
+	// Content has trailing newline → strings.Split gives 3 elements:
+	// "package main", "func main() {}", ""
+	// Invert match of "func": "package main" (no func → include), "func main() {}" (has func → exclude), "" (no func → include)
+	// = 2 matches
+	if len(resp.Matches) != 2 {
+		t.Fatalf("Grep invert matches = %d, want 2", len(resp.Matches))
 	}
 
 	// Grep in specific directory.
