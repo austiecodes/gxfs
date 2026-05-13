@@ -152,9 +152,10 @@ create index if not exists idx_content_search on "public"."vfs_content" using gi
 
 -- Core document table: one row per logical file (not per content blob).
 -- legacy_path tracks the original vfs_nodes path for idempotent backfill.
-create table if not exists "public".gxfs_docs (
+-- Nullable: future docs created outside the legacy migration have no legacy_path.
+create table if not exists "public"."gxfs_docs" (
     id uuid primary key default gen_random_uuid(),
-    legacy_path text unique not null,
+    legacy_path text,
     title text not null default '',
     content text not null default '',
     content_hash text not null,
@@ -164,31 +165,34 @@ create table if not exists "public".gxfs_docs (
     updated_at timestamptz not null default now()
 );
 
+-- Idempotent backfill: unique legacy_path only where present.
+create unique index if not exists idx_docs_legacy_path on "public"."gxfs_docs" (legacy_path) where legacy_path is not null;
+
 -- Full-text search GIN index on content_search
-create index if not exists idx_docs_content_search on "public".gxfs_docs using gin (content_search);
+create index if not exists idx_docs_content_search on "public"."gxfs_docs" using gin (content_search);
 
 -- Index on content_hash for BatchHashes lookups
-create index if not exists idx_docs_content_hash on "public".gxfs_docs (content_hash);
+create index if not exists idx_docs_content_hash on "public"."gxfs_docs" (content_hash);
 
 -- Repo → Doc mapping: replaces vfs_nodes + vfs_repo_nodes for file paths.
 -- Directories are implicit from path prefix (no dir rows needed).
-create table if not exists "public".gxfs_repo_paths (
+create table if not exists "public"."gxfs_repo_paths" (
     repo text not null,
     path text not null,
-    doc_id uuid not null references "public".gxfs_docs(id),
+    doc_id uuid not null references "public"."gxfs_docs"(id),
     size bigint not null default 0,
     mtime timestamptz not null default now(),
     primary key (repo, path)
 );
 
 -- Index for prefix queries (LS/Find/BatchHashes)
-create index if not exists idx_repo_paths_prefix on "public".gxfs_repo_paths (repo, path text_pattern_ops);
+create index if not exists idx_repo_paths_prefix on "public"."gxfs_repo_paths" (repo, path text_pattern_ops);
 
 -- Index for finding all paths pointing to a doc (for orphan detection)
-create index if not exists idx_repo_paths_doc_id on "public".gxfs_repo_paths (doc_id);
+create index if not exists idx_repo_paths_doc_id on "public"."gxfs_repo_paths" (doc_id);
 
 -- Collections: empty tables, no API in Phase 1A
-create table if not exists "public".gxfs_collections (
+create table if not exists "public"."gxfs_collections" (
     id uuid primary key default gen_random_uuid(),
     name text not null unique,
     description text not null default '',
@@ -197,9 +201,9 @@ create table if not exists "public".gxfs_collections (
     updated_at timestamptz not null default now()
 );
 
-create table if not exists "public".gxfs_collection_docs (
-    collection_id uuid not null references "public".gxfs_collections(id),
-    doc_id uuid not null references "public".gxfs_docs(id),
+create table if not exists "public"."gxfs_collection_docs" (
+    collection_id uuid not null references "public"."gxfs_collections"(id),
+    doc_id uuid not null references "public"."gxfs_docs"(id),
     path text not null,
     primary key (collection_id, path),
     unique (collection_id, doc_id)
@@ -311,7 +315,9 @@ func TestBackfillDocInsertSQL(t *testing.T) {
 
 	want := `insert into "myschema"."gxfs_docs"(legacy_path, title, content, content_hash) ` +
 		`values($1, $2, $3, $4) ` +
-		`on conflict(legacy_path) do update set content_hash = excluded.content_hash ` +
+		`on conflict(legacy_path) where legacy_path is not null ` +
+		`do update set title = excluded.title, content = excluded.content, ` +
+		`content_hash = excluded.content_hash, updated_at = now() ` +
 		`returning id`
 	if sql != want {
 		t.Fatalf("backfillDocInsertSQL() =\n%s\nwant:\n%s", sql, want)

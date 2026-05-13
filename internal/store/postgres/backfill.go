@@ -57,11 +57,19 @@ func BackfillDocs(ctx context.Context, pool *pgxpool.Pool, cfg Config) (*Backfil
 	if err != nil {
 		return nil, fmt.Errorf("query source data: %w", err)
 	}
-	defer rows.Close()
 
-	var result BackfillResult
-	docIDs := make(map[string]pgtype.UUID) // legacy_path → doc_id
-
+	// Collect all source rows first so we can close the result set before
+	// issuing INSERTs on the same single-connection transaction.
+	type sourceRow struct {
+		repo        string
+		filePath    string
+		content     string
+		hash        string
+		size        int64
+		mtime       time.Time
+		hashComputed bool
+	}
+	var sources []sourceRow
 	for rows.Next() {
 		var repo, filePath, content string
 		var contentHash *string
@@ -69,46 +77,63 @@ func BackfillDocs(ctx context.Context, pool *pgxpool.Pool, cfg Config) (*Backfil
 		var mtime pgtype.Timestamptz
 
 		if err := rows.Scan(&repo, &filePath, &content, &contentHash, &size, &mtime); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("scan source row: %w", err)
 		}
 
-		// Compute hash if NULL (or empty) in old table.
 		hash := ""
+		hashComputed := false
 		if contentHash != nil && *contentHash != "" {
 			hash = *contentHash
 		} else {
 			hash = store.HashContent(content)
+			hashComputed = true
 		}
 
+		mtimeVal := time.Now()
+		if mtime.Valid {
+			mtimeVal = mtime.Time
+		}
+
+		sources = append(sources, sourceRow{
+			repo:         repo,
+			filePath:     filePath,
+			content:      content,
+			hash:         hash,
+			size:         size,
+			mtime:        mtimeVal,
+			hashComputed: hashComputed,
+		})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read source rows: %w", err)
+	}
+
+	var result BackfillResult
+	docIDs := make(map[string]pgtype.UUID) // legacy_path → doc_id
+
+	for _, src := range sources {
 		// Insert doc once per unique path (idempotent via legacy_path UNIQUE).
-		docID, seen := docIDs[filePath]
+		docID, seen := docIDs[src.filePath]
 		if !seen {
-			title := path.Base(filePath)
-			if err := tx.QueryRow(ctx, docInsert, filePath, title, content, hash).Scan(&docID); err != nil {
-				return nil, fmt.Errorf("insert doc for %s: %w", filePath, err)
+			title := path.Base(src.filePath)
+			if err := tx.QueryRow(ctx, docInsert, src.filePath, title, src.content, src.hash).Scan(&docID); err != nil {
+				return nil, fmt.Errorf("insert doc for %s: %w", src.filePath, err)
 			}
-			docIDs[filePath] = docID
+			docIDs[src.filePath] = docID
 			result.DocsInserted++
 
-			// Only count hash computation on first encounter.
-			if contentHash == nil || *contentHash == "" {
+			if src.hashComputed {
 				result.HashesComputed++
 			}
 		}
 
 		// Insert repo_path (idempotent via PK).
-		mtimeVal := time.Now()
-		if mtime.Valid {
-			mtimeVal = mtime.Time
-		}
-		if _, err := tx.Exec(ctx, pathInsert, repo, filePath, docID, size, mtimeVal); err != nil {
-			return nil, fmt.Errorf("insert repo_path %s/%s: %w", repo, filePath, err)
+		if _, err := tx.Exec(ctx, pathInsert, src.repo, src.filePath, docID, src.size, src.mtime); err != nil {
+			return nil, fmt.Errorf("insert repo_path %s/%s: %w", src.repo, src.filePath, err)
 		}
 		result.PathsInserted++
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read source rows: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -176,8 +201,9 @@ func backfillSourceSQL(cfg Config) (string, error) {
 }
 
 // backfillDocInsertSQL returns a query that inserts a doc row and returns its
-// UUID. Idempotent via legacy_path UNIQUE: on conflict, updates content_hash
-// (handles NULL hash backfill) and returns the existing id.
+// UUID. Idempotent via legacy_path partial unique index: on conflict, updates
+// title, content, content_hash, and updated_at to keep all columns consistent
+// across re-runs.
 func backfillDocInsertSQL(cfg Config) (string, error) {
 	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
 	if err != nil {
@@ -186,7 +212,9 @@ func backfillDocInsertSQL(cfg Config) (string, error) {
 	return fmt.Sprintf(
 		"insert into %s(legacy_path, title, content, content_hash) "+
 			"values($1, $2, $3, $4) "+
-			"on conflict(legacy_path) do update set content_hash = excluded.content_hash "+
+			"on conflict(legacy_path) where legacy_path is not null "+
+			"do update set title = excluded.title, content = excluded.content, "+
+			"content_hash = excluded.content_hash, updated_at = now() "+
 			"returning id",
 		docsTable,
 	), nil
