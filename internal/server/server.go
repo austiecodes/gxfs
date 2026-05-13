@@ -5,17 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"gxfs/internal/store"
 )
 
 func NewHandler(adapter store.Adapter) http.Handler {
 	inv, _ := adapter.(store.CacheInvalidator)
-	return &handler{adapter: adapter, invalidator: inv}
+	h := &handler{adapter: adapter, invalidator: inv}
+	return &loggingMiddleware{next: h}
 }
 
 type handler struct {
@@ -287,4 +290,32 @@ func mapError(err error) (int, string) {
 	default:
 		return http.StatusInternalServerError, "INTERNAL_ERROR"
 	}
+}
+
+// loggingMiddleware wraps an http.Handler and logs structured request info.
+type loggingMiddleware struct {
+	next http.Handler
+}
+
+func (lm *loggingMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+	lm.next.ServeHTTP(rw, r)
+	slog.Info("request",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"status", rw.status,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+}
+
+// responseWriter wraps http.ResponseWriter to capture the status code.
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
 }
