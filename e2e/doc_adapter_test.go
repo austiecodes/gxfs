@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -12,12 +13,13 @@ import (
 	"gxfs/internal/store/postgres"
 )
 
-// TestDocAdapterIntegration verifies the read-only DocAdapter returns correct
-// results when queried against backfilled document-centric tables.
+// TestDocAdapterIntegration verifies the read-only DocAdapter returns results
+// equivalent to the old Adapter after backfill.
 //
-// Test data: same seed as TestBackfillDocsIntegration (5 files in test-repo,
-// 3 in mirror-repo). This test runs BackfillDocs first, then exercises every
-// read method of DocAdapter.
+// Strategy: run BackfillDocs, then create both old Adapter and DocAdapter,
+// and compare their responses for LS/Cat/Stat/Find/Search/BatchHashes/Grep/Tree.
+// The old Adapter reads from vfs_nodes/vfs_content, the DocAdapter reads from
+// gxfs_docs/gxfs_repo_paths. Results must be equivalent.
 func TestDocAdapterIntegration(t *testing.T) {
 	requireDocker(t)
 
@@ -54,57 +56,61 @@ func TestDocAdapterIntegration(t *testing.T) {
 		t.Fatalf("BackfillDocs: %v", err)
 	}
 
-	// Create DocAdapter.
-	da := postgres.NewDocAdapter(pool, cfg)
+	// Create both adapters.
+	oldAdapter := postgres.New(pool, cfg)
+
+	docAdapter := postgres.NewDocAdapter(pool, cfg)
 
 	// --- Write methods must return ErrReadOnlyMount ---
 	t.Run("WriteMethods", func(t *testing.T) {
-		testWriteMethodsReturnReadOnly(t, ctx, da)
+		testWriteMethodsReturnReadOnly(t, ctx, docAdapter)
 	})
 
-	// --- Cat ---
+	// --- Comparison tests: old vs new ---
 	t.Run("Cat", func(t *testing.T) {
-		testDocCat(t, ctx, da)
+		compareCat(t, ctx, oldAdapter, docAdapter)
 	})
 
-	// --- Stat ---
 	t.Run("Stat", func(t *testing.T) {
-		testDocStat(t, ctx, da)
+		compareStat(t, ctx, oldAdapter, docAdapter)
 	})
 
-	// --- LS ---
 	t.Run("LS", func(t *testing.T) {
-		testDocLS(t, ctx, da)
+		compareLS(t, ctx, oldAdapter, docAdapter)
 	})
 
-	// --- Find ---
 	t.Run("Find", func(t *testing.T) {
-		testDocFind(t, ctx, da)
+		compareFind(t, ctx, oldAdapter, docAdapter)
 	})
 
-	// --- Search ---
 	t.Run("Search", func(t *testing.T) {
-		testDocSearch(t, ctx, da)
+		compareSearch(t, ctx, oldAdapter, docAdapter)
 	})
 
-	// --- BatchHashes ---
 	t.Run("BatchHashes", func(t *testing.T) {
-		testDocBatchHashes(t, ctx, da)
+		compareBatchHashes(t, ctx, oldAdapter, docAdapter)
 	})
 
-	// --- Grep ---
 	t.Run("Grep", func(t *testing.T) {
-		testDocGrep(t, ctx, da)
+		compareGrep(t, ctx, oldAdapter, docAdapter)
 	})
 
-	// --- Tree ---
 	t.Run("Tree", func(t *testing.T) {
-		testDocTree(t, ctx, da)
+		compareTree(t, ctx, oldAdapter, docAdapter)
+	})
+
+	// --- Edge cases ---
+	t.Run("NonexistentRoot", func(t *testing.T) {
+		compareNonexistentRoot(t, ctx, oldAdapter, docAdapter)
+	})
+
+	t.Run("RelativePath", func(t *testing.T) {
+		compareRelativePath(t, ctx, oldAdapter, docAdapter)
 	})
 }
 
 // testWriteMethodsReturnReadOnly verifies Put, Delete, Edit return ErrReadOnlyMount.
-func testWriteMethodsReturnReadOnly(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
+func testWriteMethodsReturnReadOnly(t *testing.T, ctx context.Context, da store.Adapter) {
 	t.Helper()
 
 	_, err := da.Put(ctx, store.PutRequest{Path: "/test.txt", Content: "hello"})
@@ -123,462 +129,517 @@ func testWriteMethodsReturnReadOnly(t *testing.T, ctx context.Context, da *postg
 	}
 }
 
-// testDocCat verifies Cat returns correct content and hash.
-func testDocCat(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
+// --- Comparison helpers ---
+
+func compareCat(t *testing.T, ctx context.Context, old, new store.Adapter) {
 	t.Helper()
 
-	resp, err := da.Cat(ctx, store.CatRequest{Path: "/README.md"})
-	if err != nil {
-		t.Fatalf("Cat /README.md: %v", err)
-	}
-	if resp.Content != "Hello World\n" {
-		t.Fatalf("Cat /README.md content = %q, want %q", resp.Content, "Hello World\n")
-	}
-	if resp.Hash == "" {
-		t.Fatalf("Cat /README.md hash is empty, want non-empty")
-	}
-
-	// Cat non-existent file.
-	_, err = da.Cat(ctx, store.CatRequest{Path: "/nonexistent.txt"})
-	if err == nil {
-		t.Fatal("Cat nonexistent: expected error, got nil")
-	}
-
-	// Cat deep nested file.
-	resp, err = da.Cat(ctx, store.CatRequest{Path: "/docs/api/reference.md"})
-	if err != nil {
-		t.Fatalf("Cat /docs/api/reference.md: %v", err)
-	}
-	if resp.Content != "API reference\n" {
-		t.Fatalf("Cat /docs/api/reference.md content = %q, want %q", resp.Content, "API reference\n")
-	}
-}
-
-// testDocStat verifies Stat for files and implicit directories.
-func testDocStat(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
-	t.Helper()
-
-	// Stat a file.
-	resp, err := da.Stat(ctx, store.StatRequest{Path: "/src/main.go"})
-	if err != nil {
-		t.Fatalf("Stat /src/main.go: %v", err)
-	}
-	if resp.Node.Kind != "file" {
-		t.Fatalf("Stat /src/main.go kind = %q, want file", resp.Node.Kind)
-	}
-	if resp.Node.Name != "main.go" {
-		t.Fatalf("Stat /src/main.go name = %q, want main.go", resp.Node.Name)
-	}
-	if resp.Node.Hash == "" {
-		t.Fatalf("Stat /src/main.go hash is empty")
-	}
-
-	// Stat an implicit directory.
-	resp, err = da.Stat(ctx, store.StatRequest{Path: "/docs"})
-	if err != nil {
-		t.Fatalf("Stat /docs: %v", err)
-	}
-	if resp.Node.Kind != "dir" {
-		t.Fatalf("Stat /docs kind = %q, want dir", resp.Node.Kind)
-	}
-	if resp.Node.Name != "docs" {
-		t.Fatalf("Stat /docs name = %q, want docs", resp.Node.Name)
-	}
-
-	// Stat root directory.
-	resp, err = da.Stat(ctx, store.StatRequest{Path: "/"})
-	if err != nil {
-		t.Fatalf("Stat /: %v", err)
-	}
-	if resp.Node.Kind != "dir" {
-		t.Fatalf("Stat / kind = %q, want dir", resp.Node.Kind)
-	}
-
-	// Stat nested implicit dir.
-	resp, err = da.Stat(ctx, store.StatRequest{Path: "/docs/api"})
-	if err != nil {
-		t.Fatalf("Stat /docs/api: %v", err)
-	}
-	if resp.Node.Kind != "dir" {
-		t.Fatalf("Stat /docs/api kind = %q, want dir", resp.Node.Kind)
-	}
-
-	// Stat nonexistent.
-	_, err = da.Stat(ctx, store.StatRequest{Path: "/nope"})
-	if err == nil {
-		t.Fatal("Stat /nope: expected error, got nil")
-	}
-}
-
-// testDocLS verifies LS with implicit directories, pagination, and recursive.
-func testDocLS(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
-	t.Helper()
-
-	// LS / — should have 3 top-level entries: /docs (dir), /src (dir), /README.md (file).
-	resp, err := da.LS(ctx, store.LSRequest{Path: "/"})
-	if err != nil {
-		t.Fatalf("LS /: %v", err)
-	}
-	if resp.Total != 3 {
-		t.Fatalf("LS / total = %d, want 3", resp.Total)
-	}
-	kinds := make(map[string]string)
-	for _, n := range resp.Nodes {
-		kinds[n.Name] = n.Kind
-	}
-	if kinds["docs"] != "dir" {
-		t.Fatalf("LS /: 'docs' kind = %q, want dir", kinds["docs"])
-	}
-	if kinds["src"] != "dir" {
-		t.Fatalf("LS /: 'src' kind = %q, want dir", kinds["src"])
-	}
-	if kinds["README.md"] != "file" {
-		t.Fatalf("LS /: 'README.md' kind = %q, want file", kinds["README.md"])
-	}
-
-	// LS /docs — should have readme.md (file) + api (dir).
-	resp, err = da.LS(ctx, store.LSRequest{Path: "/docs"})
-	if err != nil {
-		t.Fatalf("LS /docs: %v", err)
-	}
-	if resp.Total != 2 {
-		t.Fatalf("LS /docs total = %d, want 2", resp.Total)
-	}
-
-	// LS /docs/api — should have 2 files.
-	resp, err = da.LS(ctx, store.LSRequest{Path: "/docs/api"})
-	if err != nil {
-		t.Fatalf("LS /docs/api: %v", err)
-	}
-	if resp.Total != 2 {
-		t.Fatalf("LS /docs/api total = %d, want 2", resp.Total)
-	}
-	for _, n := range resp.Nodes {
-		if n.Kind != "file" {
-			t.Fatalf("LS /docs/api: found non-file %q kind=%q", n.Name, n.Kind)
+	paths := []string{"/README.md", "/docs/readme.md", "/docs/api/reference.md", "/src/main.go"}
+	for _, p := range paths {
+		oldResp, err := old.Cat(ctx, store.CatRequest{Path: p})
+		if err != nil {
+			t.Fatalf("old Cat %s: %v", p, err)
+		}
+		newResp, err := new.Cat(ctx, store.CatRequest{Path: p})
+		if err != nil {
+			t.Fatalf("new Cat %s: %v", p, err)
+		}
+		if oldResp.Content != newResp.Content {
+			t.Fatalf("Cat %s content mismatch:\nold: %q\nnew: %q", p, oldResp.Content, newResp.Content)
+		}
+		if newResp.Hash == "" {
+			t.Fatalf("Cat %s hash is empty", p)
 		}
 	}
 
-	// LS /docs recursive — should include all nested files.
-	resp, err = da.LS(ctx, store.LSRequest{Path: "/docs", Recursive: true})
-	if err != nil {
-		t.Fatalf("LS /docs recursive: %v", err)
-	}
-	// /docs/readme.md, /docs/api (dir), /docs/api/reference.md, /docs/api/guide.md
-	if resp.Total != 4 {
-		t.Fatalf("LS /docs recursive total = %d, want 4", resp.Total)
-	}
-
-	// LS pagination: limit=1, offset=0.
-	resp, err = da.LS(ctx, store.LSRequest{Path: "/", Limit: 1, Offset: 0})
-	if err != nil {
-		t.Fatalf("LS / limit=1: %v", err)
-	}
-	if len(resp.Nodes) != 1 {
-		t.Fatalf("LS / limit=1 returned %d nodes, want 1", len(resp.Nodes))
-	}
-	if resp.Total != 3 {
-		t.Fatalf("LS / limit=1 total = %d, want 3", resp.Total)
+	// Both should 404 for nonexistent.
+	_, oldErr := old.Cat(ctx, store.CatRequest{Path: "/nonexistent.txt"})
+	_, newErr := new.Cat(ctx, store.CatRequest{Path: "/nonexistent.txt"})
+	if oldErr == nil || newErr == nil {
+		t.Fatal("Cat nonexistent: expected errors from both adapters")
 	}
 }
 
-// testDocFind verifies Find with name/depth filters.
-func testDocFind(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
+func compareStat(t *testing.T, ctx context.Context, old, new store.Adapter) {
 	t.Helper()
 
-	// Find all files (no filters).
-	resp, err := da.Find(ctx, store.FindRequest{Path: "/"})
-	if err != nil {
-		t.Fatalf("Find /: %v", err)
-	}
-	if resp.Total != 5 {
-		t.Fatalf("Find / total = %d, want 5", resp.Total)
-	}
-
-	// Find by name.
-	resp, err = da.Find(ctx, store.FindRequest{Path: "/", Name: "readme.md"})
-	if err != nil {
-		t.Fatalf("Find name=readme.md: %v", err)
-	}
-	if resp.Total != 1 {
-		t.Fatalf("Find name=readme.md total = %d, want 1", resp.Total)
-	}
-	if len(resp.Nodes) > 0 && resp.Nodes[0].Path != "/docs/readme.md" {
-		t.Fatalf("Find name=readme.md path = %q, want /docs/readme.md", resp.Nodes[0].Path)
-	}
-
-	// Find by case-insensitive name.
-	resp, err = da.Find(ctx, store.FindRequest{Path: "/", IName: "README.MD"})
-	if err != nil {
-		t.Fatalf("Find iname=README.MD: %v", err)
-	}
-	if resp.Total != 2 {
-		t.Fatalf("Find iname=README.MD total = %d, want 2 (README.md + readme.md)", resp.Total)
-	}
-
-	// Find type=dir — DocAdapter only has files, should return 0.
-	resp, err = da.Find(ctx, store.FindRequest{Path: "/", Type: "dir"})
-	if err != nil {
-		t.Fatalf("Find type=dir: %v", err)
-	}
-	if resp.Total != 0 {
-		t.Fatalf("Find type=dir total = %d, want 0 (DocAdapter has no dir rows)", resp.Total)
-	}
-
-	// Find with maxdepth=1 (only files at depth 0 under root).
-	resp, err = da.Find(ctx, store.FindRequest{Path: "/", MaxDepth: 1})
-	if err != nil {
-		t.Fatalf("Find maxdepth=1: %v", err)
-	}
-	// Only /README.md is directly under / (depth 0).
-	if resp.Total != 1 {
-		t.Fatalf("Find maxdepth=1 total = %d, want 1", resp.Total)
-	}
-}
-
-// testDocSearch verifies full-text search over doc tables.
-func testDocSearch(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
-	t.Helper()
-
-	// Search for "main" — should hit main.go.
-	resp, err := da.Search(ctx, store.SearchRequest{Query: "main"})
-	if err != nil {
-		t.Fatalf("Search 'main': %v", err)
-	}
-	if resp.Total != 1 {
-		t.Fatalf("Search 'main' total = %d, want 1", resp.Total)
-	}
-	if len(resp.Results) > 0 && resp.Results[0].Path != "/src/main.go" {
-		t.Fatalf("Search 'main' path = %q, want /src/main.go", resp.Results[0].Path)
-	}
-
-	// Search for "hello" — should hit README.md and guide.md.
-	resp, err = da.Search(ctx, store.SearchRequest{Query: "hello"})
-	if err != nil {
-		t.Fatalf("Search 'hello': %v", err)
-	}
-	if resp.Total != 2 {
-		t.Fatalf("Search 'hello' total = %d, want 2", resp.Total)
-	}
-
-	// Search with path filter.
-	resp, err = da.Search(ctx, store.SearchRequest{Query: "hello", Path: "/docs"})
-	if err != nil {
-		t.Fatalf("Search 'hello' path=/docs: %v", err)
-	}
-	// Only /docs/api/guide.md is under /docs.
-	if resp.Total != 1 {
-		t.Fatalf("Search 'hello' path=/docs total = %d, want 1", resp.Total)
-	}
-
-	// Search for nonexistent.
-	resp, err = da.Search(ctx, store.SearchRequest{Query: "xyzzyplugh"})
-	if err != nil {
-		t.Fatalf("Search nonexistent: %v", err)
-	}
-	if resp.Total != 0 {
-		t.Fatalf("Search nonexistent total = %d, want 0", resp.Total)
-	}
-}
-
-// testDocBatchHashes verifies BatchHashes returns hashes for all files.
-func testDocBatchHashes(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
-	t.Helper()
-
-	resp, err := da.BatchHashes(ctx, store.HashRequest{})
-	if err != nil {
-		t.Fatalf("BatchHashes: %v", err)
-	}
-	// test-repo has 5 files, all should have hash.
-	if len(resp.Hashes) != 5 {
-		t.Fatalf("BatchHashes count = %d, want 5", len(resp.Hashes))
-	}
-	for _, h := range resp.Hashes {
-		if h.Hash == "" {
-			t.Fatalf("BatchHashes: empty hash for %q", h.Path)
+	// Stat files.
+	paths := []string{"/src/main.go", "/README.md", "/docs/api/guide.md"}
+	for _, p := range paths {
+		oldResp, err := old.Stat(ctx, store.StatRequest{Path: p})
+		if err != nil {
+			t.Fatalf("old Stat %s: %v", p, err)
+		}
+		newResp, err := new.Stat(ctx, store.StatRequest{Path: p})
+		if err != nil {
+			t.Fatalf("new Stat %s: %v", p, err)
+		}
+		if oldResp.Node.Kind != newResp.Node.Kind {
+			t.Fatalf("Stat %s kind: old=%q new=%q", p, oldResp.Node.Kind, newResp.Node.Kind)
+		}
+		if oldResp.Node.Name != newResp.Node.Name {
+			t.Fatalf("Stat %s name: old=%q new=%q", p, oldResp.Node.Name, newResp.Node.Name)
+		}
+		if newResp.Node.Hash == "" {
+			t.Fatalf("Stat %s hash is empty", p)
 		}
 	}
 
-	// BatchHashes with path filter.
-	resp, err = da.BatchHashes(ctx, store.HashRequest{Path: "/docs"})
-	if err != nil {
-		t.Fatalf("BatchHashes path=/docs: %v", err)
+	// Stat implicit dirs.
+	for _, p := range []string{"/docs", "/docs/api", "/src"} {
+		oldResp, err := old.Stat(ctx, store.StatRequest{Path: p})
+		if err != nil {
+			t.Fatalf("old Stat dir %s: %v", p, err)
+		}
+		newResp, err := new.Stat(ctx, store.StatRequest{Path: p})
+		if err != nil {
+			t.Fatalf("new Stat dir %s: %v", p, err)
+		}
+		if oldResp.Node.Kind != "dir" || newResp.Node.Kind != "dir" {
+			t.Fatalf("Stat dir %s: old kind=%q new kind=%q", p, oldResp.Node.Kind, newResp.Node.Kind)
+		}
 	}
-	// /docs/readme.md, /docs/api/reference.md, /docs/api/guide.md
-	if len(resp.Hashes) != 3 {
-		t.Fatalf("BatchHashes path=/docs count = %d, want 3", len(resp.Hashes))
+
+	// Root dir.
+	oldResp, err := old.Stat(ctx, store.StatRequest{Path: "/"})
+	if err != nil {
+		t.Fatalf("old Stat /: %v", err)
+	}
+	newResp, err := new.Stat(ctx, store.StatRequest{Path: "/"})
+	if err != nil {
+		t.Fatalf("new Stat /: %v", err)
+	}
+	if oldResp.Node.Kind != "dir" || newResp.Node.Kind != "dir" {
+		t.Fatalf("Stat /: old=%q new=%q", oldResp.Node.Kind, newResp.Node.Kind)
+	}
+
+	// Nonexistent.
+	_, oldErr := old.Stat(ctx, store.StatRequest{Path: "/nope"})
+	_, newErr := new.Stat(ctx, store.StatRequest{Path: "/nope"})
+	if oldErr == nil || newErr == nil {
+		t.Fatal("Stat /nope: both should error")
 	}
 }
 
-// testDocGrep verifies Grep over doc table content.
-func testDocGrep(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
+func compareLS(t *testing.T, ctx context.Context, old, new store.Adapter) {
 	t.Helper()
 
-	// Grep for "Hello" in all files.
-	resp, err := da.Grep(ctx, store.GrepRequest{Path: "/", Pattern: "Hello"})
-	if err != nil {
-		t.Fatalf("Grep Hello: %v", err)
-	}
-	// "Hello World\n" appears in README.md and guide.md.
-	if len(resp.Matches) != 2 {
-		t.Fatalf("Grep Hello matches = %d, want 2", len(resp.Matches))
-	}
-
-	// Grep with context.
-	resp, err = da.Grep(ctx, store.GrepRequest{Path: "/", Pattern: "func", ContextAfter: 1})
-	if err != nil {
-		t.Fatalf("Grep func: %v", err)
-	}
-	if len(resp.Matches) != 1 {
-		t.Fatalf("Grep func matches = %d, want 1", len(resp.Matches))
-	}
-	if resp.Matches[0].Path != "/src/main.go" {
-		t.Fatalf("Grep func path = %q, want /src/main.go", resp.Matches[0].Path)
-	}
-	if len(resp.Matches[0].After) != 1 {
-		t.Fatalf("Grep func context after = %d lines, want 1", len(resp.Matches[0].After))
+	cases := []struct {
+		name string
+		req  store.LSRequest
+	}{
+		{"root", store.LSRequest{Path: "/"}},
+		{"root recursive", store.LSRequest{Path: "/", Recursive: true}},
+		{"docs", store.LSRequest{Path: "/docs"}},
+		{"docs recursive", store.LSRequest{Path: "/docs", Recursive: true}},
+		{"docs/api", store.LSRequest{Path: "/docs/api"}},
+		{"src", store.LSRequest{Path: "/src"}},
+		{"root limit1", store.LSRequest{Path: "/", Limit: 1}},
+		{"root offset1", store.LSRequest{Path: "/", Offset: 1}},
 	}
 
-	// Grep with regex.
-	resp, err = da.Grep(ctx, store.GrepRequest{Path: "/", Pattern: "^package", Regex: true})
-	if err != nil {
-		t.Fatalf("Grep regex ^package: %v", err)
-	}
-	if len(resp.Matches) != 1 {
-		t.Fatalf("Grep ^package matches = %d, want 1", len(resp.Matches))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldResp, err := old.LS(ctx, tc.req)
+			if err != nil {
+				t.Fatalf("old LS: %v", err)
+			}
+			newResp, err := new.LS(ctx, tc.req)
+			if err != nil {
+				t.Fatalf("new LS: %v", err)
+			}
+
+			// Compare totals.
+			if oldResp.Total != newResp.Total {
+				t.Fatalf("total mismatch: old=%d new=%d", oldResp.Total, newResp.Total)
+			}
+
+			// Compare node kinds and names (order may differ).
+			oldNodes := nodeSet(oldResp.Nodes)
+			newNodes := nodeSet(newResp.Nodes)
+			for k, v := range oldNodes {
+				if newNodes[k] != v {
+					t.Fatalf("node mismatch for %q: old kind=%q new kind=%q", k, v, newNodes[k])
+				}
+			}
+			if len(oldNodes) != len(newNodes) {
+				t.Fatalf("node count: old=%d new=%d\nold: %v\nnew: %v", len(oldNodes), len(newNodes), oldNodes, newNodes)
+			}
+		})
 	}
 
-	// Grep with case-insensitive.
-	resp, err = da.Grep(ctx, store.GrepRequest{Path: "/", Pattern: "hello", CaseInsensitive: true})
-	if err != nil {
-		t.Fatalf("Grep hello -i: %v", err)
-	}
-	if len(resp.Matches) != 2 {
-		t.Fatalf("Grep hello -i matches = %d, want 2", len(resp.Matches))
-	}
-
-	// Grep with invert match.
-	resp, err = da.Grep(ctx, store.GrepRequest{Path: "/src", Pattern: "func", Invert: true})
-	if err != nil {
-		t.Fatalf("Grep invert: %v", err)
-	}
-	// main.go has 2 lines: "package main" and "func main() {}"
-	// Content has trailing newline → strings.Split gives 3 elements:
-	// "package main", "func main() {}", ""
-	// Invert match of "func": "package main" (no func → include), "func main() {}" (has func → exclude), "" (no func → include)
-	// = 2 matches
-	if len(resp.Matches) != 2 {
-		t.Fatalf("Grep invert matches = %d, want 2", len(resp.Matches))
-	}
-
-	// Grep in specific directory.
-	resp, err = da.Grep(ctx, store.GrepRequest{Path: "/docs/api", Pattern: "API"})
-	if err != nil {
-		t.Fatalf("Grep /docs/api API: %v", err)
-	}
-	if len(resp.Matches) != 1 {
-		t.Fatalf("Grep /docs/api API matches = %d, want 1", len(resp.Matches))
-	}
-
-	// Grep with nonexistent path should error.
-	_, err = da.Grep(ctx, store.GrepRequest{Path: "/nonexistent", Pattern: "test"})
-	if err == nil {
-		t.Fatal("Grep /nonexistent: expected error, got nil")
-	}
-
-	// Grep with include glob.
-	resp, err = da.Grep(ctx, store.GrepRequest{Path: "/", Pattern: "Hello", Include: "*.md"})
-	if err != nil {
-		t.Fatalf("Grep include *.md: %v", err)
-	}
-	if len(resp.Matches) != 2 {
-		t.Fatalf("Grep include *.md matches = %d, want 2", len(resp.Matches))
-	}
-
-	// Grep with exclude glob.
-	resp, err = da.Grep(ctx, store.GrepRequest{Path: "/", Pattern: "Hello", Exclude: "*.go"})
-	if err != nil {
-		t.Fatalf("Grep exclude *.go: %v", err)
-	}
-	if len(resp.Matches) != 2 {
-		t.Fatalf("Grep exclude *.go matches = %d, want 2", len(resp.Matches))
-	}
-
-	// Verify match line numbers start at 1.
-	for _, m := range resp.Matches {
-		if m.Line < 1 {
-			t.Fatalf("Grep match line = %d, want >= 1", m.Line)
+	// Nonexistent root: both should error.
+	t.Run("nonexistent", func(t *testing.T) {
+		_, oldErr := old.LS(ctx, store.LSRequest{Path: "/nope"})
+		_, newErr := new.LS(ctx, store.LSRequest{Path: "/nope"})
+		if oldErr == nil {
+			t.Fatal("old LS /nope: expected error")
 		}
-		if m.Text == "" {
-			t.Fatalf("Grep match text is empty for %q line %d", m.Path, m.Line)
+		if newErr == nil {
+			t.Fatal("new LS /nope: expected error")
 		}
-	}
+	})
 }
 
-// testDocTree verifies Tree output with implicit directories.
-func testDocTree(t *testing.T, ctx context.Context, da *postgres.DocAdapter) {
+func compareFind(t *testing.T, ctx context.Context, old, new store.Adapter) {
 	t.Helper()
 
-	// Tree from root.
-	resp, err := da.Tree(ctx, store.TreeRequest{Path: "/"})
-	if err != nil {
-		t.Fatalf("Tree /: %v", err)
-	}
-	if resp.Root.Kind != "dir" {
-		t.Fatalf("Tree / root kind = %q, want dir", resp.Root.Kind)
+	cases := []struct {
+		name string
+		req  store.FindRequest
+	}{
+		{"all files", store.FindRequest{Path: "/"}},
+		{"name readme.md", store.FindRequest{Path: "/", Name: "readme.md"}},
+		{"name glob *.md", store.FindRequest{Path: "/", Name: "*.md"}},
+		{"iname README.MD", store.FindRequest{Path: "/", IName: "README.MD"}},
+		{"type file", store.FindRequest{Path: "/", Type: "file"}},
+		{"type dir", store.FindRequest{Path: "/", Type: "dir"}},
+		{"maxdepth 1", store.FindRequest{Path: "/", MaxDepth: 1}},
+		{"maxdepth 2", store.FindRequest{Path: "/", MaxDepth: 2}},
+		{"mindepth 1", store.FindRequest{Path: "/", MinDepth: 1}},
+		{"under /docs", store.FindRequest{Path: "/docs"}},
+		{"name *.go under /", store.FindRequest{Path: "/", Name: "*.go"}},
 	}
 
-	// The text should contain all file and directory entries.
-	text := resp.Text
-	for _, expected := range []string{"docs/", "src/", "README.md", "readme.md", "reference.md", "guide.md", "main.go"} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("Tree / text missing %q\nfull text:\n%s", expected, text)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldResp, err := old.Find(ctx, tc.req)
+			if err != nil {
+				t.Fatalf("old Find: %v", err)
+			}
+			newResp, err := new.Find(ctx, tc.req)
+			if err != nil {
+				t.Fatalf("new Find: %v", err)
+			}
+
+			// Compare totals.
+			if oldResp.Total != newResp.Total {
+				t.Fatalf("total mismatch: old=%d new=%d\nold paths: %v\nnew paths: %v",
+					oldResp.Total, newResp.Total,
+					nodePaths(oldResp.Nodes), nodePaths(newResp.Nodes))
+			}
+
+			// Compare paths (ignore order).
+			oldPaths := sortedNodePaths(oldResp.Nodes)
+			newPaths := sortedNodePaths(newResp.Nodes)
+			for i := range oldPaths {
+				if oldPaths[i] != newPaths[i] {
+					t.Fatalf("path mismatch at %d: old=%q new=%q", i, oldPaths[i], newPaths[i])
+				}
+			}
+		})
+	}
+
+	// Nonexistent root: both should error.
+	t.Run("nonexistent", func(t *testing.T) {
+		_, oldErr := old.Find(ctx, store.FindRequest{Path: "/nope"})
+		_, newErr := new.Find(ctx, store.FindRequest{Path: "/nope"})
+		if oldErr == nil {
+			t.Fatal("old Find /nope: expected error")
 		}
+		if newErr == nil {
+			t.Fatal("new Find /nope: expected error")
+		}
+	})
+}
+
+func compareSearch(t *testing.T, ctx context.Context, old, new store.Adapter) {
+	t.Helper()
+
+	cases := []struct {
+		name  string
+		query string
+		path  string
+	}{
+		{"main", "main", "/"},
+		{"hello", "hello", "/"},
+		{"hello under /docs", "hello", "/docs"},
+		{"nonexistent", "xyzzyplugh", "/"},
 	}
 
-	// Tree /docs — should contain api/ and readme.md.
-	resp, err = da.Tree(ctx, store.TreeRequest{Path: "/docs"})
-	if err != nil {
-		t.Fatalf("Tree /docs: %v", err)
-	}
-	if !strings.Contains(resp.Text, "api/") {
-		t.Fatalf("Tree /docs missing api/\ntext:\n%s", resp.Text)
-	}
-	if !strings.Contains(resp.Text, "readme.md") {
-		t.Fatalf("Tree /docs missing readme.md\ntext:\n%s", resp.Text)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldResp, err := old.Search(ctx, store.SearchRequest{Query: tc.query, Path: tc.path})
+			if err != nil {
+				t.Fatalf("old Search: %v", err)
+			}
+			newResp, err := new.Search(ctx, store.SearchRequest{Query: tc.query, Path: tc.path})
+			if err != nil {
+				t.Fatalf("new Search: %v", err)
+			}
 
-	// Tree with showSize.
-	resp, err = da.Tree(ctx, store.TreeRequest{Path: "/", ShowSize: true})
-	if err != nil {
-		t.Fatalf("Tree / showSize: %v", err)
-	}
-	// File entries should have [size] suffix.
-	if !strings.Contains(resp.Text, "README.md") {
-		t.Fatalf("Tree / showSize missing README.md\ntext:\n%s", resp.Text)
-	}
+			if oldResp.Total != newResp.Total {
+				t.Fatalf("total mismatch: old=%d new=%d", oldResp.Total, newResp.Total)
+			}
 
-	// Tree with dirsOnly.
-	resp, err = da.Tree(ctx, store.TreeRequest{Path: "/", DirsOnly: true})
-	if err != nil {
-		t.Fatalf("Tree / dirsOnly: %v", err)
-	}
-	// Should contain dirs but not files.
-	if !strings.Contains(resp.Text, "docs/") {
-		t.Fatalf("Tree / dirsOnly missing docs/\ntext:\n%s", resp.Text)
-	}
-	if strings.Contains(resp.Text, "README.md") {
-		t.Fatalf("Tree / dirsOnly should not contain README.md\ntext:\n%s", resp.Text)
-	}
-
-	// Tree nonexistent path.
-	_, err = da.Tree(ctx, store.TreeRequest{Path: "/nonexistent"})
-	if err == nil {
-		t.Fatal("Tree /nonexistent: expected error, got nil")
+			oldPaths := searchPaths(oldResp.Results)
+			newPaths := searchPaths(newResp.Results)
+			if len(oldPaths) != len(newPaths) {
+				t.Fatalf("result count: old=%d new=%d", len(oldPaths), len(newPaths))
+			}
+			for i := range oldPaths {
+				if oldPaths[i] != newPaths[i] {
+					t.Fatalf("path mismatch at %d: old=%q new=%q", i, oldPaths[i], newPaths[i])
+				}
+			}
+		})
 	}
 }
 
-// testDocAdapterMirrorRepo verifies DocAdapter works for a different repo
+func compareBatchHashes(t *testing.T, ctx context.Context, old, new store.Adapter) {
+	t.Helper()
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"all", "/"},
+		{"under /docs", "/docs"},
+		{"under /src", "/src"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldResp, err := old.BatchHashes(ctx, store.HashRequest{Path: tc.path})
+			if err != nil {
+				t.Fatalf("old BatchHashes: %v", err)
+			}
+			newResp, err := new.BatchHashes(ctx, store.HashRequest{Path: tc.path})
+			if err != nil {
+				t.Fatalf("new BatchHashes: %v", err)
+			}
+
+			if len(oldResp.Hashes) != len(newResp.Hashes) {
+				t.Fatalf("hash count: old=%d new=%d", len(oldResp.Hashes), len(newResp.Hashes))
+			}
+
+			oldMap := hashMap(oldResp.Hashes)
+			newMap := hashMap(newResp.Hashes)
+			for p, h := range oldMap {
+				if newMap[p] != h {
+					t.Fatalf("hash mismatch for %q: old=%q new=%q", p, h, newMap[p])
+				}
+			}
+		})
+	}
+}
+
+func compareGrep(t *testing.T, ctx context.Context, old, new store.Adapter) {
+	t.Helper()
+
+	cases := []struct {
+		name string
+		req  store.GrepRequest
+	}{
+		{"Hello", store.GrepRequest{Path: "/", Pattern: "Hello"}},
+		{"func", store.GrepRequest{Path: "/", Pattern: "func"}},
+		{"regex ^package", store.GrepRequest{Path: "/", Pattern: "^package", Regex: true}},
+		{"case-insensitive hello", store.GrepRequest{Path: "/", Pattern: "hello", CaseInsensitive: true}},
+		{"invert func /src", store.GrepRequest{Path: "/src", Pattern: "func", Invert: true}},
+		{"API in /docs/api", store.GrepRequest{Path: "/docs/api", Pattern: "API"}},
+		{"include *.md", store.GrepRequest{Path: "/", Pattern: "Hello", Include: "*.md"}},
+		{"exclude *.go", store.GrepRequest{Path: "/", Pattern: "Hello", Exclude: "*.go"}},
+		{"context after", store.GrepRequest{Path: "/", Pattern: "func", ContextAfter: 1}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldResp, err := old.Grep(ctx, tc.req)
+			if err != nil {
+				t.Fatalf("old Grep: %v", err)
+			}
+			newResp, err := new.Grep(ctx, tc.req)
+			if err != nil {
+				t.Fatalf("new Grep: %v", err)
+			}
+
+			if len(oldResp.Matches) != len(newResp.Matches) {
+				t.Fatalf("match count: old=%d new=%d\nold: %v\nnew: %v",
+					len(oldResp.Matches), len(newResp.Matches),
+					matchPaths(oldResp.Matches), matchPaths(newResp.Matches))
+			}
+
+			oldMatches := matchSet(oldResp.Matches)
+			newMatches := matchSet(newResp.Matches)
+			for k := range oldMatches {
+				if !newMatches[k] {
+					t.Fatalf("old match %q not found in new results", k)
+				}
+			}
+		})
+	}
+
+	// Nonexistent path: both should error.
+	t.Run("nonexistent", func(t *testing.T) {
+		_, oldErr := old.Grep(ctx, store.GrepRequest{Path: "/nope", Pattern: "test"})
+		_, newErr := new.Grep(ctx, store.GrepRequest{Path: "/nope", Pattern: "test"})
+		if oldErr == nil {
+			t.Fatal("old Grep /nope: expected error")
+		}
+		if newErr == nil {
+			t.Fatal("new Grep /nope: expected error")
+		}
+	})
+}
+
+func compareTree(t *testing.T, ctx context.Context, old, new store.Adapter) {
+	t.Helper()
+
+	cases := []struct {
+		name string
+		req  store.TreeRequest
+	}{
+		{"root", store.TreeRequest{Path: "/"}},
+		{"docs", store.TreeRequest{Path: "/docs"}},
+		{"showSize", store.TreeRequest{Path: "/", ShowSize: true}},
+		{"dirsOnly", store.TreeRequest{Path: "/", DirsOnly: true}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldResp, err := old.Tree(ctx, tc.req)
+			if err != nil {
+				t.Fatalf("old Tree: %v", err)
+			}
+			newResp, err := new.Tree(ctx, tc.req)
+			if err != nil {
+				t.Fatalf("new Tree: %v", err)
+			}
+
+			// Both should have root dir.
+			if oldResp.Root.Kind != "dir" || newResp.Root.Kind != "dir" {
+				t.Fatalf("root kind: old=%q new=%q", oldResp.Root.Kind, newResp.Root.Kind)
+			}
+
+			// Compare text output (lines).
+			oldLines := sortedLines(oldResp.Text)
+			newLines := sortedLines(newResp.Text)
+			if len(oldLines) != len(newLines) {
+				t.Fatalf("tree lines: old=%d new=%d\nold:\n%s\nnew:\n%s",
+					len(oldLines), len(newLines), oldResp.Text, newResp.Text)
+			}
+			for i := range oldLines {
+				if oldLines[i] != newLines[i] {
+					t.Fatalf("tree line mismatch at %d:\nold: %q\nnew: %q\nold full:\n%s\nnew full:\n%s",
+						i, oldLines[i], newLines[i], oldResp.Text, newResp.Text)
+				}
+			}
+		})
+	}
+
+	// Nonexistent: both should error.
+	t.Run("nonexistent", func(t *testing.T) {
+		_, oldErr := old.Tree(ctx, store.TreeRequest{Path: "/nope"})
+		_, newErr := new.Tree(ctx, store.TreeRequest{Path: "/nope"})
+		if oldErr == nil {
+			t.Fatal("old Tree /nope: expected error")
+		}
+		if newErr == nil {
+			t.Fatal("new Tree /nope: expected error")
+		}
+	})
+}
+
+func compareNonexistentRoot(t *testing.T, ctx context.Context, old, new store.Adapter) {
+	t.Helper()
+
+	// LS nonexistent.
+	_, oldErr := old.LS(ctx, store.LSRequest{Path: "/nope"})
+	_, newErr := new.LS(ctx, store.LSRequest{Path: "/nope"})
+	if oldErr == nil || newErr == nil {
+		t.Fatal("LS /nope: both should error for nonexistent root")
+	}
+
+	// Find nonexistent.
+	_, oldErr = old.Find(ctx, store.FindRequest{Path: "/nope"})
+	_, newErr = new.Find(ctx, store.FindRequest{Path: "/nope"})
+	if oldErr == nil || newErr == nil {
+		t.Fatal("Find /nope: both should error for nonexistent root")
+	}
+}
+
+func compareRelativePath(t *testing.T, ctx context.Context, old, new store.Adapter) {
+	t.Helper()
+
+	// Relative path without leading slash — cleanDocPath should normalize.
+	// Cat "docs/readme.md" should be treated as "/docs/readme.md".
+	oldResp, oldErr := old.Cat(ctx, store.CatRequest{Path: "docs/readme.md"})
+	newResp, newErr := new.Cat(ctx, store.CatRequest{Path: "docs/readme.md"})
+
+	// Both should either succeed or fail together.
+	if (oldErr == nil) != (newErr == nil) {
+		t.Fatalf("Cat 'docs/readme.md': old err=%v new err=%v", oldErr, newErr)
+	}
+	if oldErr == nil {
+		if oldResp.Content != newResp.Content {
+			t.Fatalf("Cat relative path content mismatch:\nold: %q\nnew: %q", oldResp.Content, newResp.Content)
+		}
+	}
+}
+
+// --- Utility helpers ---
+
+func nodeSet(nodes []store.Node) map[string]string {
+	m := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		m[n.Path] = n.Kind
+	}
+	return m
+}
+
+func nodePaths(nodes []store.Node) []string {
+	paths := make([]string, len(nodes))
+	for i, n := range nodes {
+		paths[i] = n.Path
+	}
+	return paths
+}
+
+func sortedNodePaths(nodes []store.Node) []string {
+	paths := nodePaths(nodes)
+	sort.Strings(paths)
+	return paths
+}
+
+func searchPaths(results []store.SearchResult) []string {
+	paths := make([]string, len(results))
+	for i, r := range results {
+		paths[i] = r.Path
+	}
+	return paths
+}
+
+func hashMap(hashes []store.ContentHash) map[string]string {
+	m := make(map[string]string, len(hashes))
+	for _, h := range hashes {
+		m[h.Path] = h.Hash
+	}
+	return m
+}
+
+func matchPaths(matches []store.Match) []string {
+	paths := make([]string, len(matches))
+	for i, m := range matches {
+		paths[i] = fmt.Sprintf("%s:%d", m.Path, m.Line)
+	}
+	return paths
+}
+
+func matchSet(matches []store.Match) map[string]bool {
+	m := make(map[string]bool, len(matches))
+	for _, match := range matches {
+		m[fmt.Sprintf("%s:%d:%s", match.Path, match.Line, strings.TrimSpace(match.Text))] = true
+	}
+	return m
+}
+
+func sortedLines(text string) []string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	sort.Strings(lines)
+	return lines
+}
+
+// TestDocAdapterMirrorRepo verifies DocAdapter works for a different repo
 // using the Repo override on individual requests.
 func TestDocAdapterMirrorRepo(t *testing.T) {
 	requireDocker(t)
@@ -602,7 +663,6 @@ func TestDocAdapterMirrorRepo(t *testing.T) {
 			SizeColumn:  "size",
 			MTimeColumn: "updated_at",
 		},
-		// Default repo is test-repo, but we'll override via request.
 		Repo: "test-repo",
 	}
 
@@ -616,34 +676,33 @@ func TestDocAdapterMirrorRepo(t *testing.T) {
 		t.Fatalf("BackfillDocs: %v", err)
 	}
 
-	da := postgres.NewDocAdapter(pool, cfg)
+	oldAdapter := postgres.New(pool, cfg)
 
-	// LS mirror-repo via repo override.
-	resp, err := da.LS(ctx, store.LSRequest{Repo: "mirror-repo", Path: "/"})
-	if err != nil {
-		t.Fatalf("LS mirror-repo /: %v", err)
-	}
-	// mirror-repo has: /docs (dir), /README.md, /docs/readme.md, /docs/api/guide.md
-	// Top-level LS: /docs (dir), /README.md (file) = 2 entries.
-	if resp.Total != 2 {
-		t.Fatalf("LS mirror-repo / total = %d, want 2", resp.Total)
-	}
+	docAdapter := postgres.NewDocAdapter(pool, cfg)
 
-	// Cat mirror-repo file.
-	catResp, err := da.Cat(ctx, store.CatRequest{Repo: "mirror-repo", Path: "/docs/api/guide.md"})
+	// Compare old vs new for mirror-repo.
+	lsOld, err := oldAdapter.LS(ctx, store.LSRequest{Repo: "mirror-repo", Path: "/"})
 	if err != nil {
-		t.Fatalf("Cat mirror-repo /docs/api/guide.md: %v", err)
+		t.Fatalf("old LS mirror-repo: %v", err)
 	}
-	if catResp.Content != "Hello World\n" {
-		t.Fatalf("Cat mirror-repo guide.md = %q, want %q", catResp.Content, "Hello World\n")
+	lsNew, err := docAdapter.LS(ctx, store.LSRequest{Repo: "mirror-repo", Path: "/"})
+	if err != nil {
+		t.Fatalf("new LS mirror-repo: %v", err)
+	}
+	if lsOld.Total != lsNew.Total {
+		t.Fatalf("mirror LS total: old=%d new=%d", lsOld.Total, lsNew.Total)
 	}
 
 	// BatchHashes mirror-repo.
-	hashResp, err := da.BatchHashes(ctx, store.HashRequest{Repo: "mirror-repo"})
+	oldHashes, err := oldAdapter.BatchHashes(ctx, store.HashRequest{Repo: "mirror-repo"})
 	if err != nil {
-		t.Fatalf("BatchHashes mirror-repo: %v", err)
+		t.Fatalf("old BatchHashes mirror-repo: %v", err)
 	}
-	if len(hashResp.Hashes) != 3 {
-		t.Fatalf("BatchHashes mirror-repo count = %d, want 3", len(hashResp.Hashes))
+	newHashes, err := docAdapter.BatchHashes(ctx, store.HashRequest{Repo: "mirror-repo"})
+	if err != nil {
+		t.Fatalf("new BatchHashes mirror-repo: %v", err)
+	}
+	if len(oldHashes.Hashes) != len(newHashes.Hashes) {
+		t.Fatalf("mirror BatchHashes: old=%d new=%d", len(oldHashes.Hashes), len(newHashes.Hashes))
 	}
 }

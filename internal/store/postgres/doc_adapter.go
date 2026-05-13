@@ -28,7 +28,7 @@ type pathEntry struct {
 // (Put, Delete, Edit) return ErrReadOnlyMount.
 //
 // Directories are implicit: derived from file path prefixes, not stored.
-// This matches the vfs.Tree behavior of the path-centric adapter.
+// All path inputs are normalized via cleanDocPath to match vfs.Tree behavior.
 type DocAdapter struct {
 	pool *pgxpool.Pool
 	cfg  Config
@@ -48,17 +48,56 @@ func (d *DocAdapter) repo(reqRepo string) string {
 	return d.cfg.Repo
 }
 
+// cleanDocPath normalizes a path to match vfs.Tree.cleanPath behavior:
+// empty → "/", relative → add leading "/", always path.Clean.
+func cleanDocPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return path.Clean(p)
+}
+
+// mustExistDir checks that the given path is a valid directory (either has
+// files under it or is root). Returns ErrNotFound if no files exist under it.
+func (d *DocAdapter) mustExistDir(ctx context.Context, repo, dirPath string) error {
+	if dirPath == "/" {
+		// Root always exists if repo has any files.
+		return nil
+	}
+	prefix := normalizePrefix(dirPath)
+	query, err := DocStatDirSQL(d.cfg)
+	if err != nil {
+		return err
+	}
+	var count int
+	if err := d.pool.QueryRow(ctx, query, repo, prefix+"%").Scan(&count); err != nil {
+		return fmt.Errorf("doc mustExistDir %s: %w", dirPath, err)
+	}
+	if count == 0 {
+		return fmt.Errorf("doc dir %s: %w", dirPath, store.ErrNotFound)
+	}
+	return nil
+}
+
 // --- Read methods ---
 
 func (d *DocAdapter) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
 	repo := d.repo(req.Repo)
-	prefix := normalizePrefix(req.Path)
+	req.Path = cleanDocPath(req.Path)
+
+	if err := d.mustExistDir(ctx, repo, req.Path); err != nil {
+		return nil, err
+	}
 
 	query, err := DocListPathsSQL(d.cfg)
 	if err != nil {
 		return nil, err
 	}
 
+	prefix := normalizePrefix(req.Path)
 	rows, err := d.pool.Query(ctx, query, repo, prefix+"%")
 	if err != nil {
 		return nil, fmt.Errorf("doc ls query: %w", err)
@@ -77,12 +116,6 @@ func (d *DocAdapter) LS(ctx context.Context, req store.LSRequest) (*store.LSResp
 		return nil, fmt.Errorf("doc ls rows: %w", err)
 	}
 
-	// Build size/mtime lookup.
-	infoMap := make(map[string]pathEntry, len(allPaths))
-	for _, r := range allPaths {
-		infoMap[r.path] = r
-	}
-
 	// Derive LS entries from file paths: dirs are implicit.
 	nodes := deriveLSEntries(allPaths, req.Path, req.Recursive, req.All)
 
@@ -97,6 +130,7 @@ func (d *DocAdapter) LS(ctx context.Context, req store.LSRequest) (*store.LSResp
 
 func (d *DocAdapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResponse, error) {
 	repo := d.repo(req.Repo)
+	req.Path = cleanDocPath(req.Path)
 
 	query, err := DocCatSQL(d.cfg)
 	if err != nil {
@@ -116,6 +150,7 @@ func (d *DocAdapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatR
 
 func (d *DocAdapter) Stat(ctx context.Context, req store.StatRequest) (*store.StatResponse, error) {
 	repo := d.repo(req.Repo)
+	req.Path = cleanDocPath(req.Path)
 
 	// Try file first.
 	fileQuery, err := DocStatSQL(d.cfg)
@@ -169,6 +204,12 @@ func (d *DocAdapter) Stat(ctx context.Context, req store.StatRequest) (*store.St
 
 func (d *DocAdapter) Find(ctx context.Context, req store.FindRequest) (*store.FindResponse, error) {
 	repo := d.repo(req.Repo)
+	req.Path = cleanDocPath(req.Path)
+
+	if err := d.mustExistDir(ctx, repo, req.Path); err != nil {
+		return nil, err
+	}
+
 	prefix := normalizePrefix(req.Path)
 
 	query, err := DocListPathsSQL(d.cfg)
@@ -182,7 +223,8 @@ func (d *DocAdapter) Find(ctx context.Context, req store.FindRequest) (*store.Fi
 	}
 	defer rows.Close()
 
-	var nodes []store.Node
+	// Collect all file paths and derive implicit dirs.
+	var filePaths []pathEntry
 	for rows.Next() {
 		var filePath string
 		var size int64
@@ -190,27 +232,26 @@ func (d *DocAdapter) Find(ctx context.Context, req store.FindRequest) (*store.Fi
 		if err := rows.Scan(&filePath, &size, &mtime); err != nil {
 			return nil, fmt.Errorf("doc find scan: %w", err)
 		}
+		filePaths = append(filePaths, pathEntry{path: filePath, size: size, modTime: mtime})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("doc find rows: %w", err)
+	}
 
+	// Build candidate nodes: files + implicit directories.
+	var nodes []store.Node
+	seenDirs := make(map[string]bool)
+
+	for _, fp := range filePaths {
 		// Hidden filter.
-		if !req.All && pathHasHidden(filePath, prefix) {
+		if !req.All && pathHasHidden(fp.path, prefix) {
 			continue
 		}
 
-		// Name filter.
-		if req.Name != "" && path.Base(filePath) != req.Name {
-			continue
-		}
-		if req.IName != "" && !strings.EqualFold(path.Base(filePath), req.IName) {
-			continue
-		}
+		basename := path.Base(fp.path)
 
-		// Type filter — we only have files.
-		if req.Type == "dir" {
-			continue
-		}
-
-		// Depth filter.
-		depth := pathDepth(filePath, req.Path)
+		// Depth filter (using VFS-style relativeDepth).
+		depth := relativeDepth(req.Path, fp.path)
 		if req.MaxDepth > 0 && depth > req.MaxDepth {
 			continue
 		}
@@ -218,16 +259,32 @@ func (d *DocAdapter) Find(ctx context.Context, req store.FindRequest) (*store.Fi
 			continue
 		}
 
-		nodes = append(nodes, store.Node{
-			Path:    filePath,
-			Name:    path.Base(filePath),
-			Kind:    "file",
-			Size:    size,
-			ModTime: mtime.UTC().Format(time.RFC3339),
-		})
+		// Type filter: emit dirs if requested.
+		if req.Type != "dir" {
+			nodes = append(nodes, store.Node{
+				Path:    fp.path,
+				Name:    basename,
+				Kind:    "file",
+				Size:    fp.size,
+				ModTime: fp.modTime.UTC().Format(time.RFC3339),
+			})
+		}
+
+		// Emit implicit directories for this file's ancestors.
+		if req.Type == "" || req.Type == "dir" {
+			emitImplicitDirs(&nodes, seenDirs, req.Path, fp.path, req.All, req.Name, req.IName, req.Type, req.MaxDepth, req.MinDepth)
+		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("doc find rows: %w", err)
+
+	// Name/glob filter on the collected nodes.
+	if req.Name != "" || req.IName != "" {
+		filtered := make([]store.Node, 0, len(nodes))
+		for _, n := range nodes {
+			if nameMatches(n.Name, req.Name, req.IName) {
+				filtered = append(filtered, n)
+			}
+		}
+		nodes = filtered
 	}
 
 	total := len(nodes)
@@ -236,11 +293,86 @@ func (d *DocAdapter) Find(ctx context.Context, req store.FindRequest) (*store.Fi
 	return &store.FindResponse{Nodes: nodes, Total: total}, nil
 }
 
+// nameMatches checks if a node name matches the name/iname glob patterns,
+// matching vfs.Tree.Find behavior (path.Match for globbing).
+func nameMatches(name, namePattern, inamePattern string) bool {
+	if inamePattern != "" {
+		ok, err := path.Match(strings.ToLower(inamePattern), strings.ToLower(name))
+		if err != nil {
+			return false
+		}
+		return ok
+	}
+	if namePattern != "" {
+		ok, err := path.Match(namePattern, name)
+		if err != nil {
+			return false
+		}
+		return ok
+	}
+	return true
+}
+
+// emitImplicitDirs adds implicit directory nodes for ancestors of filePath
+// between root and the file.
+func emitImplicitDirs(nodes *[]store.Node, seen map[string]bool, root, filePath string, all bool, namePattern, inamePattern, typeFilter string, maxDepth, minDepth int) {
+	prefix := normalizePrefix(root)
+	rel := strings.TrimPrefix(filePath, prefix)
+	parts := strings.Split(rel, "/")
+
+	// Walk intermediate directories.
+	current := strings.TrimRight(root, "/")
+	for i := 0; i < len(parts)-1; i++ {
+		dirName := parts[i]
+		current = current + "/" + dirName
+
+		if seen[current] {
+			continue
+		}
+
+		// Hidden filter for dirs.
+		if !all && strings.HasPrefix(dirName, ".") {
+			continue
+		}
+
+		// Depth filter for dirs.
+		dirDepth := relativeDepth(root, current)
+		if maxDepth > 0 && dirDepth > maxDepth {
+			continue
+		}
+		if minDepth > 0 && dirDepth < minDepth {
+			continue
+		}
+
+		seen[current] = true
+		*nodes = append(*nodes, store.Node{
+			Path: current,
+			Name: dirName,
+			Kind: "dir",
+		})
+	}
+}
+
+// relativeDepth returns the depth of p relative to root, matching
+// vfs.Tree.relativeDepth behavior.
+func relativeDepth(root, p string) int {
+	rel := p
+	if root == "/" {
+		rel = strings.TrimPrefix(p, "/")
+	} else {
+		rel = strings.TrimPrefix(p, root+"/")
+	}
+	if rel == "" {
+		return 0
+	}
+	return strings.Count(rel, "/") + 1
+}
+
 func (d *DocAdapter) Search(ctx context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
 	repo := d.repo(req.Repo)
 
-	pathFilter := strings.TrimRight(req.Path, "/")
-	if pathFilter == "" || pathFilter == "/" {
+	pathFilter := cleanDocPath(req.Path)
+	if pathFilter == "/" {
 		pathFilter = ""
 	}
 
@@ -301,8 +433,8 @@ func (d *DocAdapter) Search(ctx context.Context, req store.SearchRequest) (*stor
 func (d *DocAdapter) BatchHashes(ctx context.Context, req store.HashRequest) (*store.HashResponse, error) {
 	repo := d.repo(req.Repo)
 
-	pathFilter := strings.TrimRight(req.Path, "/")
-	if pathFilter == "" || pathFilter == "/" {
+	pathFilter := cleanDocPath(req.Path)
+	if pathFilter == "/" {
 		pathFilter = ""
 	}
 
@@ -334,13 +466,14 @@ func (d *DocAdapter) BatchHashes(ctx context.Context, req store.HashRequest) (*s
 
 func (d *DocAdapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
 	repo := d.repo(req.Repo)
-	prefix := normalizePrefix(req.Path)
+	req.Path = cleanDocPath(req.Path)
 
 	// Verify the root path exists.
 	if _, err := d.Stat(ctx, store.StatRequest{Repo: repo, Path: req.Path}); err != nil {
 		return nil, err
 	}
 
+	prefix := normalizePrefix(req.Path)
 	query, err := DocStreamGrepSQL(d.cfg)
 	if err != nil {
 		return nil, err
@@ -427,8 +560,13 @@ func (d *DocAdapter) Grep(ctx context.Context, req store.GrepRequest) (*store.Gr
 
 func (d *DocAdapter) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeResponse, error) {
 	repo := d.repo(req.Repo)
-	prefix := normalizePrefix(req.Path)
+	req.Path = cleanDocPath(req.Path)
 
+	if err := d.mustExistDir(ctx, repo, req.Path); err != nil {
+		return nil, err
+	}
+
+	prefix := normalizePrefix(req.Path)
 	query, err := DocListPathsSQL(d.cfg)
 	if err != nil {
 		return nil, err
@@ -537,27 +675,28 @@ func deriveLSEntries(paths []pathEntry, root string, recursive, all bool) []stor
 				seen[p.path] = true
 			}
 		} else {
-			// File is in a subdirectory — emit the directory.
-			dirName := parts[0]
-			dirPath := prefix + dirName
-			if prefix == "/" {
-				dirPath = "/" + dirName
-			}
-			if !all && strings.HasPrefix(dirName, ".") {
-				if !recursive {
+			// File is in a subdirectory — emit all intermediate dirs.
+			dirParts := strings.Split(rel, "/")
+			current := strings.TrimRight(root, "/")
+			for i := 0; i < len(dirParts)-1; i++ {
+				dirName := dirParts[i]
+				current = current + "/" + dirName
+				if root == "/" || root == "" {
+					if !strings.HasPrefix(current, "/") {
+						current = "/" + current
+					}
+				}
+				if !all && strings.HasPrefix(dirName, ".") {
 					continue
 				}
-				// In recursive mode, still need to descend into hidden dirs
-				// but only if all=true. Skip hidden dirs in non-all mode.
-				continue
-			}
-			if !seen[dirPath] {
-				nodes = append(nodes, store.Node{
-					Path: dirPath,
-					Name: dirName,
-					Kind: "dir",
-				})
-				seen[dirPath] = true
+				if !seen[current] {
+					nodes = append(nodes, store.Node{
+						Path: current,
+						Name: dirName,
+						Kind: "dir",
+					})
+					seen[current] = true
+				}
 			}
 
 			// In recursive mode, also emit the file.
@@ -601,12 +740,6 @@ func sortNodes(nodes []store.Node, sortBy string, reverse bool) {
 	})
 }
 
-// pathDepth returns the depth of filePath relative to root.
-func pathDepth(filePath, root string) int {
-	rel := strings.TrimPrefix(filePath, strings.TrimRight(root, "/")+"/")
-	return strings.Count(rel, "/")
-}
-
 // buildTreeText generates tree-style output text from paths.
 func buildTreeText(b *strings.Builder, paths []pathEntry, root string, depth int, all, dirsOnly, fullPath, showSize bool, sortBy string, dirsFirst bool) {
 	prefix := normalizePrefix(root)
@@ -639,7 +772,9 @@ func buildTreeText(b *strings.Builder, paths []pathEntry, root string, depth int
 		}
 		children = append(children, child)
 	}
-	sort.Strings(children)
+
+	// Sort children.
+	sortChildren(children, sortBy, dirsFirst, paths, prefix)
 
 	for _, child := range children {
 		name := path.Base(child)
@@ -681,4 +816,31 @@ func buildTreeText(b *strings.Builder, paths []pathEntry, root string, depth int
 			}
 		}
 	}
+}
+
+// sortChildren sorts child paths by the given criteria, with optional dirs-first.
+func sortChildren(children []string, sortBy string, dirsFirst bool, paths []pathEntry, prefix string) {
+	// Build a quick lookup for whether a child is a dir.
+	isDir := make(map[string]bool)
+	for _, child := range children {
+		for _, p := range paths {
+			if strings.HasPrefix(p.path, child+"/") {
+				isDir[child] = true
+				break
+			}
+		}
+	}
+
+	sort.SliceStable(children, func(i, j int) bool {
+		aDir, bDir := isDir[children[i]], isDir[children[j]]
+		if dirsFirst {
+			if aDir != bDir {
+				return aDir
+			}
+		}
+
+		aName := path.Base(children[i])
+		bName := path.Base(children[j])
+		return aName < bName
+	})
 }
