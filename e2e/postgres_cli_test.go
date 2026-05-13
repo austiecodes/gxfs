@@ -803,38 +803,39 @@ func TestDocPostgresServerE2E(t *testing.T) {
 	writeFile(t, cliMounts, cliMountsText())
 
 	// Legacy data should be backfilled and readable.
-	// Note: CLI mounts docs → /docs, so all paths must be under /docs.
+	// CLI mount: local docs → remote /docs, but CLI paths are repo paths.
+	// So /docs/readme.md is the repo path for the mounted file.
 	t.Run("LegacyDataReadable", func(t *testing.T) {
-		ls := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/")
-		if !strings.Contains(ls, "readme.md") && !strings.Contains(ls, "api") {
-			t.Fatalf("ls / after backfill = %q, expected readme.md and/or api", ls)
+		ls := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/docs")
+		if !strings.Contains(ls, "readme.md") {
+			t.Fatalf("ls /docs after backfill = %q, expected readme.md", ls)
 		}
-		cat := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/readme.md")
+		cat := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/docs/readme.md")
 		if cat == "" {
-			t.Fatal("cat /readme.md empty after backfill")
+			t.Fatal("cat /docs/readme.md empty after backfill")
 		}
 	})
 
 	// Full CRUD through doc_postgres.
 	t.Run("CRUD", func(t *testing.T) {
-		// Write new file.
-		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/new-file.txt", "hello doc_postgres")
+		// Write new file under /docs.
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/new-file.txt", "hello doc_postgres")
 
 		// Cat it back.
-		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/new-file.txt")
+		got := runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/docs/new-file.txt")
 		if got != "hello doc_postgres" {
-			t.Fatalf("cat new-file.txt = %q, want %q", got, "hello doc_postgres")
+			t.Fatalf("cat /docs/new-file.txt = %q, want %q", got, "hello doc_postgres")
 		}
 
 		// Overwrite.
-		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/new-file.txt", "updated content")
-		got = runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/new-file.txt")
+		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/new-file.txt", "updated content")
+		got = runCLI(t, repoRoot, cliPath, cliConfig, "cat", "/docs/new-file.txt")
 		if got != "updated content" {
 			t.Fatalf("cat after overwrite = %q, want %q", got, "updated content")
 		}
 
 		// Delete.
-		runCLI(t, repoRoot, cliPath, cliConfig, "rm", "/new-file.txt")
+		runCLI(t, repoRoot, cliPath, cliConfig, "rm", "/docs/new-file.txt")
 	})
 
 	// Search should work (doc_postgres uses content_search tsvector).
@@ -858,14 +859,14 @@ func TestDocPostgresServerE2E(t *testing.T) {
 		writeFile(t, restartCLIConfig, cliConfigText(restartPort))
 
 		// Data should still be intact after restart (backfill idempotent).
-		cat := runCLI(t, repoRoot, cliPath, restartCLIConfig, "cat", "/readme.md")
+		cat := runCLI(t, repoRoot, cliPath, restartCLIConfig, "cat", "/docs/readme.md")
 		if cat == "" {
-			t.Fatal("cat /readme.md empty after restart")
+			t.Fatal("cat /docs/readme.md empty after restart")
 		}
 
 		// Write should still work.
-		runCLI(t, repoRoot, cliPath, restartCLIConfig, "write", "/post-restart.txt", "still works")
-		got := runCLI(t, repoRoot, cliPath, restartCLIConfig, "cat", "/post-restart.txt")
+		runCLI(t, repoRoot, cliPath, restartCLIConfig, "write", "/docs/post-restart.txt", "still works")
+		got := runCLI(t, repoRoot, cliPath, restartCLIConfig, "cat", "/docs/post-restart.txt")
 		if got != "still works" {
 			t.Fatalf("post-restart write = %q, want %q", got, "still works")
 		}
@@ -883,13 +884,13 @@ func TestDocPostgresServerE2E(t *testing.T) {
 		writeFile(t, regCLIConfig, cliConfigText(regPort))
 
 		// Old postgres should still work (same mounts → paths under /docs).
-		cat := runCLI(t, repoRoot, cliPath, regCLIConfig, "cat", "/readme.md")
+		cat := runCLI(t, repoRoot, cliPath, regCLIConfig, "cat", "/docs/readme.md")
 		if cat == "" {
-			t.Fatal("old postgres cat /README.md empty")
+			t.Fatal("old postgres cat /docs/readme.md empty")
 		}
 
-		runCLI(t, repoRoot, cliPath, regCLIConfig, "write", "/regression-test.txt", "old adapter works")
-		got := runCLI(t, repoRoot, cliPath, regCLIConfig, "cat", "/regression-test.txt")
+		runCLI(t, repoRoot, cliPath, regCLIConfig, "write", "/docs/regression-test.txt", "old adapter works")
+		got := runCLI(t, repoRoot, cliPath, regCLIConfig, "cat", "/docs/regression-test.txt")
 		if got != "old adapter works" {
 			t.Fatalf("old postgres write = %q, want %q", got, "old adapter works")
 		}
