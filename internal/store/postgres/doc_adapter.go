@@ -417,17 +417,14 @@ func (d *DocAdapter) Tree(ctx context.Context, req store.TreeRequest) (*store.Tr
 		return nil, err
 	}
 
-	name := path.Base(req.Path)
-	if req.Path == "/" {
-		name = "."
+	// Use Stat for Root node to match old adapter behavior exactly.
+	root, err := tree.Stat(req.Path)
+	if err != nil {
+		return nil, err
 	}
 
 	return &store.TreeResponse{
-		Root: store.Node{
-			Path: req.Path,
-			Name: name,
-			Kind: "dir",
-		},
+		Root: root,
 		Text: text,
 	}, nil
 }
