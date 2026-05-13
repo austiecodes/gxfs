@@ -14,18 +14,18 @@ import (
 var migrationFS embed.FS
 
 type migrationData struct {
-	SchemaName        string
-	NodesTable        string
-	ContentTable      string
-	RepoNodesTable    string
-	DocsTable         string
-	RepoPathsTable    string
-	CollectionsTable  string
+	SchemaName          string
+	NodesTable          string
+	ContentTable        string
+	RepoNodesTable      string
+	DocsTable           string
+	RepoPathsTable      string
+	CollectionsTable    string
 	CollectionDocsTable string
-	PathColumn        string
-	KindColumn        string
-	SizeColumn        string
-	MTimeColumn       string
+	PathColumn          string
+	KindColumn          string
+	SizeColumn          string
+	MTimeColumn         string
 }
 
 func SchemaSQL(cfg Config) ([]string, error) {

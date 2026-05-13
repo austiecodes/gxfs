@@ -61,12 +61,12 @@ func BackfillDocs(ctx context.Context, pool *pgxpool.Pool, cfg Config) (*Backfil
 	// Collect all source rows first so we can close the result set before
 	// issuing INSERTs on the same single-connection transaction.
 	type sourceRow struct {
-		repo        string
-		filePath    string
-		content     string
-		hash        string
-		size        int64
-		mtime       time.Time
+		repo         string
+		filePath     string
+		content      string
+		hash         string
+		size         int64
+		mtime        time.Time
 		hashComputed bool
 	}
 	var sources []sourceRow
