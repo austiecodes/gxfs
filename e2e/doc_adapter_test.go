@@ -409,15 +409,26 @@ func compareBatchHashes(t *testing.T, ctx context.Context, old, new store.Adapte
 				t.Fatalf("new BatchHashes: %v", err)
 			}
 
-			if len(oldResp.Hashes) != len(newResp.Hashes) {
-				t.Fatalf("hash count: old=%d new=%d", len(oldResp.Hashes), len(newResp.Hashes))
+			// DocAdapter (via backfill) computes hashes for all files, including
+			// ones that had NULL hash in the old tables. So new >= old count.
+			if len(newResp.Hashes) < len(oldResp.Hashes) {
+				t.Fatalf("hash count: old=%d new=%d (new should have >= old)", len(oldResp.Hashes), len(newResp.Hashes))
 			}
 
+			// Every old hash must be present in new. New may have extra
+			// (backfill-computed) hashes not in old.
 			oldMap := hashMap(oldResp.Hashes)
 			newMap := hashMap(newResp.Hashes)
 			for p, h := range oldMap {
 				if newMap[p] != h {
 					t.Fatalf("hash mismatch for %q: old=%q new=%q", p, h, newMap[p])
+				}
+			}
+
+			// All new hashes must be non-empty.
+			for _, h := range newResp.Hashes {
+				if h.Hash == "" {
+					t.Fatalf("empty hash for %q", h.Path)
 				}
 			}
 		})
@@ -693,7 +704,7 @@ func TestDocAdapterMirrorRepo(t *testing.T) {
 		t.Fatalf("mirror LS total: old=%d new=%d", lsOld.Total, lsNew.Total)
 	}
 
-	// BatchHashes mirror-repo.
+	// BatchHashes mirror-repo: new >= old (backfill computes NULL hashes).
 	oldHashes, err := oldAdapter.BatchHashes(ctx, store.HashRequest{Repo: "mirror-repo"})
 	if err != nil {
 		t.Fatalf("old BatchHashes mirror-repo: %v", err)
@@ -702,7 +713,7 @@ func TestDocAdapterMirrorRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new BatchHashes mirror-repo: %v", err)
 	}
-	if len(oldHashes.Hashes) != len(newHashes.Hashes) {
-		t.Fatalf("mirror BatchHashes: old=%d new=%d", len(oldHashes.Hashes), len(newHashes.Hashes))
+	if len(newHashes.Hashes) < len(oldHashes.Hashes) {
+		t.Fatalf("mirror BatchHashes: old=%d new=%d (new should have >= old)", len(oldHashes.Hashes), len(newHashes.Hashes))
 	}
 }
