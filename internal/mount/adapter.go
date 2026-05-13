@@ -497,6 +497,27 @@ func fmtNotFound(local string) error {
 	return fmt.Errorf("%w: %s", store.ErrNotFound, local)
 }
 
+func (a *Adapter) BatchHashes(ctx context.Context, req store.HashRequest) (*store.HashResponse, error) {
+	resolved, err := a.resolver.Resolve(req.Path, OpRead)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := a.base.BatchHashes(ctx, store.HashRequest{
+		Repo: resolved.RemoteRepo,
+		Path: resolved.RemotePath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Map remote paths to local display paths
+	for i, ch := range resp.Hashes {
+		if local, ok := a.resolver.ToLocal(req.Repo, ch.Path); ok {
+			resp.Hashes[i].Path = displayLocal(local)
+		}
+	}
+	return resp, nil
+}
+
 // paginateNodes applies limit/offset to a node slice.
 func paginateNodes(nodes []store.Node, limit, offset int) []store.Node {
 	if offset < 0 {

@@ -169,6 +169,18 @@ func (c *Client) Find(ctx context.Context, req store.FindRequest) (*store.FindRe
 	return &resp, nil
 }
 
+func (c *Client) BatchHashes(ctx context.Context, req store.HashRequest) (*store.HashResponse, error) {
+	var resp store.HashResponse
+	q := url.Values{}
+	if req.Path != "" {
+		q.Set("path", req.Path)
+	}
+	if err := c.get(ctx, req.Repo, "hashes", q, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) Stat(ctx context.Context, req store.StatRequest) (*store.StatResponse, error) {
 	var resp store.StatResponse
 	q := url.Values{"path": {req.Path}}

@@ -142,6 +142,10 @@ func (f *fakeClient) Edit(context.Context, store.EditRequest) (*store.EditRespon
 	return nil, nil
 }
 
+func (f *fakeClient) BatchHashes(_ context.Context, _ store.HashRequest) (*store.HashResponse, error) {
+	return &store.HashResponse{Hashes: []store.ContentHash{}}, nil
+}
+
 func (f *fakeClient) Search(_ context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
 	f.searchReq = req
 	if f.searchResp != nil {

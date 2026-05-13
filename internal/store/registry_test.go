@@ -54,6 +54,10 @@ func (f *registryFakeAdapter) Invalidate() {
 	f.invalidated = true
 }
 
+func (f *registryFakeAdapter) BatchHashes(_ context.Context, _ store.HashRequest) (*store.HashResponse, error) {
+	return &store.HashResponse{Hashes: []store.ContentHash{}}, nil
+}
+
 func (f *registryFakeAdapter) Search(_ context.Context, _ store.SearchRequest) (*store.SearchResponse, error) {
 	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
 }

@@ -111,7 +111,10 @@ func UpsertContentSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("path column: %w", err)
 	}
-	return fmt.Sprintf("insert into %s(%s, content) values($1, $2) on conflict(%s) do update set content = excluded.content", table, pathCol, pathCol), nil
+	return fmt.Sprintf(
+		"insert into %s(%s, content, content_hash) values($1, $2, $3) on conflict(%s) do update set content = excluded.content, content_hash = excluded.content_hash",
+		table, pathCol, pathCol,
+	), nil
 }
 
 func UpsertRepoNodeSQL(cfg Config) (string, error) {
@@ -245,6 +248,83 @@ func SearchDataSQL(cfg Config) (string, error) {
 		nodesTable, pathCol, pathCol,
 		mappingTable, pathCol, pathCol,
 		kindCol, pathCol, pathCol,
+	), nil
+}
+
+func BatchHashesSQL(cfg Config) (string, error) {
+	nodesTable, err := quoteTable(cfg.Schema, cfg.NodesTable)
+	if err != nil {
+		return "", err
+	}
+	contentTable, err := quoteTable(cfg.Schema, cfg.ContentTable)
+	if err != nil {
+		return "", err
+	}
+	mappingTable, err := quoteTable(cfg.Schema, cfg.RepoNodesTable)
+	if err != nil {
+		return "", err
+	}
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	kindCol, err := quoteIdent(cfg.Files.KindColumn)
+	if err != nil {
+		return "", fmt.Errorf("kind column: %w", err)
+	}
+	return fmt.Sprintf(
+		"select n.%s, c.content_hash from %s c "+
+			"join %s n on c.%s = n.%s "+
+			"join %s r on n.%s = r.%s "+
+			"where r.repo = $1 and n.%s = 'file' and c.content_hash is not null "+
+			"and ($2 = '' or n.%s = $2 or n.%s like $2 || '/%%') "+
+			"order by n.%s",
+		pathCol,
+		contentTable,
+		nodesTable, pathCol, pathCol,
+		mappingTable, pathCol, pathCol,
+		kindCol, pathCol, pathCol,
+		pathCol,
+	), nil
+}
+
+func LoadNodeWithHashSQL(cfg Config) (string, error) {
+	nodesTable, err := quoteTable(cfg.Schema, cfg.NodesTable)
+	if err != nil {
+		return "", err
+	}
+	contentTable, err := quoteTable(cfg.Schema, cfg.ContentTable)
+	if err != nil {
+		return "", err
+	}
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	kindCol, err := quoteIdent(cfg.Files.KindColumn)
+	if err != nil {
+		return "", fmt.Errorf("kind column: %w", err)
+	}
+	sizeExpr := "0"
+	if cfg.Files.SizeColumn != "" {
+		sizeCol, err := quoteIdent(cfg.Files.SizeColumn)
+		if err != nil {
+			return "", fmt.Errorf("size column: %w", err)
+		}
+		sizeExpr = "n." + sizeCol
+	}
+	mtimeExpr := "null::timestamptz"
+	if cfg.Files.MTimeColumn != "" {
+		mtimeCol, err := quoteIdent(cfg.Files.MTimeColumn)
+		if err != nil {
+			return "", fmt.Errorf("mtime column: %w", err)
+		}
+		mtimeExpr = "n." + mtimeCol
+	}
+	return fmt.Sprintf(
+		"select n.%s, n.%s, %s, %s, c.content_hash from %s n left join %s c on n.%s = c.%s where n.%s = $1",
+		pathCol, kindCol, sizeExpr, mtimeExpr,
+		nodesTable, contentTable, pathCol, pathCol, pathCol,
 	), nil
 }
 

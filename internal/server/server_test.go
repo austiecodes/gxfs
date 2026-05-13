@@ -60,6 +60,10 @@ func (f *fakeAdapter) Edit(context.Context, store.EditRequest) (*store.EditRespo
 	return nil, nil
 }
 
+func (f *fakeAdapter) BatchHashes(_ context.Context, _ store.HashRequest) (*store.HashResponse, error) {
+	return &store.HashResponse{Hashes: []store.ContentHash{}}, nil
+}
+
 func (f *fakeAdapter) Search(_ context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
 	f.searchReq = req
 	if f.searchErr != nil {

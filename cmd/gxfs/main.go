@@ -923,7 +923,7 @@ func fetchFileContents(ctx context.Context, adapter store.Adapter, repo string, 
 				LocalPath:   localPathFn(node),
 				RemotePath:  node.Path,
 				Content:     cat.Content,
-				ContentHash: syncmanifest.HashContent(cat.Content),
+				ContentHash: store.HashContent(cat.Content),
 				Size:        int64(len(cat.Content)),
 				MTime:       node.ModTime,
 			}
@@ -936,17 +936,19 @@ func fetchFileContents(ctx context.Context, adapter store.Adapter, repo string, 
 	return files, nil
 }
 
-func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root string) ([]remoteSyncFile, error) {
+// collectRemoteFilesMetadata fetches file metadata + known hashes without content.
+// Returns file nodes and a map of path->hash for files with known hashes.
+func collectRemoteFilesMetadata(ctx context.Context, adapter store.Adapter, repo, root string) ([]store.Node, map[string]string, error) {
 	stat, err := adapter.Stat(ctx, store.StatRequest{Repo: repo, Path: root})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	nodes := []store.Node{stat.Node}
 	if stat.Node.Kind == "dir" {
 		resp, err := adapter.LS(ctx, store.LSRequest{Repo: repo, Path: root, Recursive: true, All: true})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		nodes = resp.Nodes
 	}
@@ -958,7 +960,83 @@ func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root s
 		}
 	}
 
-	return fetchFileContents(ctx, adapter, repo, fileNodes, func(node store.Node) string {
+	// Fetch known hashes in one query
+	hashResp, err := adapter.BatchHashes(ctx, store.HashRequest{Repo: repo, Path: root})
+	if err != nil {
+		return nil, nil, fmt.Errorf("batch hashes: %w", err)
+	}
+	hashMap := make(map[string]string, len(hashResp.Hashes))
+	for _, ch := range hashResp.Hashes {
+		hashMap[ch.Path] = ch.Hash
+	}
+
+	return fileNodes, hashMap, nil
+}
+
+// fetchChangedFileContents Cats only the files that need content (hash unknown or changed).
+// For unchanged files, returns a remoteSyncFile with Content="" and the known hash.
+func fetchChangedFileContents(ctx context.Context, adapter store.Adapter, repo string, fileNodes []store.Node, hashMap map[string]string, manifest syncmanifest.Manifest, localPathFn func(store.Node) string) ([]remoteSyncFile, error) {
+	existingByLocal := manifestEntriesByLocal(manifest)
+
+	// Determine which files need Cat
+	var needCat []int // indices into fileNodes
+	files := make([]remoteSyncFile, len(fileNodes))
+	for i, node := range fileNodes {
+		localPath := localPathFn(node)
+		hash, hashKnown := hashMap[node.Path]
+		existing, hasExisting := existingByLocal[localPath]
+
+		if hashKnown && hasExisting && existing.ContentHash == hash {
+			// Unchanged — no Cat needed
+			files[i] = remoteSyncFile{
+				LocalPath:   localPath,
+				RemotePath:  node.Path,
+				ContentHash: hash,
+				Size:        node.Size,
+				MTime:       node.ModTime,
+			}
+			continue
+		}
+		needCat = append(needCat, i)
+	}
+
+	// Cat only changed/unknown files
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	for _, idx := range needCat {
+		i := idx
+		node := fileNodes[i]
+		g.Go(func() error {
+			if gctx.Err() != nil {
+				return gctx.Err()
+			}
+			cat, err := adapter.Cat(gctx, store.CatRequest{Repo: repo, Path: node.Path})
+			if err != nil {
+				return err
+			}
+			files[i] = remoteSyncFile{
+				LocalPath:   localPathFn(node),
+				RemotePath:  node.Path,
+				Content:     cat.Content,
+				ContentHash: store.HashContent(cat.Content),
+				Size:        int64(len(cat.Content)),
+				MTime:       node.ModTime,
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root string, manifest syncmanifest.Manifest) ([]remoteSyncFile, error) {
+	fileNodes, hashMap, err := collectRemoteFilesMetadata(ctx, adapter, repo, root)
+	if err != nil {
+		return nil, err
+	}
+	return fetchChangedFileContents(ctx, adapter, repo, fileNodes, hashMap, manifest, func(node store.Node) string {
 		return strings.Trim(strings.TrimPrefix(filepath.ToSlash(node.Path), "./"), "/")
 	})
 }
@@ -968,7 +1046,7 @@ func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root s
 // the real remote path, then mapping node paths back to local paths.
 // This ensures RemotePath contains the true server path for correct remote_doc
 // in the manifest, rather than the localized display path.
-func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, resolver *mountadapter.Resolver, repo, localRoot string) ([]remoteSyncFile, error) {
+func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, resolver *mountadapter.Resolver, repo, localRoot string, manifest syncmanifest.Manifest) ([]remoteSyncFile, error) {
 	resolved, err := resolver.Resolve(localRoot, mountadapter.OpRead)
 	if err != nil {
 		return nil, fmt.Errorf("resolve mount %s: %w", localRoot, err)
@@ -995,7 +1073,18 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 
 	remoteRoot := strings.TrimSuffix(resolved.RemotePath, "/")
 	localBase := resolved.LocalPath
-	return fetchFileContents(ctx, rawAdapter, repo, fileNodes, func(node store.Node) string {
+
+	// Fetch known hashes for hash-skip optimization
+	hashResp, err := rawAdapter.BatchHashes(ctx, store.HashRequest{Repo: repo, Path: resolved.RemotePath})
+	if err != nil {
+		return nil, fmt.Errorf("batch hashes: %w", err)
+	}
+	hashMap := make(map[string]string, len(hashResp.Hashes))
+	for _, ch := range hashResp.Hashes {
+		hashMap[ch.Path] = ch.Hash
+	}
+
+	localPathFn := func(node store.Node) string {
 		rel := strings.TrimPrefix(node.Path, remoteRoot+"/")
 		rel = strings.TrimPrefix(rel, remoteRoot)
 		localPath := localBase
@@ -1003,11 +1092,12 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 			localPath = localBase + "/" + rel
 		}
 		return localPath
-	})
+	}
+	return fetchChangedFileContents(ctx, rawAdapter, repo, fileNodes, hashMap, manifest, localPathFn)
 }
 
 func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root string, manifest syncmanifest.Manifest, opts remoteSyncOptions) (remoteSyncPlan, error) {
-	remoteFiles, err := collectRemoteFiles(ctx, adapter, repo, root)
+	remoteFiles, err := collectRemoteFiles(ctx, adapter, repo, root, manifest)
 	if err != nil {
 		return remoteSyncPlan{}, err
 	}
@@ -1020,7 +1110,7 @@ func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root 
 // contains the true server path (not the localized display path).
 func buildRemoteSyncPlanForRoot(ctx context.Context, adapter, rawAdapter store.Adapter, resolver *mountadapter.Resolver, repo, root string, manifest syncmanifest.Manifest, opts remoteSyncOptions) (remoteSyncPlan, error) {
 	if resolver != nil {
-		remoteFiles, err := collectMountedRemoteFiles(ctx, rawAdapter, resolver, repo, root)
+		remoteFiles, err := collectMountedRemoteFiles(ctx, rawAdapter, resolver, repo, root, manifest)
 		if err != nil {
 			return remoteSyncPlan{}, err
 		}
@@ -1145,7 +1235,7 @@ func readLocalSyncFile(localPath string) (localSyncFile, bool, error) {
 	return localSyncFile{
 		LocalPath:   localPath,
 		Content:     content,
-		ContentHash: syncmanifest.HashContent(content),
+		ContentHash: store.HashContent(content),
 		Size:        info.Size(),
 		MTime:       info.ModTime().UTC(),
 	}, true, nil
@@ -1576,7 +1666,7 @@ func refreshAfterMount(cmd *cobra.Command, rawAdapter store.Adapter, repo, local
 
 	// Collect files using raw adapter + resolver so RemotePath contains
 	// the true server path, not the localized display path.
-	remoteFiles, err := collectMountedRemoteFiles(cmd.Context(), rawAdapter, resolver, repo, localPath)
+	remoteFiles, err := collectMountedRemoteFiles(cmd.Context(), rawAdapter, resolver, repo, localPath, manifest)
 	if err != nil {
 		return fmt.Errorf("refresh manifest after mount: %w", err)
 	}

@@ -132,7 +132,7 @@ func (a *Adapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResp
 	if err != nil {
 		return nil, err
 	}
-	return &store.CatResponse{Path: req.Path, Content: content}, nil
+	return &store.CatResponse{Path: req.Path, Content: content, Hash: store.HashContent(content)}, nil
 }
 
 func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
@@ -317,6 +317,39 @@ func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindR
 	return &store.FindResponse{Nodes: paginateNodes(nodes, req.Limit, req.Offset), Total: len(nodes)}, nil
 }
 
+func (a *Adapter) BatchHashes(ctx context.Context, req store.HashRequest) (*store.HashResponse, error) {
+	repo := a.repo(req.Repo)
+	query, err := BatchHashesSQL(a.cfg)
+	if err != nil {
+		return nil, err
+	}
+	pathFilter := ""
+	if req.Path != "" && req.Path != "/" {
+		pathFilter = path.Clean("/" + strings.TrimSpace(req.Path))
+	}
+	rows, err := a.pool.Query(ctx, query, repo, pathFilter)
+	if err != nil {
+		return nil, fmt.Errorf("batch hashes: %w", err)
+	}
+	defer rows.Close()
+
+	var hashes []store.ContentHash
+	for rows.Next() {
+		var ch store.ContentHash
+		if err := rows.Scan(&ch.Path, &ch.Hash); err != nil {
+			return nil, fmt.Errorf("scan hash: %w", err)
+		}
+		hashes = append(hashes, ch)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read hashes: %w", err)
+	}
+	if hashes == nil {
+		hashes = []store.ContentHash{}
+	}
+	return &store.HashResponse{Hashes: hashes}, nil
+}
+
 func (a *Adapter) Stat(ctx context.Context, req store.StatRequest) (*store.StatResponse, error) {
 	repo := a.repo(req.Repo)
 	tree, err := a.treeFor(ctx, repo)
@@ -442,7 +475,7 @@ func (a *Adapter) writeBackPut(ctx context.Context, repo string, req store.PutRe
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, upsertContent, req.Path, req.Content); err != nil {
+	if _, err := tx.Exec(ctx, upsertContent, req.Path, req.Content, store.HashContent(req.Content)); err != nil {
 		return fmt.Errorf("upsert content: %w", err)
 	}
 

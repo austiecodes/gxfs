@@ -17,6 +17,7 @@ var (
 	ErrUnknownRepo      = errors.New("unknown repo")
 	ErrEmptyQuery       = errors.New("search query cannot be empty")
 	ErrInvalidParam     = errors.New("invalid parameter")
+	ErrNotModified      = errors.New("not modified")
 )
 
 type Node struct {
@@ -25,6 +26,7 @@ type Node struct {
 	Kind    string            `json:"kind"`
 	Size    int64             `json:"size,omitempty"`
 	ModTime string            `json:"mod_time,omitempty"`
+	Hash    string            `json:"hash,omitempty"`
 	Meta    map[string]string `json:"meta,omitempty"`
 }
 
@@ -77,6 +79,7 @@ type CatRequest struct {
 type CatResponse struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+	Hash    string `json:"hash,omitempty"`
 }
 
 type GrepRequest struct {
@@ -191,6 +194,7 @@ type Adapter interface {
 	Writer
 	Editor
 	Searcher
+	BatchHasher
 }
 
 type Writer interface {

@@ -1,7 +1,6 @@
 package syncmanifest
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gxfs/internal/store"
 )
 
 type LocalFile struct {
@@ -78,15 +79,10 @@ func readLocalFile(root, filePath string) (LocalFile, error) {
 	return LocalFile{
 		LocalPath:   localPath,
 		Content:     string(data),
-		ContentHash: HashContent(string(data)),
+		ContentHash: store.HashContent(string(data)),
 		Size:        info.Size(),
 		MTime:       info.ModTime().UTC(),
 	}, nil
-}
-
-func HashContent(content string) string {
-	sum := sha256.Sum256([]byte(content))
-	return fmt.Sprintf("sha256:%x", sum)
 }
 
 func localPath(root, filePath string) (string, error) {

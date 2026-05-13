@@ -57,7 +57,7 @@ func (a *Adapter) Cat(_ context.Context, req store.CatRequest) (*store.CatRespon
 	if err != nil {
 		return nil, err
 	}
-	return &store.CatResponse{Path: req.Path, Content: content}, nil
+	return &store.CatResponse{Path: req.Path, Content: content, Hash: store.HashContent(content)}, nil
 }
 
 func (a *Adapter) Grep(_ context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
@@ -200,6 +200,28 @@ func snippetFromContent(content string, terms []string) string {
 		return content[:200] + "..."
 	}
 	return content
+}
+
+func (a *Adapter) BatchHashes(_ context.Context, req store.HashRequest) (*store.HashResponse, error) {
+	nodes, err := a.tree.Find(req.Path, "", vfs.FindOptions{Type: "file", All: true})
+	if err != nil {
+		return nil, err
+	}
+	var hashes []store.ContentHash
+	for _, n := range nodes {
+		content, err := a.tree.Cat(n.Path)
+		if err != nil {
+			continue
+		}
+		hashes = append(hashes, store.ContentHash{
+			Path: n.Path,
+			Hash: store.HashContent(content),
+		})
+	}
+	if hashes == nil {
+		hashes = []store.ContentHash{}
+	}
+	return &store.HashResponse{Hashes: hashes}, nil
 }
 
 // paginateNodes applies limit/offset to a node slice.

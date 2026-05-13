@@ -154,6 +154,8 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 			Limit:    limit,
 			Offset:   offset,
 		})
+	case "hashes":
+		return h.adapter.BatchHashes(r.Context(), store.HashRequest{Repo: repo, Path: queryPath(q)})
 	case "stat":
 		return h.adapter.Stat(r.Context(), store.StatRequest{Repo: repo, Path: queryPath(q)})
 	case "search":

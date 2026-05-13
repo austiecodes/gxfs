@@ -92,7 +92,7 @@ func TestContentQueriesUseConfiguredPathColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertContentSQL() error = %v", err)
 	}
-	if want := `insert into "public"."vfs_content"("file_path", content) values($1, $2) on conflict("file_path") do update set content = excluded.content`; upsert != want {
+	if want := `insert into "public"."vfs_content"("file_path", content, content_hash) values($1, $2, $3) on conflict("file_path") do update set content = excluded.content, content_hash = excluded.content_hash`; upsert != want {
 		t.Fatalf("UpsertContentSQL() = %q, want %q", upsert, want)
 	}
 
@@ -145,6 +145,7 @@ alter table "public"."vfs_content" add column if not exists content_search tsvec
     generated always as (to_tsvector('english', coalesce(content, ''))) stored;
 
 create index if not exists idx_content_search on "public"."vfs_content" using gin (content_search);`,
+		`alter table "public"."vfs_content" add column if not exists content_hash text;`,
 	}
 	if len(statements) != len(want) {
 		t.Fatalf("SchemaSQL() len = %d, want %d: %v", len(statements), len(want), statements)
