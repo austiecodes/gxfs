@@ -2458,20 +2458,3 @@ func TestCLISearchNegativeOffset(t *testing.T) {
 		t.Fatalf("error = %q, want non-negative message", err.Error())
 	}
 }
-
-func TestCLIFindEmptyPageNoShowing(t *testing.T) {
-	// 3 nodes, offset 100 → empty page, no "showing" line
-	client := &fakeClient{findNodes: manyNodes(3)}
-	cmd := newRootCommand(client, client, "gxfs", nil)
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"find", "--name", "*.txt", "--offset", "100"})
-
-	// Note: fakeClient doesn't paginate, it returns all nodes regardless.
-	// We just verify that printPaginationSummary doesn't print for shown==0.
-	// The actual pagination is in the adapter layer.
-	_ = client
-	_ = cmd
-	// This test is a no-op since fakeClient doesn't slice — real coverage
-	// comes from adapter tests. Keeping it as a placeholder for the API glue.
-}
