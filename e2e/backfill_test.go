@@ -111,6 +111,9 @@ func TestBackfillDocsIntegration(t *testing.T) {
 	// Step 9: Verification queries — compare old vs new results.
 	verifyCatEquivalent(t, ctx, pool, cfg)
 	verifyBatchHashesEquivalent(t, ctx, pool, cfg)
+	verifyLSEquivalent(t, ctx, pool, cfg)
+	verifyFindEquivalent(t, ctx, pool, cfg)
+	verifySearchEquivalent(t, ctx, pool, cfg)
 }
 
 // seedBackfillData creates legacy tables with specific scenarios:
@@ -292,6 +295,17 @@ func verifyDocContents(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cf
 	}
 	if dirCount != 0 {
 		t.Fatalf("found %d dir docs, want 0 (dirs should not be in gxfs_docs)", dirCount)
+	}
+
+	// Check revision = 1 for all import snapshots.
+	var nonRevision1 int
+	if err := pool.QueryRow(ctx, fmt.Sprintf(
+		"select count(*) from %s where revision != 1", docsTable,
+	)).Scan(&nonRevision1); err != nil {
+		t.Fatalf("check revision: %v", err)
+	}
+	if nonRevision1 != 0 {
+		t.Fatalf("found %d docs with revision != 1 (backfill is import snapshot, revision stays 1)", nonRevision1)
 	}
 }
 
@@ -547,6 +561,205 @@ func verifyBatchHashesEquivalent(t *testing.T, ctx context.Context, pool *pgxpoo
 	expectedHash := store.HashContent(readmeContent)
 	if readmeHash != expectedHash {
 		t.Fatalf("computed hash for /docs/readme.md = %q, want %q", readmeHash, expectedHash)
+	}
+}
+
+func verifyLSEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
+	t.Helper()
+
+	pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+
+	// LS / should list top-level entries: implicit dirs /docs, /src + file /README.md.
+	rows, err := pool.Query(ctx, fmt.Sprintf(
+		"select path from %s where repo = 'test-repo' order by path", pathsTable,
+	))
+	if err != nil {
+		t.Fatalf("ls query: %v", err)
+	}
+	var allPaths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			t.Fatalf("scan ls path: %v", err)
+		}
+		allPaths = append(allPaths, p)
+	}
+	rows.Close()
+
+	// Derive implicit dirs and top-level LS entries.
+	lsRoot := lsEntries(t, allPaths, "/")
+	expectedRoot := map[string]bool{"/docs": true, "/src": true, "/README.md": true}
+	if len(lsRoot) != len(expectedRoot) {
+		t.Fatalf("LS / = %v, want %d entries matching %v", lsRoot, len(expectedRoot), expectedRoot)
+	}
+	for _, entry := range lsRoot {
+		if !expectedRoot[entry] {
+			t.Fatalf("LS / unexpected entry %q", entry)
+		}
+	}
+
+	// LS /docs should list /docs/readme.md + implicit dir /docs/api.
+	lsDocs := lsEntries(t, allPaths, "/docs")
+	expectedDocs := map[string]bool{"/docs/readme.md": true, "/docs/api": true}
+	if len(lsDocs) != len(expectedDocs) {
+		t.Fatalf("LS /docs = %v, want %d entries matching %v", lsDocs, len(expectedDocs), expectedDocs)
+	}
+	for _, entry := range lsDocs {
+		if !expectedDocs[entry] {
+			t.Fatalf("LS /docs unexpected entry %q", entry)
+		}
+	}
+
+	// LS /docs/api should list files only.
+	lsAPI := lsEntries(t, allPaths, "/docs/api")
+	expectedAPI := map[string]bool{"/docs/api/reference.md": true, "/docs/api/guide.md": true}
+	if len(lsAPI) != len(expectedAPI) {
+		t.Fatalf("LS /docs/api = %v, want %d entries matching %v", lsAPI, len(expectedAPI), expectedAPI)
+	}
+	for _, entry := range lsAPI {
+		if !expectedAPI[entry] {
+			t.Fatalf("LS /docs/api unexpected entry %q", entry)
+		}
+	}
+}
+
+// lsEntries derives LS-style directory listing from flat file paths.
+// Returns immediate children (files and implicit dirs) under the given prefix.
+func lsEntries(t *testing.T, allPaths []string, prefix string) []string {
+	t.Helper()
+	seen := make(map[string]bool)
+	prefix = strings.TrimRight(prefix, "/") + "/"
+	for _, p := range allPaths {
+		if !strings.HasPrefix(p, prefix) || p == prefix {
+			continue
+		}
+		rest := strings.TrimPrefix(p, prefix)
+		parts := strings.SplitN(rest, "/", 2)
+		child := prefix + parts[0]
+		seen[child] = true
+	}
+	var entries []string
+	for e := range seen {
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+func verifyFindEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
+	t.Helper()
+
+	pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+
+	// Find all files named "readme.md" in test-repo.
+	rows, err := pool.Query(ctx, fmt.Sprintf(
+		"select path from %s where repo = 'test-repo' and path like '%%/readme.md' or (repo = 'test-repo' and path = '/readme.md') order by path",
+		pathsTable,
+	))
+	if err != nil {
+		t.Fatalf("find query: %v", err)
+	}
+	var found []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			t.Fatalf("scan find result: %v", err)
+		}
+		found = append(found, p)
+	}
+	rows.Close()
+	// Should find /docs/readme.md only (not /README.md which is different name)
+	if len(found) != 1 || found[0] != "/docs/readme.md" {
+		t.Fatalf("find readme.md = %v, want [/docs/readme.md]", found)
+	}
+
+	// Find all .md files in test-repo.
+	rows2, err := pool.Query(ctx, fmt.Sprintf(
+		"select path from %s where repo = 'test-repo' and path like '%%%%.md' order by path",
+		pathsTable,
+	))
+	if err != nil {
+		t.Fatalf("find *.md query: %v", err)
+	}
+	var mdFiles []string
+	for rows2.Next() {
+		var p string
+		if err := rows2.Scan(&p); err != nil {
+			t.Fatalf("scan find md result: %v", err)
+		}
+		mdFiles = append(mdFiles, p)
+	}
+	rows2.Close()
+	// test-repo has: /README.md, /docs/readme.md, /docs/api/reference.md, /docs/api/guide.md
+	if len(mdFiles) != 4 {
+		t.Fatalf("find *.md = %v, want 4 files", mdFiles)
+	}
+}
+
+func verifySearchEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
+	t.Helper()
+
+	docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
+	pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+
+	// Search for "main" — should hit /src/main.go.
+	rows, err := pool.Query(ctx, fmt.Sprintf(
+		"select rp.repo, rp.path, ts_rank_cd(d.content_search, query) as rank "+
+			"from %s rp join %s d on rp.doc_id = d.id, "+
+			"plainto_tsquery('english', 'main') as query "+
+			"where d.content_search @@ query "+
+			"order by rank desc",
+		pathsTable, docsTable,
+	))
+	if err != nil {
+		t.Fatalf("search query: %v", err)
+	}
+	type searchHit struct {
+		repo string
+		path string
+	}
+	var hits []searchHit
+	for rows.Next() {
+		var hit searchHit
+		if err := rows.Scan(&hit.repo, &hit.path, new(float64)); err != nil {
+			t.Fatalf("scan search result: %v", err)
+		}
+		hits = append(hits, hit)
+	}
+	rows.Close()
+
+	// "main" should match "func main" in /src/main.go for test-repo.
+	// mirror-repo doesn't have main.go, so only 1 hit.
+	if len(hits) != 1 {
+		t.Fatalf("search 'main' hits = %d, want 1: %+v", len(hits), hits)
+	}
+	if hits[0].repo != "test-repo" || hits[0].path != "/src/main.go" {
+		t.Fatalf("search 'main' hit = %s/%s, want test-repo//src/main.go", hits[0].repo, hits[0].path)
+	}
+
+	// Search for "hello" — should hit README.md and guide.md (both have "Hello World").
+	rows2, err := pool.Query(ctx, fmt.Sprintf(
+		"select rp.repo, rp.path from %s rp join %s d on rp.doc_id = d.id, "+
+			"plainto_tsquery('english', 'hello') as query "+
+			"where d.content_search @@ query "+
+			"order by rp.repo, rp.path",
+		pathsTable, docsTable,
+	))
+	if err != nil {
+		t.Fatalf("search 'hello' query: %v", err)
+	}
+	var helloHits []string
+	for rows2.Next() {
+		var repo, path string
+		if err := rows2.Scan(&repo, &path); err != nil {
+			t.Fatalf("scan hello hit: %v", err)
+		}
+		helloHits = append(helloHits, repo+"/"+path)
+	}
+	rows2.Close()
+	// "hello" matches README.md and guide.md.
+	// test-repo has both → 2 hits. mirror-repo has both → 2 hits. Total 4.
+	if len(helloHits) != 4 {
+		t.Fatalf("search 'hello' hits = %d, want 4: %v", len(helloHits), helloHits)
 	}
 }
 

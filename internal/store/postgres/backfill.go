@@ -204,6 +204,9 @@ func backfillSourceSQL(cfg Config) (string, error) {
 // UUID. Idempotent via legacy_path partial unique index: on conflict, updates
 // title, content, content_hash, and updated_at to keep all columns consistent
 // across re-runs.
+// Revision stays at 1 for all import snapshots — backfill is defined as a
+// "latest import snapshot", not a user edit. Revision tracking begins when
+// production writes go through the new doc adapter (post Phase 1A).
 func backfillDocInsertSQL(cfg Config) (string, error) {
 	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
 	if err != nil {

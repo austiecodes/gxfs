@@ -219,6 +219,49 @@ create table if not exists "public"."gxfs_collection_docs" (
 	}
 }
 
+func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T) {
+	statements, err := SchemaSQL(Config{
+		Schema:         "", // empty schema — should not produce ".gxfs_docs"
+		NodesTable:     "vfs_nodes",
+		ContentTable:   "vfs_content",
+		RepoNodesTable: "vfs_repo_nodes",
+		Files: FileTableConfig{
+			PathColumn:  "path",
+			KindColumn:  "kind",
+			SizeColumn:  "size",
+			MTimeColumn: "updated_at",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SchemaSQL() error = %v", err)
+	}
+
+	// Find the doc tables migration (last statement).
+	docStmt := statements[len(statements)-1]
+
+	// Must NOT contain ".gxfs_docs" (which would happen with empty SchemaName).
+	if strings.Contains(docStmt, ".gxfs_docs") && !strings.Contains(docStmt, `".gxfs_docs"`) {
+		t.Fatalf("empty schema migration contains bare .gxfs_docs — schema quoting broken")
+	}
+
+	// Must contain properly quoted table names without schema prefix.
+	if !strings.Contains(docStmt, `"gxfs_docs"`) {
+		t.Fatalf("empty schema migration missing \"gxfs_docs\" — got: %s", docStmt[:200])
+	}
+	if !strings.Contains(docStmt, `"gxfs_repo_paths"`) {
+		t.Fatalf("empty schema migration missing \"gxfs_repo_paths\"")
+	}
+	if !strings.Contains(docStmt, `"gxfs_collections"`) {
+		t.Fatalf("empty schema migration missing \"gxfs_collections\"")
+	}
+
+	// Must NOT start with a dot (e.g., `"gxfs_docs"` not `.gxfs_docs`).
+	if strings.Contains(docStmt, ".\"gxfs_docs\"") {
+		// Double-check it's not schema-qualified (which is wrong for empty schema).
+		t.Fatalf("empty schema migration has schema-qualified table ref: contains .\"gxfs_docs\"")
+	}
+}
+
 func TestAdapterCacheTTLZeroDoesNotExpire(t *testing.T) {
 	adapter := &Adapter{}
 	adapter.cfg.CacheTTL = 0
