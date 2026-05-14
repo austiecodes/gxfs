@@ -2796,3 +2796,183 @@ func TestAttachDryRun(t *testing.T) {
 	}
 }
 
+// --- Phase 3 tests ---
+
+func TestHookSessionStartNoConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	client := &fakeClient{}
+	cmd := newRootCommand(client, client, "gxfs", nil)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"hook", "session-start"})
+
+	// Should not error even without .gxfs config.
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("hook session-start error = %v", err)
+	}
+}
+
+func TestHookSessionStartNoMounts(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	// Create .gxfs/settings.toml and empty mounts.toml
+	gxfsDir := filepath.Join(dir, ".gxfs")
+	if err := os.MkdirAll(gxfsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(gxfsDir, "settings.toml"), "repo = \"test\"\n[server]\naddr = \"http://localhost:7635\"\n")
+	writeTestFile(t, filepath.Join(gxfsDir, "mounts.toml"), "version = 1\nmounts = []\n")
+
+	client := &fakeClient{}
+	cmd := newRootCommand(client, client, "gxfs", nil)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"hook", "session-start"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("hook session-start error = %v", err)
+	}
+	// Should produce no output when no mounts.
+	if out.String() != "" {
+		t.Errorf("expected empty output, got %q", out.String())
+	}
+}
+
+func TestClaudeHooksCreatesSettings(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := upsertClaudeProjectHooks(dir); err != nil {
+		t.Fatalf("upsertClaudeProjectHooks error = %v", err)
+	}
+
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("parse settings.json: %v", err)
+	}
+
+	hooks, ok := settings["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("settings.json missing 'hooks' key")
+	}
+	sessionStart, ok := hooks["SessionStart"].([]any)
+	if !ok || len(sessionStart) == 0 {
+		t.Fatal("settings.json missing hooks.SessionStart array")
+	}
+
+	group, ok := sessionStart[0].(map[string]any)
+	if !ok {
+		t.Fatal("SessionStart[0] is not an object")
+	}
+	if group["matcher"] != "startup|resume" {
+		t.Errorf("matcher = %v, want startup|resume", group["matcher"])
+	}
+	hookList, ok := group["hooks"].([]any)
+	if !ok || len(hookList) == 0 {
+		t.Fatal("SessionStart[0] missing hooks array")
+	}
+	h, ok := hookList[0].(map[string]any)
+	if !ok {
+		t.Fatal("hook[0] is not an object")
+	}
+	if h["type"] != "command" {
+		t.Errorf("hook type = %v, want command", h["type"])
+	}
+	cmd, _ := h["command"].(string)
+	if !strings.Contains(cmd, "gxfs") {
+		t.Errorf("hook command = %q, want gxfs path", cmd)
+	}
+}
+
+func TestClaudeHooksMergeExisting(t *testing.T) {
+	dir := t.TempDir()
+	claudeDir := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-existing settings with a different hook.
+	existing := map[string]any{
+		"hooks": map[string]any{
+			"PostToolUse": []any{
+				map[string]any{
+					"matcher": "Write|Edit",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": "echo hello"},
+					},
+				},
+			},
+		},
+	}
+	existingData, _ := json.Marshal(existing)
+	writeTestFile(t, filepath.Join(claudeDir, "settings.json"), string(existingData))
+
+	if err := upsertClaudeProjectHooks(dir); err != nil {
+		t.Fatalf("upsertClaudeProjectHooks error = %v", err)
+	}
+
+	data := readTextFile(t, filepath.Join(claudeDir, "settings.json"))
+	var settings map[string]any
+	json.Unmarshal([]byte(data), &settings)
+
+	hooks := settings["hooks"].(map[string]any)
+
+	// PostToolUse should still exist.
+	if _, ok := hooks["PostToolUse"]; !ok {
+		t.Fatal("PostToolUse was removed by merge")
+	}
+
+	// SessionStart should be added.
+	if _, ok := hooks["SessionStart"]; !ok {
+		t.Fatal("SessionStart was not added")
+	}
+}
+
+func TestClaudeHooksDeduplicateCommand(t *testing.T) {
+	dir := t.TempDir()
+
+	// Run twice — second should be a no-op.
+	if err := upsertClaudeProjectHooks(dir); err != nil {
+		t.Fatalf("first call error = %v", err)
+	}
+	data1 := readTextFile(t, filepath.Join(dir, ".claude", "settings.json"))
+
+	if err := upsertClaudeProjectHooks(dir); err != nil {
+		t.Fatalf("second call error = %v", err)
+	}
+	data2 := readTextFile(t, filepath.Join(dir, ".claude", "settings.json"))
+
+	if data1 != data2 {
+		t.Error("second call should be a no-op but settings.json changed")
+	}
+}
+
+func TestInitClaudeHooksProject(t *testing.T) {
+	dir := t.TempDir()
+	cmd := newInitCommand()
+	cmd.SetArgs([]string{"--claude", "--claude-hooks", "project", dir})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, ".claude/settings.json") {
+		t.Errorf("init output = %q, want settings.json update", output)
+	}
+
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+		t.Fatal("settings.json not created")
+	}
+}

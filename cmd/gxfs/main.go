@@ -1600,18 +1600,30 @@ func runHookSessionStart(ctx context.Context, adapter, rawAdapter store.Adapter,
 		}
 
 		// Iterate existing manifest entries under this root.
+		// Use toManifestEntry to generate complete entries with all metadata.
 		entries := syncmanifest.EntriesUnder(manifest, root)
+		existingByLocal := manifestEntriesByLocal(syncmanifest.Manifest{Entries: entries})
 		var updatedEntries []syncmanifest.Entry
+
+		// Process existing entries.
 		for i := range entries {
 			entry := entries[i]
 			rf, hasRemote := remoteByLocal[entry.Local]
+			if !hasRemote {
+				// File no longer exists remotely; keep entry as-is.
+				updatedEntries = append(updatedEntries, entry)
+				continue
+			}
 
-			if hasRemote && entry.Materialized && entry.ContentHash != rf.ContentHash {
+			// Generate a complete entry from the remote file.
+			newEntry := rf.toManifestEntry(repo, root, entry.Materialized)
+
+			if entry.Materialized && entry.ContentHash != rf.ContentHash {
 				// Remote changed and file is materialized. Check if local is unchanged.
 				local, localExists, localErr := readLocalSyncFile(entry.Local)
 				if localErr != nil {
 					fmt.Fprintf(w, "gxfs: skip %s: %s\n", entry.Local, localErr)
-					updatedEntries = append(updatedEntries, entry)
+					updatedEntries = append(updatedEntries, newEntry)
 					continue
 				}
 				if localExists && local.ContentHash == entry.ContentHash {
@@ -1629,37 +1641,28 @@ func runHookSessionStart(ctx context.Context, adapter, rawAdapter store.Adapter,
 						cat, catErr := catAdapter.Cat(ctx, store.CatRequest{Repo: catRepo, Path: rf.RemotePath})
 						if catErr != nil {
 							fmt.Fprintf(w, "gxfs: skip %s: %s\n", entry.Local, catErr)
-							updatedEntries = append(updatedEntries, entry)
+							updatedEntries = append(updatedEntries, newEntry)
 							continue
 						}
 						content = cat.Content
 					}
 					if err := writeMaterializedFile(entry.Local, content); err != nil {
 						fmt.Fprintf(w, "gxfs: skip %s: %s\n", entry.Local, err)
-						updatedEntries = append(updatedEntries, entry)
+						updatedEntries = append(updatedEntries, newEntry)
 						continue
 					}
-					entry.ContentHash = rf.ContentHash
 					totalUpdated++
 				}
+				// Local was changed too; keep materialized but don't overwrite.
+				// newEntry already has Materialized=true from entry.Materialized.
 			}
-			if hasRemote && entry.ContentHash != rf.ContentHash && !entry.Materialized {
-				// Update metadata for non-materialized entries.
-				entry.ContentHash = rf.ContentHash
-			}
-			updatedEntries = append(updatedEntries, entry)
+			updatedEntries = append(updatedEntries, newEntry)
 		}
 
 		// Add new remote files not in manifest (as non-materialized).
-		existingByLocal := manifestEntriesByLocal(syncmanifest.Manifest{Entries: entries})
 		for _, rf := range remoteFiles {
 			if _, exists := existingByLocal[rf.LocalPath]; !exists {
-				updatedEntries = append(updatedEntries, syncmanifest.Entry{
-					Local:       rf.LocalPath,
-					RemoteDoc:   rf.remoteDoc(repo),
-					ContentHash: rf.ContentHash,
-					Size:        int64(len(rf.Content)),
-				})
+				updatedEntries = append(updatedEntries, rf.toManifestEntry(repo, root, false))
 			}
 		}
 
