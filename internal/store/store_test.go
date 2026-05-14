@@ -53,6 +53,10 @@ func (fakeAdapter) Search(_ context.Context, _ store.SearchRequest) (*store.Sear
 	return &store.SearchResponse{Results: []store.SearchResult{}}, nil
 }
 
+func (fakeAdapter) Glob(_ context.Context, _ store.GlobRequest) (*store.GlobResponse, error) {
+	return &store.GlobResponse{Results: []store.GlobResult{}}, nil
+}
+
 var _ store.Adapter = fakeAdapter{}
 
 func TestCapabilityRequestTypesCarryRepoAndPath(t *testing.T) {

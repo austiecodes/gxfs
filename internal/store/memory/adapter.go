@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"strings"
 
 	"gxfs/internal/store"
@@ -222,6 +224,99 @@ func (a *Adapter) BatchHashes(_ context.Context, req store.HashRequest) (*store.
 		hashes = []store.ContentHash{}
 	}
 	return &store.HashResponse{Hashes: hashes}, nil
+}
+
+func (a *Adapter) Glob(_ context.Context, req store.GlobRequest) (*store.GlobResponse, error) {
+	if req.Pattern == "" {
+		return nil, fmt.Errorf("pattern is required")
+	}
+
+	regex, err := memoryGlobToRegex(req.Pattern)
+	if err != nil {
+		return nil, err
+	}
+	re, err := regexp.Compile("^" + regex + "$")
+	if err != nil {
+		return nil, err
+	}
+
+	allNodes, err := a.tree.Find("/", "", vfs.FindOptions{Type: "file", All: true})
+	if err != nil {
+		return nil, err
+	}
+
+	var results []store.GlobResult
+	for _, n := range allNodes {
+		// Strip leading / from path for matching (consistent with DB paths)
+		p := strings.TrimPrefix(n.Path, "/")
+		if re.MatchString(p) {
+			results = append(results, store.GlobResult{
+				Path:    p,
+				Size:    n.Size,
+				ModTime: n.ModTime,
+			})
+		}
+	}
+
+	total := len(results)
+	if results == nil {
+		results = []store.GlobResult{}
+	}
+
+	// Apply offset/limit
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(results) {
+		offset = len(results)
+	}
+	results = results[offset:]
+	if req.Limit > 0 && len(results) > req.Limit {
+		results = results[:req.Limit]
+	}
+
+	return &store.GlobResponse{Results: results, Total: total}, nil
+}
+
+// memoryGlobToRegex converts a glob pattern to a regex.
+// Supports: * (non-/), ? (single non-/), ** (any depth).
+func memoryGlobToRegex(pattern string) (string, error) {
+	pattern = strings.TrimPrefix(pattern, "./")
+	pattern = strings.Trim(pattern, "/")
+	if pattern == "" {
+		return ".*", nil
+	}
+
+	var b strings.Builder
+	i := 0
+	for i < len(pattern) {
+		switch pattern[i] {
+		case '*':
+			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				if i+2 < len(pattern) && pattern[i+2] == '/' {
+					b.WriteString("(.*/)?")
+					i += 3
+				} else {
+					b.WriteString(".*")
+					i += 2
+				}
+			} else {
+				b.WriteString("[^/]*")
+				i++
+			}
+		case '?':
+			b.WriteString("[^/]")
+			i++
+		default:
+			if strings.ContainsAny(string(pattern[i]), `\.+{}()[]^$|`) {
+				b.WriteByte('\\')
+			}
+			b.WriteByte(pattern[i])
+			i++
+		}
+	}
+	return b.String(), nil
 }
 
 // paginateNodes applies limit/offset to a node slice.

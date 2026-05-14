@@ -257,3 +257,27 @@ func DocDeletePathRecursiveSQL(cfg Config) (string, error) {
 		pathsTable,
 	), nil
 }
+
+// DocGlobCountSQL returns a query that counts paths matching a regex pattern.
+func DocGlobCountSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"select count(*) from %s where repo = $1 and path ~ $2",
+		pathsTable,
+	), nil
+}
+
+// DocGlobDataSQL returns a query that selects paths matching a regex pattern.
+func DocGlobDataSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"select path, size, mtime from %s where repo = $1 and path ~ $2 order by path limit $3 offset $4",
+		pathsTable,
+	), nil
+}

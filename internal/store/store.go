@@ -196,6 +196,7 @@ type Adapter interface {
 	Editor
 	Searcher
 	BatchHasher
+	Globber
 }
 
 type Writer interface {
@@ -234,4 +235,37 @@ type Searcher interface {
 
 type CacheInvalidator interface {
 	Invalidate()
+}
+
+// Reposer is an optional interface that adapters can implement to expose
+// the list of available repositories. Registry implements this natively.
+type Reposer interface {
+	Repos() []string
+}
+
+// GlobRequest is the input for Glob — path discovery via glob pattern.
+type GlobRequest struct {
+	Repo    string
+	Pattern string // glob pattern like "**/*.md"
+	Limit   int
+	Offset  int
+}
+
+// GlobResult is a single path match returned by Glob.
+type GlobResult struct {
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	ModTime string `json:"mod_time,omitempty"`
+}
+
+// GlobResponse is the output for Glob.
+type GlobResponse struct {
+	Results []GlobResult `json:"results"`
+	Total   int          `json:"total"`
+}
+
+// Globber discovers file paths by glob pattern. This is a discovery
+// operation (like search), not a mounted-view browsing operation.
+type Globber interface {
+	Glob(ctx context.Context, req GlobRequest) (*GlobResponse, error)
 }

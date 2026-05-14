@@ -167,6 +167,10 @@ func (f *fakeClient) Search(_ context.Context, req store.SearchRequest) (*store.
 	}, nil
 }
 
+func (f *fakeClient) Glob(_ context.Context, req store.GlobRequest) (*store.GlobResponse, error) {
+	return &store.GlobResponse{Results: []store.GlobResult{}, Total: 0}, nil
+}
+
 func execute(t *testing.T, args ...string) (string, *fakeClient) {
 	t.Helper()
 

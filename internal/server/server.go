@@ -41,6 +41,21 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GET /v1/repos — list all repositories.
+	if r.URL.Path == "/v1/repos" && r.Method == http.MethodGet {
+		if reposer, ok := h.adapter.(store.Reposer); ok {
+			names := reposer.Repos()
+			repos := make([]map[string]string, len(names))
+			for i, name := range names {
+				repos[i] = map[string]string{"name": name}
+			}
+			writeJSON(w, map[string]any{"repos": repos})
+			return
+		}
+		writeJSON(w, map[string]any{"repos": []any{}})
+		return
+	}
+
 	repo, op, ok := parsePath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
@@ -186,6 +201,29 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 			Path:   queryPath(q),
 			Limit:  limit,
 			Offset: offset,
+		})
+	case "glob":
+		globber, ok := h.adapter.(store.Globber)
+		if !ok {
+			return nil, fmt.Errorf("glob is not supported by this backend")
+		}
+		pattern := q.Get("pattern")
+		if pattern == "" {
+			return nil, fmt.Errorf("%w: pattern is required", store.ErrInvalidParam)
+		}
+		globLimit, err := queryIntNonNeg(q, "limit")
+		if err != nil {
+			return nil, err
+		}
+		globOffset, err := queryIntNonNeg(q, "offset")
+		if err != nil {
+			return nil, err
+		}
+		return globber.Glob(r.Context(), store.GlobRequest{
+			Repo:    repo,
+			Pattern: pattern,
+			Limit:   globLimit,
+			Offset:  globOffset,
 		})
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", op)

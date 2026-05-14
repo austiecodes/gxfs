@@ -135,6 +135,14 @@ func (r *Registry) BatchHashes(ctx context.Context, req HashRequest) (*HashRespo
 	return adapter.BatchHashes(ctx, req)
 }
 
+func (r *Registry) Glob(ctx context.Context, req GlobRequest) (*GlobResponse, error) {
+	adapter, err := r.adapter(req.Repo)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.Glob(ctx, req)
+}
+
 func (r *Registry) Invalidate() {
 	for _, adapter := range r.adapters {
 		if invalidator, ok := adapter.(CacheInvalidator); ok {

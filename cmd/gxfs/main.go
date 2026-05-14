@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -51,6 +52,8 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 	cmd.AddCommand(newConfigCommand(repo))
 	cmd.AddCommand(newSyncCommand(adapter, rawAdapter, repo, resolver))
 	cmd.AddCommand(newMountCommand(adapter, rawAdapter, repo))
+	cmd.AddCommand(newRepoCommand(rawAdapter))
+	cmd.AddCommand(newGlobCommand(rawAdapter, repo))
 	return cmd
 }
 
@@ -2147,4 +2150,183 @@ func cleanLocalDocsPath(p string) string {
 		return ""
 	}
 	return filepath.ToSlash(path.Clean(p))
+}
+
+func newRepoCommand(rawAdapter store.Adapter) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "repo",
+		Short: "Repository management commands",
+	}
+
+	cmd.AddCommand(newRepoListCommand(rawAdapter))
+	return cmd
+}
+
+func newRepoListCommand(rawAdapter store.Adapter) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List available repositories",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			reposer, ok := rawAdapter.(store.Reposer)
+			if !ok {
+				return fmt.Errorf("repo listing is not supported by the current adapter")
+			}
+			repos := reposer.Repos()
+			for _, name := range repos {
+				fmt.Fprintln(cmd.OutOrStdout(), name)
+			}
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newGlobCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
+	var allRepos bool
+	var globLimit, globOffset int
+	var longFmt bool
+
+	cmd := &cobra.Command{
+		Use:   "glob <pattern>",
+		Short: "Find file paths by glob pattern",
+		Long: `Discover file paths using glob patterns.
+
+Supports:
+  *     — match any non-/ characters
+  ?     — match single non-/ character
+  **    — match any path depth
+
+Examples:
+  gxfs glob "**/*.md"              — all .md files in current repo
+  gxfs glob "docs/**/*.go"         — all .go files under docs/
+  gxfs glob "**/*.md" --all-repos  — all .md files across all repos`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateNonNeg([]string{"limit", "offset"}, globLimit, globOffset); err != nil {
+				return err
+			}
+			pattern := args[0]
+
+			if allRepos {
+				return runGlobAllRepos(cmd, rawAdapter, pattern, globLimit, globOffset, longFmt)
+			}
+
+			return runGlobSingleRepo(cmd, rawAdapter, repo, pattern, globLimit, globOffset, longFmt)
+		},
+	}
+
+	cmd.Flags().BoolVar(&allRepos, "all-repos", false, "search across all repositories")
+	cmd.Flags().IntVar(&globLimit, "limit", 0, "max results (0 = unlimited)")
+	cmd.Flags().IntVar(&globOffset, "offset", 0, "skip first N results")
+	cmd.Flags().BoolVar(&longFmt, "long", false, "show size and modification time")
+	return cmd
+}
+
+func runGlobSingleRepo(cmd *cobra.Command, rawAdapter store.Adapter, repo, pattern string, limit, offset int, longFmt bool) error {
+	resp, err := rawAdapter.Glob(context.Background(), store.GlobRequest{
+		Repo:    repo,
+		Pattern: pattern,
+		Limit:   limit,
+		Offset:  offset,
+	})
+	if err != nil {
+		return err
+	}
+	for _, r := range resp.Results {
+		if longFmt {
+			fmt.Fprintf(cmd.OutOrStdout(), "/%s\t(%s)\t%s\n", r.Path, humanSize(r.Size), r.ModTime)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "/%s\n", r.Path)
+		}
+	}
+	return nil
+}
+
+func runGlobAllRepos(cmd *cobra.Command, rawAdapter store.Adapter, pattern string, limit, offset int, longFmt bool) error {
+	reposer, ok := rawAdapter.(store.Reposer)
+	if !ok {
+		return fmt.Errorf("repo listing is not supported by the current adapter")
+	}
+	repos := reposer.Repos()
+
+	// Fan-out: query each repo in parallel.
+	g, gctx := errgroup.WithContext(context.Background())
+	type repoResult struct {
+		repo    string
+		results []store.GlobResult
+	}
+	ch := make(chan repoResult, len(repos))
+	for _, r := range repos {
+		r := r
+		g.Go(func() error {
+			resp, err := rawAdapter.Glob(gctx, store.GlobRequest{
+				Repo:    r,
+				Pattern: pattern,
+			})
+			if err != nil {
+				return err
+			}
+			ch <- repoResult{repo: r, results: resp.Results}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		close(ch)
+		return err
+	}
+	close(ch)
+
+	// Collect and sort by repo, then path.
+	var all []store.GlobResult
+	repoOf := make(map[int]string)
+	for res := range ch {
+		for _, r := range res.results {
+			idx := len(all)
+			repoOf[idx] = res.repo
+			all = append(all, r)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if repoOf[i] != repoOf[j] {
+			return repoOf[i] < repoOf[j]
+		}
+		return all[i].Path < all[j].Path
+	})
+
+	// Apply offset/limit to merged results.
+	if offset > 0 {
+		if offset > len(all) {
+			offset = len(all)
+		}
+		all = all[offset:]
+	}
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+
+	for i, r := range all {
+		ref := "repo://" + url.PathEscape(repoOf[i]) + "/" + r.Path
+		if longFmt {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\t(%s)\t%s\n", ref, humanSize(r.Size), r.ModTime)
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ref)
+		}
+	}
+	return nil
+}
+
+func humanSize(size int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+	)
+	switch {
+	case size >= MB:
+		return fmt.Sprintf("%.1fMB", float64(size)/float64(MB))
+	case size >= KB:
+		return fmt.Sprintf("%.1fKB", float64(size)/float64(KB))
+	default:
+		return fmt.Sprintf("%dB", size)
+	}
 }

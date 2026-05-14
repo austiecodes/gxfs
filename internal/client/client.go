@@ -28,6 +28,28 @@ func New(baseURL string) *Client {
 	}
 }
 
+// RepoList returns the list of repository names available on the server.
+func (c *Client) RepoList(ctx context.Context) ([]string, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/repos"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build repo_list request: %w", err)
+	}
+	var resp struct {
+		Repos []struct {
+			Name string `json:"name"`
+		} `json:"repos"`
+	}
+	if err := c.do(req, "repo_list", &resp); err != nil {
+		return nil, err
+	}
+	names := make([]string, len(resp.Repos))
+	for i, r := range resp.Repos {
+		names[i] = r.Name
+	}
+	return names, nil
+}
+
 func (c *Client) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
 	var resp store.LSResponse
 	q := url.Values{"path": {req.Path}}
@@ -254,6 +276,21 @@ func (c *Client) Search(ctx context.Context, req store.SearchRequest) (*store.Se
 		q.Set("offset", strconv.Itoa(req.Offset))
 	}
 	if err := c.get(ctx, req.Repo, "search", q, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) Glob(ctx context.Context, req store.GlobRequest) (*store.GlobResponse, error) {
+	var resp store.GlobResponse
+	q := url.Values{"pattern": {req.Pattern}}
+	if req.Limit > 0 {
+		q.Set("limit", strconv.Itoa(req.Limit))
+	}
+	if req.Offset > 0 {
+		q.Set("offset", strconv.Itoa(req.Offset))
+	}
+	if err := c.get(ctx, req.Repo, "glob", q, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

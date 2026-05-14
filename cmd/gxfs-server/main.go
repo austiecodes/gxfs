@@ -131,6 +131,7 @@ func main() {
 
 	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/healthz", Handler: handler.ServeHTTP})
 	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/cache", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/repos", Handler: handler.ServeHTTP})
 	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
 	srv.AddRoute(rest.Route{Method: http.MethodPut, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
 	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})

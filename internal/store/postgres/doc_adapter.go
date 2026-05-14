@@ -396,6 +396,61 @@ func (d *DocAdapter) BatchHashes(ctx context.Context, req store.HashRequest) (*s
 	return &store.HashResponse{Hashes: hashes}, nil
 }
 
+func (d *DocAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.GlobResponse, error) {
+	if req.Pattern == "" {
+		return nil, fmt.Errorf("%w: pattern is required", store.ErrInvalidParam)
+	}
+
+	repo := d.repo(req.Repo)
+	regex, err := globToRegex(req.Pattern)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", store.ErrInvalidParam, err)
+	}
+
+	// Count total matches.
+	countSQL, err := DocGlobCountSQL(d.cfg)
+	if err != nil {
+		return nil, err
+	}
+	var total int
+	if err := d.pool.QueryRow(ctx, countSQL, repo, "^"+regex+"$").Scan(&total); err != nil {
+		return nil, fmt.Errorf("doc glob count: %w", err)
+	}
+
+	if total == 0 {
+		return &store.GlobResponse{Total: 0}, nil
+	}
+
+	// Fetch page of results.
+	dataSQL, err := DocGlobDataSQL(d.cfg)
+	if err != nil {
+		return nil, err
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := d.pool.Query(ctx, dataSQL, repo, "^"+regex+"$", limit, req.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("doc glob query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.GlobResult
+	for rows.Next() {
+		var r store.GlobResult
+		if err := rows.Scan(&r.Path, &r.Size, &r.ModTime); err != nil {
+			return nil, fmt.Errorf("doc glob scan: %w", err)
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("doc glob rows: %w", err)
+	}
+
+	return &store.GlobResponse{Results: results, Total: total}, nil
+}
+
 func (d *DocAdapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
 	repo := d.repo(req.Repo)
 	req.Path = cleanDocPath(req.Path)
