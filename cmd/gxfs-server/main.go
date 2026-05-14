@@ -124,7 +124,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	handler := server.NewHandler(adapter)
+
+	// Build writable repos map from server config.
+	writableRepos := make(map[string]bool, len(cfg.Repos))
+	for _, repo := range cfg.Repos {
+		if repo.Writable {
+			writableRepos[repo.Name] = true
+		}
+	}
+	handler := server.NewHandler(adapter, writableRepos)
 
 	srv := rest.MustNewServer(rest.RestConf{Host: host, Port: port})
 	defer srv.Stop()

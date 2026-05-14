@@ -1723,10 +1723,7 @@ func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 				return fmt.Errorf("mode must be readonly or writable, got %q", mode)
 			}
 
-			// Cross-repo mounts are always readonly.
-			if targetRepo != repo && mode == "writable" {
-				return fmt.Errorf("cross-repo mounts must be readonly")
-			}
+
 
 			// Use raw adapter (direct client, no mount resolver) to validate
 			// the remote path exists on the server, using the target repo.
@@ -2378,6 +2375,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	rawAdapter := client.New(cfg.Server.Addr)
+	rawAdapter.SetClientRepo(cfg.Repo)
 	cmd := newRootCommand(adapter, rawAdapter, cfg.Repo, resolver)
 	cmd.SetArgs(args)
 	cmd.SetOut(stdout)

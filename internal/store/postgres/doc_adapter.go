@@ -622,17 +622,26 @@ func (d *DocAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutR
 	}
 	defer tx.Rollback(ctx)
 
-	// Check if path already exists.
-	lookupSQL, err := DocLookupPathSQL(d.cfg)
+	// Check if path already exists (with hash for CAS).
+	lookupSQL, err := DocLookupPathWithHashSQL(d.cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	var existingDocID pgtype.UUID
-	err = tx.QueryRow(ctx, lookupSQL, repo, req.Path).Scan(&existingDocID)
+	var existingHash string
+	err = tx.QueryRow(ctx, lookupSQL, repo, req.Path).Scan(&existingDocID, &existingHash)
 
 	if err == nil {
-		// Path exists — update the doc in-place to avoid orphans.
+		// Path exists — CAS check for update.
+		if req.ExpectedHash != "" && req.ExpectedHash != "*" && req.ExpectedHash != existingHash {
+			return nil, fmt.Errorf("doc put cas: %w (expected %s, got %s)", store.ErrConflict, req.ExpectedHash, existingHash)
+		}
+		// Create-only requested but path already exists.
+		if req.ExpectedHash == "*" {
+			return nil, fmt.Errorf("doc put create-only: %w (path already exists)", store.ErrConflict)
+		}
+		// Update the doc in-place to avoid orphans.
 		updateSQL, err := DocUpdateByPathSQL(d.cfg)
 		if err != nil {
 			return nil, err
@@ -694,6 +703,25 @@ func (d *DocAdapter) Delete(ctx context.Context, req store.DeleteRequest) (*stor
 
 	if req.Path == "/" {
 		return nil, store.ErrCannotDeleteRoot
+	}
+
+	// CAS check for single file deletes.
+	if req.ExpectedHash != "" {
+		lookupSQL, err := DocLookupPathWithHashSQL(d.cfg)
+		if err != nil {
+			return nil, err
+		}
+		var docID pgtype.UUID
+		var currentHash string
+		if err := d.pool.QueryRow(ctx, lookupSQL, repo, req.Path).Scan(&docID, &currentHash); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("doc delete %s: %w", req.Path, store.ErrNotFound)
+			}
+			return nil, fmt.Errorf("doc delete lookup: %w", err)
+		}
+		if currentHash != req.ExpectedHash {
+			return nil, fmt.Errorf("doc delete cas: %w (expected %s, got %s)", store.ErrConflict, req.ExpectedHash, currentHash)
+		}
 	}
 
 	tree, err := d.treeFor(ctx, repo)
@@ -775,11 +803,17 @@ func (d *DocAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.Ed
 
 	var docID pgtype.UUID
 	var content string
-	if err := tx.QueryRow(ctx, selectSQL, repo, req.Path).Scan(&docID, &content); err != nil {
+	var currentHash string
+	if err := tx.QueryRow(ctx, selectSQL, repo, req.Path).Scan(&docID, &content, &currentHash); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("doc edit %s: %w", req.Path, store.ErrNotFound)
 		}
 		return nil, fmt.Errorf("doc edit select: %w", err)
+	}
+
+	// CAS check.
+	if req.ExpectedHash != "" && req.ExpectedHash != currentHash {
+		return nil, fmt.Errorf("doc edit cas: %w (expected %s, got %s)", store.ErrConflict, req.ExpectedHash, currentHash)
 	}
 
 	// Perform string replacement (matching vfs.Tree.Edit semantics).

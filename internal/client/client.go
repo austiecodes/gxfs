@@ -15,8 +15,9 @@ import (
 )
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL    string
+	http       *http.Client
+	clientRepo string // sent as X-Client-Repo header for cross-repo write gate
 }
 
 var _ store.Adapter = (*Client)(nil)
@@ -26,6 +27,11 @@ func New(baseURL string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    http.DefaultClient,
 	}
+}
+
+// SetClientRepo sets the client repo name sent as X-Client-Repo header.
+func (c *Client) SetClientRepo(repo string) {
+	c.clientRepo = repo
 }
 
 // RepoList returns the list of repository names available on the server.
@@ -240,7 +246,10 @@ func (c *Client) Stat(ctx context.Context, req store.StatRequest) (*store.StatRe
 func (c *Client) Put(ctx context.Context, req store.PutRequest) (*store.PutResponse, error) {
 	var resp store.PutResponse
 	q := url.Values{"path": {req.Path}}
-	if err := c.put(ctx, req.Repo, "write", q, req.Content, &resp); err != nil {
+	if req.ExpectedHash != "" {
+		q.Set("expected_hash", req.ExpectedHash)
+	}
+	if err := c.putWithHeaders(ctx, req.Repo, "write", q, req.Content, &resp, req.ExpectedHash); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -248,7 +257,10 @@ func (c *Client) Put(ctx context.Context, req store.PutRequest) (*store.PutRespo
 
 func (c *Client) Delete(ctx context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
 	q := url.Values{"path": {req.Path}}
-	if err := c.delete(ctx, req.Repo, q); err != nil {
+	if req.ExpectedHash != "" {
+		q.Set("expected_hash", req.ExpectedHash)
+	}
+	if err := c.deleteWithHeaders(ctx, req.Repo, q, req.ExpectedHash != ""); err != nil {
 		return nil, err
 	}
 	return &store.DeleteResponse{}, nil
@@ -257,8 +269,11 @@ func (c *Client) Delete(ctx context.Context, req store.DeleteRequest) (*store.De
 func (c *Client) Edit(ctx context.Context, req store.EditRequest) (*store.EditResponse, error) {
 	var resp store.EditResponse
 	q := url.Values{"path": {req.Path}}
+	if req.ExpectedHash != "" {
+		q.Set("expected_hash", req.ExpectedHash)
+	}
 	body, _ := json.Marshal(map[string]any{"old": req.Old, "new": req.New, "all": req.All})
-	if err := c.putJSON(ctx, req.Repo, "edit", q, body, &resp); err != nil {
+	if err := c.putJSONWithHeaders(ctx, req.Repo, "edit", q, body, &resp, req.ExpectedHash != ""); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -349,6 +364,62 @@ func (c *Client) delete(ctx context.Context, repo string, q url.Values) error {
 		return fmt.Errorf("build delete request: %w", err)
 	}
 	return c.do(req, "delete", nil)
+}
+
+// putWithHeaders is like put but sets CAS and cross-repo headers.
+func (c *Client) putWithHeaders(ctx context.Context, repo, op string, q url.Values, body string, out any, expectedHash string) error {
+	endpoint, err := c.url(repo, op, q)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build %s request: %w", op, err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	c.setWriteHeaders(req, repo, expectedHash)
+	return c.do(req, op, out)
+}
+
+// putJSONWithHeaders is like putJSON but sets CAS and cross-repo headers.
+func (c *Client) putJSONWithHeaders(ctx context.Context, repo, op string, q url.Values, body []byte, out any, hasExpectedHash bool) error {
+	endpoint, err := c.url(repo, op, q)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build %s request: %w", op, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setWriteHeaders(req, repo, q.Get("expected_hash"))
+	return c.do(req, op, out)
+}
+
+// deleteWithHeaders is like delete but sets CAS and cross-repo headers.
+func (c *Client) deleteWithHeaders(ctx context.Context, repo string, q url.Values, hasExpectedHash bool) error {
+	endpoint, err := c.url(repo, "delete", q)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("build delete request: %w", err)
+	}
+	c.setWriteHeaders(req, repo, q.Get("expected_hash"))
+	return c.do(req, "delete", nil)
+}
+
+// setWriteHeaders adds X-Client-Repo and If-Match/If-None-Match headers.
+func (c *Client) setWriteHeaders(req *http.Request, targetRepo, expectedHash string) {
+	if c.clientRepo != "" && c.clientRepo != targetRepo {
+		req.Header.Set("X-Client-Repo", c.clientRepo)
+	}
+	if expectedHash == "*" {
+		req.Header.Set("If-None-Match", "*")
+	} else if expectedHash != "" {
+		req.Header.Set("If-Match", `"`+expectedHash+`"`)
+	}
 }
 
 func (c *Client) do(req *http.Request, op string, out any) error {

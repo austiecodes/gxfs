@@ -15,15 +15,16 @@ import (
 	"gxfs/internal/store"
 )
 
-func NewHandler(adapter store.Adapter) http.Handler {
+func NewHandler(adapter store.Adapter, writableRepos map[string]bool) http.Handler {
 	inv, _ := adapter.(store.CacheInvalidator)
-	h := &handler{adapter: adapter, invalidator: inv}
+	h := &handler{adapter: adapter, invalidator: inv, writableRepos: writableRepos}
 	return &loggingMiddleware{next: h}
 }
 
 type handler struct {
-	adapter     store.Adapter
-	invalidator store.CacheInvalidator
+	adapter       store.Adapter
+	invalidator   store.CacheInvalidator
+	writableRepos map[string]bool // repos that accept cross-repo writes
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +65,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var resp any
 	var err error
+
+	// Cross-repo write gate: if X-Client-Repo indicates a different source,
+	// verify the target repo has writable=true.
+	clientRepo := r.Header.Get("X-Client-Repo")
+	if clientRepo != "" && clientRepo != repo {
+		if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+			if !h.writableRepos[repo] {
+				writeJSONErrorCode(w, http.StatusForbidden, "FORBIDDEN", "target repo does not allow cross-repo writes")
+				return
+			}
+		}
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -239,9 +252,10 @@ func (h *handler) dispatchPut(r *http.Request, repo, op string) (any, error) {
 			return nil, fmt.Errorf("read body: %w", err)
 		}
 		return h.adapter.Put(r.Context(), store.PutRequest{
-			Repo:    repo,
-			Path:    queryPath(q),
-			Content: string(body),
+			Repo:         repo,
+			Path:         queryPath(q),
+			Content:      string(body),
+			ExpectedHash: expectedHash(r, q),
 		})
 	case "edit":
 		var editReq struct {
@@ -253,11 +267,12 @@ func (h *handler) dispatchPut(r *http.Request, repo, op string) (any, error) {
 			return nil, fmt.Errorf("decode edit body: %w", err)
 		}
 		return h.adapter.Edit(r.Context(), store.EditRequest{
-			Repo: repo,
-			Path: queryPath(q),
-			Old:  editReq.Old,
-			New:  editReq.New,
-			All:  editReq.All,
+			Repo:         repo,
+			Path:         queryPath(q),
+			Old:          editReq.Old,
+			New:          editReq.New,
+			All:          editReq.All,
+			ExpectedHash: expectedHash(r, q),
 		})
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", op)
@@ -269,8 +284,9 @@ func (h *handler) dispatchDelete(r *http.Request, repo, op string) (any, error) 
 	switch op {
 	case "delete":
 		return h.adapter.Delete(r.Context(), store.DeleteRequest{
-			Repo: repo,
-			Path: queryPath(q),
+			Repo:         repo,
+			Path:         queryPath(q),
+			ExpectedHash: expectedHash(r, q),
 		})
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", op)
@@ -380,6 +396,19 @@ func writeJSONErrorCode(w http.ResponseWriter, status int, code, message string)
 	})
 }
 
+
+
+// expectedHash returns the CAS hash from If-Match header or expected_hash query param.
+// If-None-Match: * maps to "*" (create-only).
+func expectedHash(r *http.Request, q url.Values) string {
+	if ifMatch := r.Header.Get("If-Match"); ifMatch != "" {
+		return strings.Trim(ifMatch, `"`)
+	}
+	if ifNoneMatch := r.Header.Get("If-None-Match"); ifNoneMatch == "*" {
+		return "*"
+	}
+	return q.Get("expected_hash")
+}
 func mapError(err error) (int, string) {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrOldNotFound):
@@ -397,6 +426,8 @@ func mapError(err error) (int, string) {
 		return http.StatusNotFound, "CONTENT_NOT_READY"
 	case errors.Is(err, store.ErrNotSupported):
 		return http.StatusNotImplemented, "NOT_SUPPORTED"
+	case errors.Is(err, store.ErrConflict):
+		return http.StatusConflict, "CONFLICT"
 	default:
 		return http.StatusInternalServerError, "INTERNAL_ERROR"
 	}
@@ -411,12 +442,41 @@ func (lm *loggingMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 	lm.next.ServeHTTP(rw, r)
-	slog.Info("request",
+
+	attrs := []any{
 		"method", r.Method,
 		"path", r.URL.Path,
 		"status", rw.status,
 		"duration_ms", time.Since(start).Milliseconds(),
-	)
+	}
+
+	// Enhanced logging for cross-repo write operations.
+	if clientRepo := r.Header.Get("X-Client-Repo"); clientRepo != "" {
+		attrs = append(attrs,
+			"client_repo", clientRepo,
+			"mount_path", r.Header.Get("X-Mount-Path"),
+		)
+		repo, op, _ := parsePath(r.URL.Path)
+		if op != "" {
+			attrs = append(attrs,
+				"target_repo", repo,
+				"op", op,
+			)
+		}
+		result := "success"
+		if rw.status >= 400 {
+			result = "error"
+		}
+		if rw.status == http.StatusConflict {
+			result = "conflict"
+		}
+		if rw.status == http.StatusForbidden {
+			result = "rejected"
+		}
+		attrs = append(attrs, "result", result)
+	}
+
+	slog.Info("request", attrs...)
 }
 
 // responseWriter wraps http.ResponseWriter to capture the status code.

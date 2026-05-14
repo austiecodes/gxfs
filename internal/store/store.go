@@ -18,6 +18,7 @@ var (
 	ErrEmptyQuery       = errors.New("search query cannot be empty")
 	ErrInvalidParam     = errors.New("invalid parameter")
 	ErrNotModified      = errors.New("not modified")
+	ErrConflict         = errors.New("conflict: content hash mismatch")
 	ErrNotSupported     = errors.New("operation not supported")
 )
 
@@ -156,9 +157,10 @@ type Statter interface {
 }
 
 type PutRequest struct {
-	Repo    string
-	Path    string
-	Content string
+	Repo         string
+	Path         string
+	Content      string
+	ExpectedHash string // CAS: if set, reject update unless current hash matches; "*" means create-only (reject if exists)
 }
 
 type PutResponse struct {
@@ -166,18 +168,20 @@ type PutResponse struct {
 }
 
 type DeleteRequest struct {
-	Repo string
-	Path string
+	Repo         string
+	Path         string
+	ExpectedHash string // CAS: if set, reject delete unless current hash matches
 }
 
 type DeleteResponse struct{}
 
 type EditRequest struct {
-	Repo string
-	Path string
-	Old  string
-	New  string
-	All  bool
+	Repo         string
+	Path         string
+	Old          string
+	New          string
+	All          bool
+	ExpectedHash string // CAS: if set, reject edit unless current hash matches
 }
 
 type EditResponse struct {

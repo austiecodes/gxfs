@@ -61,8 +61,9 @@ type ServerConfig struct {
 }
 
 type RepoConfig struct {
-	Name    string        `toml:"name"`
-	Backend BackendConfig `toml:"backend"`
+	Name     string        `toml:"name"`
+	Backend  BackendConfig `toml:"backend"`
+	Writable bool          `toml:"writable"` // allow cross-repo write-through to this repo
 }
 
 type BackendConfig struct {

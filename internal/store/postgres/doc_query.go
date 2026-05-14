@@ -189,7 +189,7 @@ func DocSelectForUpdateSQL(cfg Config) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(
-		"select d.id, d.content from %s rp join %s d on rp.doc_id = d.id "+
+		"select d.id, d.content, d.content_hash from %s rp join %s d on rp.doc_id = d.id "+
 			"where rp.repo = $1 and rp.path = $2 for update of d",
 		pathsTable, docsTable,
 	), nil
@@ -231,6 +231,22 @@ func DocLookupPathSQL(cfg Config) (string, error) {
 	return fmt.Sprintf(
 		"select doc_id from %s where repo = $1 and path = $2",
 		pathsTable,
+	), nil
+}
+
+// DocLookupPathWithHashSQL returns doc_id and content_hash for a repo path.
+func DocLookupPathWithHashSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"select p.doc_id, d.content_hash from %s p join %s d on p.doc_id = d.id where p.repo = $1 and p.path = $2",
+		pathsTable, docsTable,
 	), nil
 }
 
