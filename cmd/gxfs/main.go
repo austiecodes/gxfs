@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -69,16 +70,14 @@ func newLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command
 			}
 			p := argPath(args, "/")
 
-			// Support direct remote ls: gxfs ls repo://other-repo/docs
+			// Resolve effective adapter, repo, and path. For repo:// refs,
+			// use rawAdapter directly; otherwise use the normal mount adapter.
+			effAdapter := adapter
+			effRepo := repo
 			if targetRepo, targetPath, ok := parseRepoRef(p); ok {
-				resp, err := rawAdapter.LS(cmd.Context(), store.LSRequest{Repo: targetRepo, Path: targetPath})
-				if err != nil {
-					return err
-				}
-				for _, node := range resp.Nodes {
-					fmt.Fprintln(cmd.OutOrStdout(), formatLSLine(node, longFmt, classify, slashDir))
-				}
-				return nil
+				effAdapter = rawAdapter
+				effRepo = targetRepo
+				p = targetPath
 			}
 
 			sortField := "name"
@@ -95,7 +94,7 @@ func newLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command
 			}
 
 			if dirOnly {
-				resp, err := adapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: p})
+				resp, err := effAdapter.Stat(cmd.Context(), store.StatRequest{Repo: effRepo, Path: p})
 				if err != nil {
 					return err
 				}
@@ -103,7 +102,7 @@ func newLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command
 				return nil
 			}
 
-			resp, err := adapter.LS(cmd.Context(), store.LSRequest{
+			resp, err := effAdapter.LS(cmd.Context(), store.LSRequest{
 				Repo:      repo,
 				Path:      p,
 				Sort:      sortField,
@@ -220,17 +219,17 @@ func newCatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Comman
 		Short: "Print VFS file content",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Support direct remote cat: gxfs cat repo://other-repo/docs/file.md
+			// Resolve effective adapter/repo/path for repo:// refs.
+			effAdapter := adapter
+			effRepo := repo
+			effPath := args[0]
 			if targetRepo, targetPath, ok := parseRepoRef(args[0]); ok {
-				resp, err := rawAdapter.Cat(cmd.Context(), store.CatRequest{Repo: targetRepo, Path: targetPath})
-				if err != nil {
-					return err
-				}
-				fmt.Fprint(cmd.OutOrStdout(), resp.Content)
-				return nil
+				effAdapter = rawAdapter
+				effRepo = targetRepo
+				effPath = targetPath
 			}
 
-			resp, err := adapter.Cat(cmd.Context(), store.CatRequest{Repo: repo, Path: args[0]})
+			resp, err := effAdapter.Cat(cmd.Context(), store.CatRequest{Repo: effRepo, Path: effPath})
 			if err != nil {
 				return err
 			}
@@ -473,21 +472,17 @@ func newStatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Comma
 		Short: "Print VFS node metadata",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Support direct remote stat: gxfs stat repo://other-repo/docs/file.md
+			// Resolve effective adapter/repo/path for repo:// refs.
+			effAdapter := adapter
+			effRepo := repo
+			effPath := args[0]
 			if targetRepo, targetPath, ok := parseRepoRef(args[0]); ok {
-				resp, err := rawAdapter.Stat(cmd.Context(), store.StatRequest{Repo: targetRepo, Path: targetPath})
-				if err != nil {
-					return err
-				}
-				node := resp.Node
-				fmt.Fprintf(cmd.OutOrStdout(), "  Path: %s\n", node.Path)
-				fmt.Fprintf(cmd.OutOrStdout(), "  Name: %s\n", node.Name)
-				fmt.Fprintf(cmd.OutOrStdout(), "  Kind: %s\n", node.Kind)
-				fmt.Fprintf(cmd.OutOrStdout(), "  Size: %d\n", node.Size)
-				return nil
+				effAdapter = rawAdapter
+				effRepo = targetRepo
+				effPath = targetPath
 			}
 
-			resp, err := adapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: args[0]})
+			resp, err := effAdapter.Stat(cmd.Context(), store.StatRequest{Repo: effRepo, Path: effPath})
 			if err != nil {
 				return err
 			}
@@ -1228,7 +1223,11 @@ func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, rawAdapter 
 				if rawAdapter != nil {
 					catAdapter = rawAdapter
 				}
-				cat, err := catAdapter.Cat(ctx, store.CatRequest{Repo: repo, Path: change.Remote.RemotePath})
+				catRepo := change.Remote.RemoteRepo
+				if catRepo == "" {
+					catRepo = repo
+				}
+				cat, err := catAdapter.Cat(ctx, store.CatRequest{Repo: catRepo, Path: change.Remote.RemotePath})
 				if err != nil {
 					return remoteSyncResult{}, fmt.Errorf("cat %s for materialize: %w", change.Remote.RemotePath, err)
 				}
@@ -1541,7 +1540,12 @@ func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 
 			// Use raw adapter (direct client, no mount resolver) to validate
 			// the remote path exists on the server, using the target repo.
-			if remotePath != "/" {
+			if remotePath == "/" {
+				// Root mount: validate the target repo exists by statting its root.
+				if _, err := rawAdapter.Stat(cmd.Context(), store.StatRequest{Repo: targetRepo, Path: "/"}); err != nil {
+					return fmt.Errorf("remote repo %s does not exist: %w", targetRepo, err)
+				}
+			} else {
 				if _, err := rawAdapter.Stat(cmd.Context(), store.StatRequest{Repo: targetRepo, Path: remotePath}); err != nil {
 					return fmt.Errorf("remote path %s does not exist: %w", remoteRef, err)
 				}
@@ -2025,6 +2029,7 @@ func argPath(args []string, fallback string) string {
 }
 
 // parseRepoRef parses a "repo://<name>/<path>" argument into repo and path.
+// Repo names containing '/' must be URL-encoded (e.g. repo://github%2Fopenai-go/docs).
 // Returns ("", "", false) if the argument is not a repo ref.
 func parseRepoRef(arg string) (repo, p string, ok bool) {
 	if !strings.HasPrefix(arg, "repo://") {
@@ -2035,7 +2040,11 @@ func parseRepoRef(arg string) (repo, p string, ok bool) {
 	if parts[0] == "" {
 		return "", "", false
 	}
-	repo = parts[0]
+	decoded, err := url.PathUnescape(parts[0])
+	if err != nil {
+		return "", "", false
+	}
+	repo = decoded
 	if len(parts) == 2 && parts[1] != "" {
 		p = "/" + parts[1]
 	} else {
