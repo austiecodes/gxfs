@@ -566,24 +566,25 @@ func setMountPathOnClient(rawAdapter store.Adapter, localPath string, resolver *
 	}
 }
 
-// casHashForPath returns the ExpectedHash for a CAS write operation.
-// If the path has a manifest entry with a content_hash, return it for CAS.
-// If no manifest entry exists or no hash is available, return "" (no CAS).
-// This avoids falsely inferring create-only (*) for files that exist remotely
-// but haven't been pulled into the local manifest yet.
-func casHashForPath(localPath string) string {
+// manifestHashForPath returns the content_hash from the manifest for a given path.
+// Returns (hash, true) if a manifest entry with a hash is found.
+// Returns ("", false) if no entry or no hash.
+func manifestHashForPath(localPath string) (string, bool) {
 	manifestPath := defaultManifestPath("")
 	manifest, err := syncmanifest.Load(manifestPath)
 	if err != nil {
-		return "" // no manifest → no CAS
+		return "", false
 	}
 	cleaned := strings.TrimPrefix(localPath, "/")
 	for _, entry := range manifest.Entries {
 		if entry.Local == cleaned || entry.Local == localPath {
-			return entry.ContentHash // may be "" if no hash yet
+			if entry.ContentHash != "" {
+				return entry.ContentHash, true
+			}
+			return "", false
 		}
 	}
-	return "" // no entry → no CAS (do not assume create-only)
+	return "", false
 }
 
 // resolveMountPath resolves the local mount prefix for a given path.
@@ -621,7 +622,15 @@ func newWriteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *m
 				content = string(data)
 			}
 
-			expectedHash := casHashForPath(path)
+			expectedHash, hasBaseline := manifestHashForPath(path)
+			if !hasBaseline {
+				// No manifest baseline — check if remote file exists.
+				if _, statErr := adapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: path}); statErr == nil {
+					return fmt.Errorf("path %s exists remotely but has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+				}
+				// File does not exist remotely — create-only.
+				expectedHash = "*"
+			}
 			setMountPathOnClient(rawAdapter, path, resolver)
 			resp, err := adapter.Put(cmd.Context(), store.PutRequest{
 				Repo:         repo,
@@ -649,7 +658,10 @@ func newDeleteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			expectedHash := casHashForPath(path)
+			expectedHash, hasBaseline := manifestHashForPath(path)
+			if !hasBaseline {
+				return fmt.Errorf("path %s has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+			}
 			setMountPathOnClient(rawAdapter, path, resolver)
 			_, err := adapter.Delete(cmd.Context(), store.DeleteRequest{
 				Repo:         repo,
@@ -758,7 +770,10 @@ func newEditCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			expectedHash := casHashForPath(path)
+			expectedHash, hasBaseline := manifestHashForPath(path)
+			if !hasBaseline {
+				return fmt.Errorf("path %s has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+			}
 			setMountPathOnClient(rawAdapter, path, resolver)
 			resp, err := adapter.Edit(cmd.Context(), store.EditRequest{
 				Repo:         repo,
