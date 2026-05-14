@@ -2144,6 +2144,12 @@ func wantsHelp(args []string) bool {
 	return false
 }
 
+
+// repoLister is a CLI-local interface for repo discovery with error propagation.
+// The client.Client satisfies this via its RepoList method.
+type repoLister interface {
+	RepoList(ctx context.Context) ([]string, error)
+}
 func cleanLocalDocsPath(p string) string {
 	p = strings.TrimSpace(p)
 	p = strings.Trim(p, "/")
@@ -2169,11 +2175,14 @@ func newRepoListCommand(rawAdapter store.Adapter) *cobra.Command {
 		Short: "List available repositories",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			reposer, ok := rawAdapter.(store.Reposer)
+			lister, ok := rawAdapter.(repoLister)
 			if !ok {
 				return fmt.Errorf("repo listing is not supported by the current adapter")
 			}
-			repos := reposer.Repos()
+			repos, err := lister.RepoList(cmd.Context())
+			if err != nil {
+				return err
+			}
 			for _, name := range repos {
 				fmt.Fprintln(cmd.OutOrStdout(), name)
 			}
@@ -2245,11 +2254,14 @@ func runGlobSingleRepo(cmd *cobra.Command, rawAdapter store.Adapter, repo, patte
 }
 
 func runGlobAllRepos(cmd *cobra.Command, rawAdapter store.Adapter, pattern string, limit, offset int, longFmt bool) error {
-	reposer, ok := rawAdapter.(store.Reposer)
+	lister, ok := rawAdapter.(repoLister)
 	if !ok {
 		return fmt.Errorf("repo listing is not supported by the current adapter")
 	}
-	repos := reposer.Repos()
+	repos, err := lister.RepoList(context.Background())
+	if err != nil {
+		return err
+	}
 
 	// Fan-out: query each repo in parallel.
 	g, gctx := errgroup.WithContext(context.Background())
@@ -2359,11 +2371,14 @@ Examples:
 				return fmt.Errorf("--into is required and must be a non-empty relative path")
 			}
 
-			reposer, ok := rawAdapter.(store.Reposer)
+			lister, ok := rawAdapter.(repoLister)
 			if !ok {
 				return fmt.Errorf("repo listing is not supported by the current adapter")
 			}
-			repos := reposer.Repos()
+			repos, err := lister.RepoList(cmd.Context())
+			if err != nil {
+				return err
+			}
 
 			// Match repos: exact match first, then suffix match on last segment.
 			var matches []string
