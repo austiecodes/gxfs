@@ -446,11 +446,17 @@ func (d *DocAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.Gl
 
 	var results []store.GlobResult
 	for rows.Next() {
-		var r store.GlobResult
-		if err := rows.Scan(&r.Path, &r.Size, &r.ModTime); err != nil {
+		var filePath string
+		var size int64
+		var mtime time.Time
+		if err := rows.Scan(&filePath, &size, &mtime); err != nil {
 			return nil, fmt.Errorf("doc glob scan: %w", err)
 		}
-		results = append(results, r)
+		results = append(results, store.GlobResult{
+			Path:    filePath,
+			Size:    size,
+			ModTime: mtime.UTC().Format(time.RFC3339),
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("doc glob rows: %w", err)
