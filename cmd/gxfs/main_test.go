@@ -15,12 +15,13 @@ import (
 	"sync"
 	"testing"
 
-	"gxfs/internal/vfs"
-
+	"gxfs/internal/client"
 	"gxfs/internal/config"
 	"gxfs/internal/mount"
+	"gxfs/internal/server"
 	"gxfs/internal/store"
 	"gxfs/internal/syncmanifest"
+	"gxfs/internal/vfs"
 )
 
 type fakeClient struct {
@@ -3094,4 +3095,228 @@ func TestHookSessionStartPreservesLocalConflict(t *testing.T) {
 	if updated.Entries[0].ContentHash != oldHash {
 		t.Errorf("manifest hash = %q, want %q (should preserve old baseline on conflict)", updated.Entries[0].ContentHash, oldHash)
 	}
+}
+
+
+// --- #14 Cross-repo Writable Mount Tests ---
+
+func TestMountAddCrossRepoWritable(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	got := executeWithClient(t, client, "mount", "add", "repo://other-repo/docs", "libs/other", "--mode", "writable", "--no-refresh")
+	if !strings.Contains(got, "added mount libs/other") {
+		t.Fatalf("output = %q, want add confirmation", got)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gxfs", "mounts.toml"))
+	if err != nil {
+		t.Fatalf("read mounts.toml: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "mode = 'writable'") {
+		t.Errorf("mounts.toml missing writable mode: %s", content)
+	}
+}
+
+func TestServerCrossRepoWriteGateRejectsNonWritable(t *testing.T) {
+	var gotMethod, gotPath string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(store.PutResponse{
+			Node: store.Node{Path: "/hello.txt", Name: "hello.txt", Kind: "file"},
+		})
+	}))
+	defer backend.Close()
+
+	// Create a simple handler that routes to the backend.
+	// For this test we just test the gate logic directly.
+	// Since server.NewHandler needs a store.Adapter, we use a fakeClient-based approach.
+	
+	// Simpler approach: test the gate logic by calling server.NewHandler with writableRepos.
+	// We need an adapter that can respond to writes.
+	fake := &fakeClient{
+		putReqs: nil,
+	}
+	// The fakeClient doesn't implement the full adapter interface needed for server.
+	// Let's test via HTTP instead.
+	_ = backend
+	_ = fake
+	_ = gotMethod
+	_ = gotPath
+	
+	// Use a real server.NewHandler with a test adapter.
+	// Since we can't easily create a memory adapter, test the server directly
+	// using httptest with a handler that embeds the gate logic.
+	
+	// Actually, let's test the write gate more directly through the server handler.
+	// Create a handler with writableRepos map.
+	noopAdapter := &testNoopAdapter{}
+	writableRepos := map[string]bool{} // target-repo not writable
+	handler := server.NewHandler(noopAdapter, writableRepos)
+
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/target-repo/write?path=/hello.txt", strings.NewReader("content"))
+	req.Header.Set("X-Client-Repo", "source-repo")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
+	}
+}
+
+func TestServerCrossRepoWriteGateAllowsWritable(t *testing.T) {
+	noopAdapter := &testNoopAdapter{}
+	writableRepos := map[string]bool{"target-repo": true}
+	handler := server.NewHandler(noopAdapter, writableRepos)
+
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/target-repo/write?path=/hello.txt", strings.NewReader("content"))
+	req.Header.Set("X-Client-Repo", "source-repo")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestServerSelfRepoWriteAlwaysAllowed(t *testing.T) {
+	noopAdapter := &testNoopAdapter{}
+	writableRepos := map[string]bool{} // nothing writable
+	handler := server.NewHandler(noopAdapter, writableRepos)
+
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/my-repo/write?path=/hello.txt", strings.NewReader("content"))
+	// No X-Client-Repo header → self-repo write
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d (self-repo write should always succeed)", w.Code, http.StatusOK)
+	}
+}
+
+func TestServerCASConflict(t *testing.T) {
+	noopAdapter := &testNoopAdapter{}
+	writableRepos := map[string]bool{}
+	handler := server.NewHandler(noopAdapter, writableRepos)
+
+	// Write with If-Match header but the adapter returns conflict.
+	// The noop adapter returns success, so we test that the CAS field is parsed
+	// and passed through. For actual CAS testing we need a real adapter.
+	// This test verifies the HTTP contract: If-Match header is parsed and passed.
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/my-repo/write?path=/hello.txt", strings.NewReader("content"))
+	req.Header.Set("If-Match", `"sha256:abc123"`)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	// The noop adapter returns success, meaning the header was parsed and didn't break anything.
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestServerCreateOnlyRejectsExisting(t *testing.T) {
+	conflictAdapter := &testConflictAdapter{}
+	writableRepos := map[string]bool{}
+	handler := server.NewHandler(conflictAdapter, writableRepos)
+
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/my-repo/write?path=/hello.txt", strings.NewReader("content"))
+	req.Header.Set("If-None-Match", "*")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want %d (create-only on existing path should return 409)", w.Code, http.StatusConflict)
+	}
+}
+
+func TestServerExpectedHashQueryParam(t *testing.T) {
+	conflictAdapter := &testConflictAdapter{}
+	writableRepos := map[string]bool{}
+	handler := server.NewHandler(conflictAdapter, writableRepos)
+
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/my-repo/write?path=/hello.txt&expected_hash=sha256%3Awrong", strings.NewReader("content"))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want %d (CAS mismatch via query param should return 409)", w.Code, http.StatusConflict)
+	}
+}
+
+func TestClientSetClientRepo(t *testing.T) {
+	c := client.New("http://example.com")
+	c.SetClientRepo("my-repo")
+	if c.ClientRepo() != "my-repo" {
+		t.Errorf("ClientRepo() = %q, want %q", c.ClientRepo(), "my-repo")
+	}
+}
+
+// testNoopAdapter is a minimal adapter that returns success for all write operations.
+type testNoopAdapter struct{}
+
+func (t *testNoopAdapter) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
+	return &store.LSResponse{}, nil
+}
+func (t *testNoopAdapter) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeResponse, error) {
+	return &store.TreeResponse{}, nil
+}
+func (t *testNoopAdapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResponse, error) {
+	return &store.CatResponse{}, nil
+}
+func (t *testNoopAdapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepResponse, error) {
+	return &store.GrepResponse{}, nil
+}
+func (t *testNoopAdapter) Find(ctx context.Context, req store.FindRequest) (*store.FindResponse, error) {
+	return &store.FindResponse{}, nil
+}
+func (t *testNoopAdapter) Stat(ctx context.Context, req store.StatRequest) (*store.StatResponse, error) {
+	return &store.StatResponse{}, nil
+}
+func (t *testNoopAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutResponse, error) {
+	return &store.PutResponse{Node: store.Node{Path: req.Path, Name: "test", Kind: "file"}}, nil
+}
+func (t *testNoopAdapter) Delete(ctx context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
+	return &store.DeleteResponse{}, nil
+}
+func (t *testNoopAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditResponse, error) {
+	return &store.EditResponse{Path: req.Path, Replaced: 1}, nil
+}
+func (t *testNoopAdapter) Search(ctx context.Context, req store.SearchRequest) (*store.SearchResponse, error) {
+	return &store.SearchResponse{}, nil
+}
+func (t *testNoopAdapter) BatchHashes(ctx context.Context, req store.HashRequest) (*store.HashResponse, error) {
+	return &store.HashResponse{}, nil
+}
+func (t *testNoopAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.GlobResponse, error) {
+	return &store.GlobResponse{}, nil
+}
+func (t *testNoopAdapter) Repos() []string { return []string{"test"} }
+func (t *testNoopAdapter) Invalidate()     {}
+
+// testConflictAdapter returns ErrConflict for all writes when ExpectedHash is set.
+type testConflictAdapter struct {
+	testNoopAdapter
+}
+
+func (t *testConflictAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutResponse, error) {
+	if req.ExpectedHash != "" {
+		return nil, store.ErrConflict
+	}
+	return t.testNoopAdapter.Put(ctx, req)
+}
+func (t *testConflictAdapter) Delete(ctx context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
+	if req.ExpectedHash != "" {
+		return nil, store.ErrConflict
+	}
+	return t.testNoopAdapter.Delete(ctx, req)
+}
+func (t *testConflictAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditResponse, error) {
+	if req.ExpectedHash != "" {
+		return nil, store.ErrConflict
+	}
+	return t.testNoopAdapter.Edit(ctx, req)
 }

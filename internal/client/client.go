@@ -34,6 +34,11 @@ func (c *Client) SetClientRepo(repo string) {
 	c.clientRepo = repo
 }
 
+// ClientRepo returns the configured client repo name.
+func (c *Client) ClientRepo() string {
+	return c.clientRepo
+}
+
 // RepoList returns the list of repository names available on the server.
 func (c *Client) RepoList(ctx context.Context) ([]string, error) {
 	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/repos"
