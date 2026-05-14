@@ -55,6 +55,7 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 	cmd.AddCommand(newRepoCommand(rawAdapter))
 	cmd.AddCommand(newGlobCommand(rawAdapter, repo))
 	cmd.AddCommand(newAttachCommand(rawAdapter, repo))
+	cmd.AddCommand(newHookCommand(adapter, rawAdapter, repo, resolver))
 	return cmd
 }
 
@@ -1514,6 +1515,163 @@ func removeEmptyParents(localPath, root string) error {
 	return nil
 }
 
+// --- Hook commands ---
+
+func newHookCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "hook",
+		Short: "GXFS lifecycle hooks",
+	}
+	cmd.AddCommand(newHookSessionStartCommand(adapter, rawAdapter, repo, resolver))
+	return cmd
+}
+
+func newHookSessionStartCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
+	return &cobra.Command{
+		Use:   "session-start",
+		Short: "Refresh gxfs docs for a new agent session",
+		Long:  "Refresh manifest metadata and update materialized files that changed remotely. Runs with a 5s timeout; always exits 0 so it does not block the session.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manifestPath := defaultManifestPath("")
+			mountsPath := filepath.Join(filepath.Dir(manifestPath), "mounts.toml")
+
+			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+			defer cancel()
+
+			// Run the hook; swallow all errors so we never block the session.
+			updated, err := runHookSessionStart(ctx, adapter, rawAdapter, repo, resolver, manifestPath, mountsPath, cmd.OutOrStdout())
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "gxfs hook: %s\n", err)
+				return nil
+			}
+			if updated > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "gxfs: updated %d file%s\n", updated, plural(updated))
+			}
+			return nil
+		},
+	}
+}
+
+// runHookSessionStart refreshes manifest metadata for all mounts and overwrites
+// materialized files where the remote hash changed and the local file is unchanged.
+// It never dematerializes entries.
+func runHookSessionStart(ctx context.Context, adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver, manifestPath, mountsPath string, w io.Writer) (int, error) {
+	// Load mounts to determine which roots to refresh.
+	mountsCfg, err := loadMountsOrDefault(mountsPath)
+	if err != nil {
+		return 0, fmt.Errorf("load mounts: %w", err)
+	}
+
+	var roots []string
+	for _, m := range mountsCfg.Mounts {
+		root := cleanLocalDocsPath(m.Local)
+		if root != "" {
+			roots = append(roots, root)
+		}
+	}
+	if len(roots) == 0 {
+		return 0, nil
+	}
+	sort.Strings(roots)
+
+	manifest, err := loadManifest(manifestPath)
+	if err != nil {
+		return 0, fmt.Errorf("load manifest: %w", err)
+	}
+
+	var totalUpdated int
+	for _, root := range roots {
+		// Collect current remote files.
+		var remoteFiles []remoteSyncFile
+		if resolver != nil {
+			remoteFiles, err = collectMountedRemoteFiles(ctx, rawAdapter, resolver, repo, root, manifest)
+		} else {
+			remoteFiles, err = collectRemoteFiles(ctx, adapter, repo, root, manifest)
+		}
+		if err != nil {
+			fmt.Fprintf(w, "gxfs: skip %s: %s\n", root, err)
+			continue
+		}
+
+		// Build a lookup of remote files by local path.
+		remoteByLocal := make(map[string]remoteSyncFile, len(remoteFiles))
+		for _, rf := range remoteFiles {
+			remoteByLocal[rf.LocalPath] = rf
+		}
+
+		// Iterate existing manifest entries under this root.
+		entries := syncmanifest.EntriesUnder(manifest, root)
+		var updatedEntries []syncmanifest.Entry
+		for i := range entries {
+			entry := entries[i]
+			rf, hasRemote := remoteByLocal[entry.Local]
+
+			if hasRemote && entry.Materialized && entry.ContentHash != rf.ContentHash {
+				// Remote changed and file is materialized. Check if local is unchanged.
+				local, localExists, localErr := readLocalSyncFile(entry.Local)
+				if localErr != nil {
+					fmt.Fprintf(w, "gxfs: skip %s: %s\n", entry.Local, localErr)
+					updatedEntries = append(updatedEntries, entry)
+					continue
+				}
+				if localExists && local.ContentHash == entry.ContentHash {
+					// Local unchanged, safe to overwrite.
+					content := rf.Content
+					if content == "" {
+						catAdapter := adapter
+						if rawAdapter != nil {
+							catAdapter = rawAdapter
+						}
+						catRepo := rf.RemoteRepo
+						if catRepo == "" {
+							catRepo = repo
+						}
+						cat, catErr := catAdapter.Cat(ctx, store.CatRequest{Repo: catRepo, Path: rf.RemotePath})
+						if catErr != nil {
+							fmt.Fprintf(w, "gxfs: skip %s: %s\n", entry.Local, catErr)
+							updatedEntries = append(updatedEntries, entry)
+							continue
+						}
+						content = cat.Content
+					}
+					if err := writeMaterializedFile(entry.Local, content); err != nil {
+						fmt.Fprintf(w, "gxfs: skip %s: %s\n", entry.Local, err)
+						updatedEntries = append(updatedEntries, entry)
+						continue
+					}
+					entry.ContentHash = rf.ContentHash
+					totalUpdated++
+				}
+			}
+			if hasRemote && entry.ContentHash != rf.ContentHash && !entry.Materialized {
+				// Update metadata for non-materialized entries.
+				entry.ContentHash = rf.ContentHash
+			}
+			updatedEntries = append(updatedEntries, entry)
+		}
+
+		// Add new remote files not in manifest (as non-materialized).
+		existingByLocal := manifestEntriesByLocal(syncmanifest.Manifest{Entries: entries})
+		for _, rf := range remoteFiles {
+			if _, exists := existingByLocal[rf.LocalPath]; !exists {
+				updatedEntries = append(updatedEntries, syncmanifest.Entry{
+					Local:       rf.LocalPath,
+					RemoteDoc:   rf.remoteDoc(repo),
+					ContentHash: rf.ContentHash,
+					Size:        int64(len(rf.Content)),
+				})
+			}
+		}
+
+		manifest = syncmanifest.UpdateEntries(manifest, updatedEntries)
+	}
+
+	if err := syncmanifest.Save(manifestPath, manifest); err != nil {
+		return totalUpdated, fmt.Errorf("save manifest: %w", err)
+	}
+	return totalUpdated, nil
+}
+
 func newMountCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mount",
@@ -1782,6 +1940,7 @@ func newInitCommand() *cobra.Command {
 	var serverAddr string
 	var docsPath string
 	var authMode string
+	var claudeHooks string
 
 	repoName = "github.com/user/repo"
 	serverAddr = "http://127.0.0.1:7635"
@@ -1877,6 +2036,13 @@ func newInitCommand() *cobra.Command {
 				}
 			}
 
+			if claudeHooks == "project" {
+				if err := upsertClaudeProjectHooks(dir); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "updated .claude/settings.json\n")
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "initialized %s\n", gxfsDir)
 			return nil
 		},
@@ -1888,6 +2054,7 @@ func newInitCommand() *cobra.Command {
 	cmd.Flags().StringVar(&serverAddr, "server", serverAddr, "gxfs-server base URL")
 	cmd.Flags().StringVar(&docsPath, "docs", docsPath, "local docs root")
 	cmd.Flags().StringVar(&authMode, "auth", authMode, "auth mode: bearer or none")
+	cmd.Flags().StringVar(&claudeHooks, "claude-hooks", "", "inject Claude Code hooks: project")
 	return cmd
 }
 
@@ -2023,6 +2190,108 @@ func renderInitTemplate(name, raw string, data initTemplateData) (string, error)
 		return "", fmt.Errorf("render %s template: %w", name, err)
 	}
 	return out.String(), nil
+}
+
+// upsertClaudeProjectHooks writes a SessionStart hook into the project-level
+// .claude/settings.json. It merges with existing settings without overwriting
+// other hooks or settings.
+func upsertClaudeProjectHooks(dir string) error {
+	claudeDir := filepath.Join(dir, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+
+	// Resolve gxfs executable path.
+	gxfsPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve gxfs path: %w", err)
+	}
+	gxfsPath, err = filepath.Abs(gxfsPath)
+	if err != nil {
+		return fmt.Errorf("absolute gxfs path: %w", err)
+	}
+
+	hookCommand := gxfsPath + " hook session-start"
+
+	// Load existing settings or start fresh.
+	var settings map[string]any
+	data, err := os.ReadFile(settingsPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", settingsPath, err)
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return fmt.Errorf("parse %s: %w", settingsPath, err)
+		}
+	}
+	if settings == nil {
+		settings = make(map[string]any)
+	}
+
+	// Ensure hooks.SessionStart structure exists.
+	hooks, _ := settings["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = make(map[string]any)
+		settings["hooks"] = hooks
+	}
+
+	sessionStart, _ := hooks["SessionStart"].([]any)
+	if sessionStart == nil {
+		sessionStart = []any{}
+	}
+
+	// Check if our hook already exists (by command string).
+	const matcher = "startup|resume"
+	for _, group := range sessionStart {
+		g, ok := group.(map[string]any)
+		if !ok || g["matcher"] != matcher {
+			continue
+		}
+		hookList, _ := g["hooks"].([]any)
+		for _, h := range hookList {
+			hm, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			if cmd, _ := hm["command"].(string); cmd == hookCommand {
+				// Already exists, nothing to do.
+				return nil
+			}
+		}
+		// Matcher group exists but our command is not in it. Append.
+		g["hooks"] = append(hookList, map[string]any{
+			"type":    "command",
+			"command": hookCommand,
+		})
+		// Already found the right matcher group; re-serialize.
+		hooks["SessionStart"] = sessionStart
+		return writeClaudeSettings(settingsPath, claudeDir, settings)
+	}
+
+	// No matching matcher group. Create one.
+	sessionStart = append(sessionStart, map[string]any{
+		"matcher": matcher,
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": hookCommand,
+			},
+		},
+	})
+	hooks["SessionStart"] = sessionStart
+	return writeClaudeSettings(settingsPath, claudeDir, settings)
+}
+
+func writeClaudeSettings(settingsPath, claudeDir string, settings map[string]any) error {
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", claudeDir, err)
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	if err := os.WriteFile(settingsPath, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", settingsPath, err)
+	}
+	return nil
 }
 
 func newConfigCommand(repo string) *cobra.Command {
