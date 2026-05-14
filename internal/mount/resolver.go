@@ -136,6 +136,15 @@ func (r *Resolver) hasVirtualDir(localPath string) bool {
 	return base == nil && len(descendants) > 0
 }
 
+// MountLocals returns the local paths of all configured mounts.
+func (r *Resolver) MountLocals() []string {
+	locals := make([]string, len(r.mounts))
+	for i, m := range r.mounts {
+		locals[i] = m.local
+	}
+	return locals
+}
+
 func (r *Resolver) ToLocal(remoteRepo, remotePath string) (string, bool) {
 	remotePath = cleanRemote(remotePath)
 	for _, m := range r.mounts {

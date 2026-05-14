@@ -87,7 +87,7 @@ func TestHandlerRoutesLS(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/ls?path=/docs", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -157,7 +157,7 @@ func TestHandlerRoutesLSParams(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
 			rec := httptest.NewRecorder()
 
-			NewHandler(adapter).ServeHTTP(rec, req)
+			NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -177,7 +177,7 @@ func TestHandlerRoutesGrepRegex(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/grep?path=/go&pattern=Adapter&regex=true", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -261,7 +261,7 @@ func TestHandlerRoutesGrepParams(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
 			rec := httptest.NewRecorder()
 
-			NewHandler(adapter).ServeHTTP(rec, req)
+			NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -276,7 +276,7 @@ func TestHandlerRoutesGrepParams(t *testing.T) {
 
 func TestHandlerHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewHandler(&fakeAdapter{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	NewHandler(&fakeAdapter{}, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
 		t.Fatalf("healthz = %d %q, want ok", rec.Code, rec.Body.String())
 	}
@@ -345,7 +345,7 @@ func TestHandlerRoutesFindParams(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
 			rec := httptest.NewRecorder()
 
-			NewHandler(adapter).ServeHTTP(rec, req)
+			NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -428,7 +428,7 @@ func TestHandlerRoutesTreeParams(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
 			rec := httptest.NewRecorder()
 
-			NewHandler(adapter).ServeHTTP(rec, req)
+			NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 			if tt.expectError {
 				if rec.Code == http.StatusOK {
@@ -467,7 +467,7 @@ func TestHandlerMapsReadOnlyMountErrorToForbidden(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/v1/repos/gxfs/write?path=/docs/readme.md", strings.NewReader("hello"))
 	rec := httptest.NewRecorder()
 
-	NewHandler(&readOnlyAdapter{}).ServeHTTP(rec, req)
+	NewHandler(&readOnlyAdapter{}, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusForbidden, rec.Body.String())
@@ -485,7 +485,7 @@ func TestHandlerMapsUnknownRepoToNotFound(t *testing.T) {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
 
-	NewHandler(registry).ServeHTTP(rec, req)
+	NewHandler(registry, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
@@ -500,7 +500,7 @@ func TestHandlerRoutesSearch(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/search?q=test&path=/docs&limit=5", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -535,7 +535,7 @@ func TestHandlerSearchEmptyQuery(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/search?q=", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
@@ -550,7 +550,7 @@ func TestHandlerSearchInvalidLimit(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/search?q=test&limit=abc", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for invalid limit", rec.Code)
@@ -564,7 +564,7 @@ func TestHandlerCatContentNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/deleted.md", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
@@ -631,7 +631,7 @@ func TestHandlerLSLimitOffset(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
 			rec := httptest.NewRecorder()
 
-			NewHandler(adapter).ServeHTTP(rec, req)
+			NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 			if tt.expectError {
 				if rec.Code == http.StatusOK {
@@ -698,7 +698,7 @@ func TestHandlerFindLimitOffset(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
 			rec := httptest.NewRecorder()
 
-			NewHandler(adapter).ServeHTTP(rec, req)
+			NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 			if tt.expectError {
 				if rec.Code == http.StatusOK {
@@ -771,7 +771,7 @@ func TestHandlerSearchLimitOffset(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
 			rec := httptest.NewRecorder()
 
-			NewHandler(adapter).ServeHTTP(rec, req)
+			NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 			if tt.expectError {
 				if rec.Code == http.StatusOK {
@@ -802,7 +802,7 @@ func TestHandlerCatReturnsETag(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -832,7 +832,7 @@ func TestHandlerCatIfNoneMatchReturns304(t *testing.T) {
 	req.Header.Set("If-None-Match", `"`+hash+`"`)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotModified {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotModified, rec.Body.String())
@@ -852,7 +852,7 @@ func TestHandlerCatIfNoneMatchMismatchReturns200(t *testing.T) {
 	req.Header.Set("If-None-Match", `"sha256:0000000000"`)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -873,7 +873,7 @@ func TestHandlerCatIfNoneMatchUnquoted(t *testing.T) {
 	req.Header.Set("If-None-Match", hash)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotModified {
 		t.Fatalf("status = %d, want %d (unquoted ETag should match)", rec.Code, http.StatusNotModified)
@@ -887,7 +887,7 @@ func TestHandlerCatIfNoneMatchMultipleETags(t *testing.T) {
 	req.Header.Set("If-None-Match", `"sha256:other", "`+hash+`"`)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotModified {
 		t.Fatalf("status = %d, want %d (comma-separated ETags should match)", rec.Code, http.StatusNotModified)
@@ -900,7 +900,7 @@ func TestHandlerCatNoHashNoETag(t *testing.T) {
 	req.Header.Set("If-None-Match", `"sha256:whatever"`)
 	rec := httptest.NewRecorder()
 
-	NewHandler(adapter).ServeHTTP(rec, req)
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (no hash -> normal response)", rec.Code, http.StatusOK)

@@ -41,9 +41,9 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 	cmd.AddCommand(newGrepCommand(adapter, repo))
 	cmd.AddCommand(newFindCommand(adapter, repo))
 	cmd.AddCommand(newStatCommand(adapter, rawAdapter, repo))
-	cmd.AddCommand(newWriteCommand(adapter, repo))
-	cmd.AddCommand(newEditCommand(adapter, repo))
-	cmd.AddCommand(newDeleteCommand(adapter, repo))
+	cmd.AddCommand(newWriteCommand(adapter, rawAdapter, repo, resolver))
+	cmd.AddCommand(newEditCommand(adapter, rawAdapter, repo, resolver))
+	cmd.AddCommand(newDeleteCommand(adapter, rawAdapter, repo, resolver))
 	cmd.AddCommand(newSearchCommand(adapter, repo))
 	cmd.AddCommand(newRefreshCommand(adapter, rawAdapter, repo, resolver))
 	cmd.AddCommand(newMaterializeCommand(adapter, rawAdapter, repo, resolver))
@@ -558,7 +558,51 @@ func formatMeta(meta map[string]string) string {
 	return strings.Join(pairs, ", ")
 }
 
-func newWriteCommand(adapter store.Adapter, repo string) *cobra.Command {
+// setMountPathOnClient sets the X-Mount-Path header on the raw client adapter
+// if the path resolves to a cross-repo mount.
+func setMountPathOnClient(rawAdapter store.Adapter, localPath string, resolver *mountadapter.Resolver) {
+	if cl, ok := rawAdapter.(*client.Client); ok && resolver != nil {
+		cl.SetMountPath(resolveMountPath(localPath, resolver))
+	}
+}
+
+// casHashForPath returns the ExpectedHash for a CAS write operation.
+// If the path has a manifest entry with a content_hash, return it for CAS.
+// If no manifest entry exists or no hash is available, return "" (no CAS).
+// This avoids falsely inferring create-only (*) for files that exist remotely
+// but haven't been pulled into the local manifest yet.
+func casHashForPath(localPath string) string {
+	manifestPath := defaultManifestPath("")
+	manifest, err := syncmanifest.Load(manifestPath)
+	if err != nil {
+		return "" // no manifest → no CAS
+	}
+	cleaned := strings.TrimPrefix(localPath, "/")
+	for _, entry := range manifest.Entries {
+		if entry.Local == cleaned || entry.Local == localPath {
+			return entry.ContentHash // may be "" if no hash yet
+		}
+	}
+	return "" // no entry → no CAS (do not assume create-only)
+}
+
+// resolveMountPath resolves the local mount prefix for a given path.
+// Returns the mount local path (e.g. "libs/other") or "" if not on a mount.
+func resolveMountPath(localPath string, resolver *mountadapter.Resolver) string {
+	if resolver == nil {
+		return ""
+	}
+	// Find the mount entry whose local prefix matches.
+	for _, local := range resolver.MountLocals() {
+		cleaned := strings.TrimPrefix(localPath, "/")
+		if cleaned == local || strings.HasPrefix(cleaned, local+"/") {
+			return local
+		}
+	}
+	return ""
+}
+
+func newWriteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "write <path> [content]",
 		Short: "Write content to a VFS file",
@@ -577,12 +621,18 @@ func newWriteCommand(adapter store.Adapter, repo string) *cobra.Command {
 				content = string(data)
 			}
 
+			expectedHash := casHashForPath(path)
+			setMountPathOnClient(rawAdapter, path, resolver)
 			resp, err := adapter.Put(cmd.Context(), store.PutRequest{
-				Repo:    repo,
-				Path:    path,
-				Content: content,
+				Repo:         repo,
+				Path:         path,
+				Content:      content,
+				ExpectedHash: expectedHash,
 			})
 			if err != nil {
+				if errors.Is(err, store.ErrConflict) {
+					return fmt.Errorf("%w\nhint: run 'gxfs sync pull' or 'gxfs refresh' to update local state, then retry", err)
+				}
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s (%d bytes)\n", resp.Node.Path, resp.Node.Size)
@@ -592,20 +642,27 @@ func newWriteCommand(adapter store.Adapter, repo string) *cobra.Command {
 	return cmd
 }
 
-func newDeleteCommand(adapter store.Adapter, repo string) *cobra.Command {
+func newDeleteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <path>",
 		Short: "Delete a VFS file or directory",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			path := args[0]
+			expectedHash := casHashForPath(path)
+			setMountPathOnClient(rawAdapter, path, resolver)
 			_, err := adapter.Delete(cmd.Context(), store.DeleteRequest{
-				Repo: repo,
-				Path: args[0],
+				Repo:         repo,
+				Path:         path,
+				ExpectedHash: expectedHash,
 			})
 			if err != nil {
+				if errors.Is(err, store.ErrConflict) {
+					return fmt.Errorf("%w\nhint: run 'gxfs sync pull' or 'gxfs refresh' to update local state, then retry", err)
+				}
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "deleted %s\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "deleted %s\n", path)
 			return nil
 		},
 	}
@@ -690,7 +747,7 @@ func formatSize(size int64) string {
 	return fmt.Sprintf("%.1fMB", float64(size)/(1024*1024))
 }
 
-func newEditCommand(adapter store.Adapter, repo string) *cobra.Command {
+func newEditCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	var old, newStr string
 	var all bool
 
@@ -700,14 +757,21 @@ func newEditCommand(adapter store.Adapter, repo string) *cobra.Command {
 		Long:  "Replace occurrences of old text with new text in a VFS file.\nBy default replaces only the first occurrence. Use --all to replace all.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			path := args[0]
+			expectedHash := casHashForPath(path)
+			setMountPathOnClient(rawAdapter, path, resolver)
 			resp, err := adapter.Edit(cmd.Context(), store.EditRequest{
-				Repo: repo,
-				Path: args[0],
-				Old:  old,
-				New:  newStr,
-				All:  all,
+				Repo:         repo,
+				Path:         path,
+				Old:          old,
+				New:          newStr,
+				All:          all,
+				ExpectedHash: expectedHash,
 			})
 			if err != nil {
+				if errors.Is(err, store.ErrConflict) {
+					return fmt.Errorf("%w\nhint: run 'gxfs sync pull' or 'gxfs refresh' to update local state, then retry", err)
+				}
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "edited %s (%d replacement%s)\n", resp.Path, resp.Replaced, plural(resp.Replaced))

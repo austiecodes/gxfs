@@ -18,6 +18,7 @@ type Client struct {
 	baseURL    string
 	http       *http.Client
 	clientRepo string // sent as X-Client-Repo header for cross-repo write gate
+	mountPath  string // sent as X-Mount-Path header for observability
 }
 
 var _ store.Adapter = (*Client)(nil)
@@ -37,6 +38,11 @@ func (c *Client) SetClientRepo(repo string) {
 // ClientRepo returns the configured client repo name.
 func (c *Client) ClientRepo() string {
 	return c.clientRepo
+}
+
+// SetMountPath sets the mount path sent as X-Mount-Path header.
+func (c *Client) SetMountPath(mp string) {
+	c.mountPath = mp
 }
 
 // RepoList returns the list of repository names available on the server.
@@ -415,10 +421,13 @@ func (c *Client) deleteWithHeaders(ctx context.Context, repo string, q url.Value
 	return c.do(req, "delete", nil)
 }
 
-// setWriteHeaders adds X-Client-Repo and If-Match/If-None-Match headers.
+// setWriteHeaders adds X-Client-Repo, X-Mount-Path and If-Match/If-None-Match headers.
 func (c *Client) setWriteHeaders(req *http.Request, targetRepo, expectedHash string) {
 	if c.clientRepo != "" && c.clientRepo != targetRepo {
 		req.Header.Set("X-Client-Repo", c.clientRepo)
+	}
+	if c.mountPath != "" {
+		req.Header.Set("X-Mount-Path", c.mountPath)
 	}
 	if expectedHash == "*" {
 		req.Header.Set("If-None-Match", "*")
