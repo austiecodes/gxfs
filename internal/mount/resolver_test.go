@@ -216,6 +216,24 @@ func TestParseRemoteRef(t *testing.T) {
 	}
 }
 
+func TestParseRemoteRefRoundTripWithSlashInRepo(t *testing.T) {
+	// A repo name containing "/" must round-trip through URL-encoded refs.
+	repoName := "github/openai-go"
+	ref := "repo://github%2Fopenai-go/docs/quickstart.md"
+
+	// Parse the ref back
+	parsedRepo, parsedPath, err := ParseRemoteRef("my-project", ref)
+	if err != nil {
+		t.Fatalf("ParseRemoteRef() error = %v", err)
+	}
+	if parsedRepo != repoName {
+		t.Fatalf("parsedRepo = %q, want %q", parsedRepo, repoName)
+	}
+	if parsedPath != "/docs/quickstart.md" {
+		t.Fatalf("parsedPath = %q, want /docs/quickstart.md", parsedPath)
+	}
+}
+
 func TestResolverDetectsVirtualDirsFromMountPaths(t *testing.T) {
 	r, err := NewResolver("gxfs", []config.MountConfig{
 		{Local: "docs/gotchas/openai-go", Remote: "repo://self/shared/openai-go", Mode: "readonly"},

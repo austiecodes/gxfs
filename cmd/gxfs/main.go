@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -831,11 +832,11 @@ func resolveRemoteDoc(resolver *mountadapter.Resolver, repo, localPath, fallback
 }
 
 // formatRemoteRef returns a repo:// ref string. Same-repo uses "self",
-// cross-repo uses the actual repo name.
+// cross-repo uses the URL-encoded repo name.
 func formatRemoteRef(currentRepo, remoteRepo, remotePath string) string {
-	repoAlias := remoteRepo
-	if remoteRepo == currentRepo {
-		repoAlias = "self"
+	repoAlias := "self"
+	if remoteRepo != currentRepo {
+		repoAlias = url.PathEscape(remoteRepo)
 	}
 	return "repo://" + repoAlias + "/" + strings.Trim(remotePath, "/")
 }
@@ -1265,7 +1266,7 @@ func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, rawAdapter 
 func (f remoteSyncFile) remoteDoc(currentRepo string) string {
 	repo := "self"
 	if f.RemoteRepo != "" && f.RemoteRepo != currentRepo {
-		repo = f.RemoteRepo
+		repo = url.PathEscape(f.RemoteRepo)
 	}
 	return "repo://" + repo + "/" + strings.Trim(f.RemotePath, "/")
 }
