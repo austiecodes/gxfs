@@ -15,8 +15,8 @@ import (
 //   - ?   = match any single character except /
 //   - All other characters are escaped literally.
 //
-// Paths in gxfs_repo_paths are stored without leading / (e.g. "docs/readme.md").
-// The regex matches against these cleaned paths.
+// Paths in gxfs_repo_paths are stored with leading / (e.g. "/docs/readme.md").
+// Callers add a /? anchor prefix so the regex handles the leading / correctly.
 func globToRegex(pattern string) (string, error) {
 	if pattern == "" {
 		return "", fmt.Errorf("glob pattern cannot be empty")

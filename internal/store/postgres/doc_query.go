@@ -284,14 +284,14 @@ func DocGlobDataSQL(cfg Config) (string, error) {
 }
 
 // DocGlobDataAllSQL returns a query that selects all paths matching a regex pattern
-// without LIMIT (unlimited results, offset only).
+// without LIMIT but with OFFSET support ($3).
 func DocGlobDataAllSQL(cfg Config) (string, error) {
 	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf(
-		"select path, size, mtime from %s where repo = $1 and path ~ $2 order by path",
+		"select path, size, mtime from %s where repo = $1 and path ~ $2 order by path offset $3",
 		pathsTable,
 	), nil
 }

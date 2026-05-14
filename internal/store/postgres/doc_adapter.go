@@ -407,13 +407,17 @@ func (d *DocAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.Gl
 		return nil, fmt.Errorf("%w: %s", store.ErrInvalidParam, err)
 	}
 
+	// DB paths have leading /; globToRegex assumes no leading /.
+	// Add /? anchor so regex matches both /docs/x.md and docs/x.md.
+	anchored := "^/?" + regex + "$"
+
 	// Count total matches.
 	countSQL, err := DocGlobCountSQL(d.cfg)
 	if err != nil {
 		return nil, err
 	}
 	var total int
-	if err := d.pool.QueryRow(ctx, countSQL, repo, "^"+regex+"$").Scan(&total); err != nil {
+	if err := d.pool.QueryRow(ctx, countSQL, repo, anchored).Scan(&total); err != nil {
 		return nil, fmt.Errorf("doc glob count: %w", err)
 	}
 
@@ -428,7 +432,7 @@ func (d *DocAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.Gl
 		if err != nil {
 			return nil, err
 		}
-		rows, err = d.pool.Query(ctx, dataSQL, repo, "^"+regex+"$", req.Limit, req.Offset)
+		rows, err = d.pool.Query(ctx, dataSQL, repo, anchored, req.Limit, req.Offset)
 		if err != nil {
 			return nil, fmt.Errorf("doc glob query: %w", err)
 		}
@@ -437,7 +441,7 @@ func (d *DocAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.Gl
 		if err != nil {
 			return nil, err
 		}
-		rows, err = d.pool.Query(ctx, allSQL, repo, "^"+regex+"$")
+		rows, err = d.pool.Query(ctx, allSQL, repo, anchored, req.Offset)
 		if err != nil {
 			return nil, fmt.Errorf("doc glob query: %w", err)
 		}
@@ -452,8 +456,9 @@ func (d *DocAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.Gl
 		if err := rows.Scan(&filePath, &size, &mtime); err != nil {
 			return nil, fmt.Errorf("doc glob scan: %w", err)
 		}
+		// Normalize: strip leading / so output matches memory adapter.
 		results = append(results, store.GlobResult{
-			Path:    filePath,
+			Path:    strings.TrimPrefix(filePath, "/"),
 			Size:    size,
 			ModTime: mtime.UTC().Format(time.RFC3339),
 		})
