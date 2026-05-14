@@ -10,7 +10,6 @@ import (
 	"golang.org/x/sync/errgroup"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -74,7 +73,7 @@ func newLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command
 			// use rawAdapter directly; otherwise use the normal mount adapter.
 			effAdapter := adapter
 			effRepo := repo
-			if targetRepo, targetPath, ok := parseRepoRef(p); ok {
+			if targetRepo, targetPath, ok := parseRepoRef(repo, p); ok {
 				effAdapter = rawAdapter
 				effRepo = targetRepo
 				p = targetPath
@@ -103,7 +102,7 @@ func newLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command
 			}
 
 			resp, err := effAdapter.LS(cmd.Context(), store.LSRequest{
-				Repo:      repo,
+				Repo:      effRepo,
 				Path:      p,
 				Sort:      sortField,
 				Reverse:   sortReverse,
@@ -223,7 +222,7 @@ func newCatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Comman
 			effAdapter := adapter
 			effRepo := repo
 			effPath := args[0]
-			if targetRepo, targetPath, ok := parseRepoRef(args[0]); ok {
+			if targetRepo, targetPath, ok := parseRepoRef(repo, args[0]); ok {
 				effAdapter = rawAdapter
 				effRepo = targetRepo
 				effPath = targetPath
@@ -476,7 +475,7 @@ func newStatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Comma
 			effAdapter := adapter
 			effRepo := repo
 			effPath := args[0]
-			if targetRepo, targetPath, ok := parseRepoRef(args[0]); ok {
+			if targetRepo, targetPath, ok := parseRepoRef(repo, args[0]); ok {
 				effAdapter = rawAdapter
 				effRepo = targetRepo
 				effPath = targetPath
@@ -825,10 +824,20 @@ func cleanSyncMount(root string) string {
 func resolveRemoteDoc(resolver *mountadapter.Resolver, repo, localPath, fallbackPath string) string {
 	if resolver != nil {
 		if resolved, err := resolver.Resolve(localPath, mountadapter.OpWrite); err == nil {
-			return "repo://" + resolved.RemoteRepo + "/" + strings.Trim(resolved.RemotePath, "/")
+			return formatRemoteRef(repo, resolved.RemoteRepo, resolved.RemotePath)
 		}
 	}
-	return "repo://" + repo + "/" + strings.Trim(fallbackPath, "/")
+	return "repo://self/" + strings.Trim(fallbackPath, "/")
+}
+
+// formatRemoteRef returns a repo:// ref string. Same-repo uses "self",
+// cross-repo uses the actual repo name.
+func formatRemoteRef(currentRepo, remoteRepo, remotePath string) string {
+	repoAlias := remoteRepo
+	if remoteRepo == currentRepo {
+		repoAlias = "self"
+	}
+	return "repo://" + repoAlias + "/" + strings.Trim(remotePath, "/")
 }
 func newSyncPullCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	var manifestPath string
@@ -1137,7 +1146,7 @@ func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root 
 	if err != nil {
 		return remoteSyncPlan{}, err
 	}
-	return buildRemoteSyncPlanFromFiles(remoteFiles, manifest, opts, root)
+	return buildRemoteSyncPlanFromFiles(repo, remoteFiles, manifest, opts, root)
 }
 
 // buildRemoteSyncPlanForRoot picks the correct collection strategy based on
@@ -1150,12 +1159,12 @@ func buildRemoteSyncPlanForRoot(ctx context.Context, adapter, rawAdapter store.A
 		if err != nil {
 			return remoteSyncPlan{}, err
 		}
-		return buildRemoteSyncPlanFromFiles(remoteFiles, manifest, opts, root)
+		return buildRemoteSyncPlanFromFiles(repo, remoteFiles, manifest, opts, root)
 	}
 	return buildRemoteSyncPlan(ctx, adapter, repo, root, manifest, opts)
 }
 
-func buildRemoteSyncPlanFromFiles(remoteFiles []remoteSyncFile, manifest syncmanifest.Manifest, opts remoteSyncOptions, root string) (remoteSyncPlan, error) {
+func buildRemoteSyncPlanFromFiles(repo string, remoteFiles []remoteSyncFile, manifest syncmanifest.Manifest, opts remoteSyncOptions, root string) (remoteSyncPlan, error) {
 	existingByLocal := manifestEntriesByLocal(manifest)
 	changes := make([]remoteSyncChange, 0, len(remoteFiles))
 	for _, remote := range remoteFiles {
@@ -1187,7 +1196,7 @@ func buildRemoteSyncPlanFromFiles(remoteFiles []remoteSyncFile, manifest syncman
 		}
 
 		action := remoteSyncAccept
-		entry := remote.toManifestEntry(root, false)
+		entry := remote.toManifestEntry(repo, root, false)
 		if opts.Materialize {
 			action = remoteSyncMaterialize
 			entry.Materialized = true
@@ -1251,14 +1260,20 @@ func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, rawAdapter 
 	return result, nil
 }
 
-func (f remoteSyncFile) toManifestEntry(root string, materialized bool) syncmanifest.Entry {
-	repo := f.RemoteRepo
-	if repo == "" {
-		repo = "self"
+// remoteDoc returns the repo:// ref for this file for manifest entries.
+// Same-repo (RemoteRepo empty) uses "self". Cross-repo uses the actual repo name.
+func (f remoteSyncFile) remoteDoc(currentRepo string) string {
+	repo := "self"
+	if f.RemoteRepo != "" && f.RemoteRepo != currentRepo {
+		repo = f.RemoteRepo
 	}
+	return "repo://" + repo + "/" + strings.Trim(f.RemotePath, "/")
+}
+
+func (f remoteSyncFile) toManifestEntry(currentRepo, root string, materialized bool) syncmanifest.Entry {
 	return syncmanifest.Entry{
 		Local:        f.LocalPath,
-		RemoteDoc:    "repo://" + repo + "/" + strings.Trim(f.RemotePath, "/"),
+		RemoteDoc:    f.remoteDoc(currentRepo),
 		Mount:        cleanSyncMount(root),
 		ContentHash:  f.ContentHash,
 		Size:         f.Size,
@@ -1740,7 +1755,7 @@ func refreshAfterMount(cmd *cobra.Command, rawAdapter store.Adapter, repo, local
 		return fmt.Errorf("refresh manifest after mount: %w", err)
 	}
 
-	plan, err := buildRemoteSyncPlanFromFiles(remoteFiles, manifest, remoteSyncOptions{}, localPath)
+	plan, err := buildRemoteSyncPlanFromFiles(repo, remoteFiles, manifest, remoteSyncOptions{}, localPath)
 	if err != nil {
 		return fmt.Errorf("refresh manifest after mount: %w", err)
 	}
@@ -2029,28 +2044,18 @@ func argPath(args []string, fallback string) string {
 }
 
 // parseRepoRef parses a "repo://<name>/<path>" argument into repo and path.
-// Repo names containing '/' must be URL-encoded (e.g. repo://github%2Fopenai-go/docs).
-// Returns ("", "", false) if the argument is not a repo ref.
-func parseRepoRef(arg string) (repo, p string, ok bool) {
+// Delegates to mountadapter.ParseRemoteRef for consistent URL decoding and
+// cross-repo handling. Handles repo://self/<path> by keeping repo as "self".
+// Returns ("", "", false) if the argument is not a repo ref or is invalid.
+func parseRepoRef(currentRepo, arg string) (repo, p string, ok bool) {
 	if !strings.HasPrefix(arg, "repo://") {
 		return "", "", false
 	}
-	rest := strings.TrimPrefix(arg, "repo://")
-	parts := strings.SplitN(rest, "/", 2)
-	if parts[0] == "" {
-		return "", "", false
-	}
-	decoded, err := url.PathUnescape(parts[0])
+	r, p, err := mountadapter.ParseRemoteRef(currentRepo, arg)
 	if err != nil {
 		return "", "", false
 	}
-	repo = decoded
-	if len(parts) == 2 && parts[1] != "" {
-		p = "/" + parts[1]
-	} else {
-		p = "/"
-	}
-	return repo, p, true
+	return r, p, true
 }
 
 func main() {

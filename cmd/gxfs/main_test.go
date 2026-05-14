@@ -1882,8 +1882,8 @@ func TestMountAddRejectsInvalidRemoteRef(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid remote ref")
 	}
-	if !strings.Contains(err.Error(), "only repo://self/<path>") {
-		t.Fatalf("error = %q, want repo://self rejection", err)
+	if !strings.Contains(err.Error(), "unsupported remote") {
+		t.Fatalf("error = %q, want unsupported remote rejection", err)
 	}
 }
 
