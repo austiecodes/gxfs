@@ -2976,3 +2976,122 @@ func TestInitClaudeHooksProject(t *testing.T) {
 		t.Fatal("settings.json not created")
 	}
 }
+
+func TestHookSessionStartOverwritesUnchangedLocal(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	// Setup: .gxfs dir with settings, mounts, manifest, and a materialized file.
+	gxfsDir := filepath.Join(dir, ".gxfs")
+	os.MkdirAll(gxfsDir, 0o755)
+	writeTestFile(t, filepath.Join(gxfsDir, "settings.toml"), "repo = \"test\"\n[server]\naddr = \"http://localhost:7635\"\n")
+	writeTestFile(t, filepath.Join(gxfsDir, "mounts.toml"), "version = 1\n[[mounts]]\nlocal = \"docs\"\nremote = \"repo://self/docs\"\nmode = \"readonly\"\n")
+
+	// Create a materialized file at docs/readme.md.
+	oldHash := store.HashContent("old content")
+	writeTestFile(t, filepath.Join(dir, "docs", "readme.md"), "old content")
+
+	// Write manifest with the old hash.
+	manifest := syncmanifest.Manifest{Version: 1, Entries: []syncmanifest.Entry{
+		{Local: "docs/readme.md", RemoteDoc: "repo://self/docs/readme.md", Mount: "docs", ContentHash: oldHash, Materialized: true},
+	}}
+	if err := syncmanifest.Save(filepath.Join(gxfsDir, "manifest.toml"), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	// fakeClient returns a new file list with different hash (simulating remote change).
+	newContent := "new content from server"
+	newHash := store.HashContent(newContent)
+	client := &fakeClient{
+		lsNodes: []store.Node{
+			{Path: "/docs/readme.md", Name: "readme.md", Kind: "file", Size: int64(len(newContent)), Hash: newHash},
+		},
+		catContent: newContent,
+	}
+
+	cmd := newRootCommand(client, client, "gxfs", nil)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"hook", "session-start"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("hook session-start error = %v", err)
+	}
+
+	// Local file should be overwritten with new content.
+	localContent := readTextFile(t, filepath.Join(dir, "docs", "readme.md"))
+	if localContent != newContent {
+		t.Errorf("local file = %q, want %q", localContent, newContent)
+	}
+
+	// Manifest should have new hash.
+	updated, err := syncmanifest.Load(filepath.Join(gxfsDir, "manifest.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Entries) == 0 {
+		t.Fatal("manifest has no entries")
+	}
+	if updated.Entries[0].ContentHash != newHash {
+		t.Errorf("manifest hash = %q, want %q", updated.Entries[0].ContentHash, newHash)
+	}
+}
+
+func TestHookSessionStartPreservesLocalConflict(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	gxfsDir := filepath.Join(dir, ".gxfs")
+	os.MkdirAll(gxfsDir, 0o755)
+	writeTestFile(t, filepath.Join(gxfsDir, "settings.toml"), "repo = \"test\"\n[server]\naddr = \"http://localhost:7635\"\n")
+	writeTestFile(t, filepath.Join(gxfsDir, "mounts.toml"), "version = 1\n[[mounts]]\nlocal = \"docs\"\nremote = \"repo://self/docs\"\nmode = \"readonly\"\n")
+
+	oldHash := store.HashContent("old content")
+	// Local file has been modified (different from manifest baseline).
+	localModified := "locally modified content"
+	writeTestFile(t, filepath.Join(dir, "docs", "readme.md"), localModified)
+
+	manifest := syncmanifest.Manifest{Version: 1, Entries: []syncmanifest.Entry{
+		{Local: "docs/readme.md", RemoteDoc: "repo://self/docs/readme.md", Mount: "docs", ContentHash: oldHash, Materialized: true},
+	}}
+	if err := syncmanifest.Save(filepath.Join(gxfsDir, "manifest.toml"), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remote has new content.
+	newContent := "new content from server"
+	newHash := store.HashContent(newContent)
+	client := &fakeClient{
+		lsNodes: []store.Node{
+			{Path: "/docs/readme.md", Name: "readme.md", Kind: "file", Size: int64(len(newContent)), Hash: newHash},
+		},
+		catContent: newContent,
+	}
+
+	cmd := newRootCommand(client, client, "gxfs", nil)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"hook", "session-start"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("hook session-start error = %v", err)
+	}
+
+	// Local file should NOT be overwritten.
+	localContent := readTextFile(t, filepath.Join(dir, "docs", "readme.md"))
+	if localContent != localModified {
+		t.Errorf("local file = %q, want %q (should not be overwritten)", localContent, localModified)
+	}
+
+	// Manifest should STILL have old hash (preserving baseline).
+	updated, err := syncmanifest.Load(filepath.Join(gxfsDir, "manifest.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Entries) == 0 {
+		t.Fatal("manifest has no entries")
+	}
+	if updated.Entries[0].ContentHash != oldHash {
+		t.Errorf("manifest hash = %q, want %q (should preserve old baseline on conflict)", updated.Entries[0].ContentHash, oldHash)
+	}
+}

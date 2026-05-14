@@ -1623,11 +1623,12 @@ func runHookSessionStart(ctx context.Context, adapter, rawAdapter store.Adapter,
 				local, localExists, localErr := readLocalSyncFile(entry.Local)
 				if localErr != nil {
 					fmt.Fprintf(w, "gxfs: skip %s: %s\n", entry.Local, localErr)
-					updatedEntries = append(updatedEntries, newEntry)
+					// Keep old entry so manifest still matches local baseline.
+					updatedEntries = append(updatedEntries, entry)
 					continue
 				}
 				if localExists && local.ContentHash == entry.ContentHash {
-					// Local unchanged, safe to overwrite.
+					// Local unchanged, safe to overwrite with remote content.
 					content := rf.Content
 					if content == "" {
 						catAdapter := adapter
@@ -1641,20 +1642,28 @@ func runHookSessionStart(ctx context.Context, adapter, rawAdapter store.Adapter,
 						cat, catErr := catAdapter.Cat(ctx, store.CatRequest{Repo: catRepo, Path: rf.RemotePath})
 						if catErr != nil {
 							fmt.Fprintf(w, "gxfs: skip %s: %s\n", entry.Local, catErr)
-							updatedEntries = append(updatedEntries, newEntry)
+							// Cat failed; keep old entry.
+							updatedEntries = append(updatedEntries, entry)
 							continue
 						}
 						content = cat.Content
 					}
 					if err := writeMaterializedFile(entry.Local, content); err != nil {
 						fmt.Fprintf(w, "gxfs: skip %s: %s\n", entry.Local, err)
-						updatedEntries = append(updatedEntries, newEntry)
+						// Write failed; keep old entry.
+						updatedEntries = append(updatedEntries, entry)
 						continue
 					}
+					// Successfully overwrote local file; use new entry.
+					updatedEntries = append(updatedEntries, newEntry)
 					totalUpdated++
+					continue
 				}
-				// Local was changed too; keep materialized but don't overwrite.
-				// newEntry already has Materialized=true from entry.Materialized.
+				// Local also changed (conflict). Keep old entry so manifest
+				// still represents the local baseline, not the remote version.
+				fmt.Fprintf(w, "gxfs: skip %s: local has unpushed changes\n", entry.Local)
+				updatedEntries = append(updatedEntries, entry)
+				continue
 			}
 			updatedEntries = append(updatedEntries, newEntry)
 		}
