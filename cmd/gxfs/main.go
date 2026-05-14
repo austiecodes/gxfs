@@ -2477,15 +2477,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	adapter, resolver, err := loadRuntimeAdapter(cfg, path)
+	rawClient := client.New(cfg.Server.Addr)
+	rawClient.SetClientRepo(cfg.Repo)
+
+	adapter, resolver, err := loadRuntimeAdapter(cfg, path, rawClient)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
-	rawAdapter := client.New(cfg.Server.Addr)
-	rawAdapter.SetClientRepo(cfg.Repo)
-	cmd := newRootCommand(adapter, rawAdapter, cfg.Repo, resolver)
+	cmd := newRootCommand(adapter, rawClient, cfg.Repo, resolver)
 	cmd.SetArgs(args)
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
@@ -2504,7 +2505,7 @@ func isConfigFreeCommand(args []string) bool {
 	return len(args) > 0 && args[0] == "init"
 }
 
-func loadRuntimeAdapter(cfg config.CLIConfig, settingsPath string) (store.Adapter, *mountadapter.Resolver, error) {
+func loadRuntimeAdapter(cfg config.CLIConfig, settingsPath string, rawClient store.Adapter) (store.Adapter, *mountadapter.Resolver, error) {
 	mountsPath := filepath.Join(filepath.Dir(settingsPath), "mounts.toml")
 	mountsCfg, err := config.LoadMounts(mountsPath)
 	if err != nil {
@@ -2520,7 +2521,7 @@ func loadRuntimeAdapter(cfg config.CLIConfig, settingsPath string) (store.Adapte
 		return nil, nil, err
 	}
 
-	return mountadapter.NewAdapter(client.New(cfg.Server.Addr), resolver), resolver, nil
+	return mountadapter.NewAdapter(rawClient, resolver), resolver, nil
 }
 
 func wantsHelp(args []string) bool {

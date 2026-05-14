@@ -466,7 +466,11 @@ func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []
 			} `json:"error"`
 		}
 		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
-			return fmt.Errorf("%s failed: status %d: %s", op, resp.StatusCode, errResp.Error.Message)
+			err := fmt.Errorf("%s failed: status %d: %s", op, resp.StatusCode, errResp.Error.Message)
+			if errResp.Error.Code == "NOT_FOUND" {
+				return fmt.Errorf("%w: %w", store.ErrNotFound, err)
+			}
+			return err
 		}
 		return fmt.Errorf("%s failed: status %d: %s", op, resp.StatusCode, strings.TrimSpace(string(body)))
 	}

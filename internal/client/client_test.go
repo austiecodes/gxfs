@@ -520,3 +520,22 @@ func TestClientCatErrorParsesJSONMessage(t *testing.T) {
 		t.Fatalf("error = %q, should not contain raw JSON (regression: Cat must use shared error parsing)", err.Error())
 	}
 }
+
+func TestClient404MappedToErrNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{"code": "NOT_FOUND", "message": "path not found: /missing.md"},
+		})
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL).Stat(context.Background(), store.StatRequest{Repo: "gxfs", Path: "/missing.md"})
+	if err == nil {
+		t.Fatal("expected error for 404, got nil")
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("error = %q, want it to wrap store.ErrNotFound", err.Error())
+	}
+}
