@@ -20,6 +20,7 @@ type Client struct {
 }
 
 var _ store.Adapter = (*Client)(nil)
+var _ store.Reposer = (*Client)(nil)
 
 func New(baseURL string) *Client {
 	return &Client{
@@ -48,6 +49,15 @@ func (c *Client) RepoList(ctx context.Context) ([]string, error) {
 		names[i] = r.Name
 	}
 	return names, nil
+}
+
+// Repos implements store.Reposer by calling the server's /v1/repos endpoint.
+func (c *Client) Repos() []string {
+	names, err := c.RepoList(context.Background())
+	if err != nil {
+		return nil
+	}
+	return names
 }
 
 func (c *Client) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {

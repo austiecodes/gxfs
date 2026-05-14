@@ -18,6 +18,7 @@ var (
 	ErrEmptyQuery       = errors.New("search query cannot be empty")
 	ErrInvalidParam     = errors.New("invalid parameter")
 	ErrNotModified      = errors.New("not modified")
+	ErrNotSupported     = errors.New("operation not supported")
 )
 
 type Node struct {

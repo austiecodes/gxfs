@@ -2278,38 +2278,39 @@ func runGlobAllRepos(cmd *cobra.Command, rawAdapter store.Adapter, pattern strin
 	}
 	close(ch)
 
-	// Collect and sort by repo, then path.
-	var all []store.GlobResult
-	repoOf := make(map[int]string)
+	// Collect into composite slice and sort by repo, then path.
+	type globEntry struct {
+		repo   string
+		result store.GlobResult
+	}
+	var entries []globEntry
 	for res := range ch {
 		for _, r := range res.results {
-			idx := len(all)
-			repoOf[idx] = res.repo
-			all = append(all, r)
+			entries = append(entries, globEntry{repo: res.repo, result: r})
 		}
 	}
-	sort.Slice(all, func(i, j int) bool {
-		if repoOf[i] != repoOf[j] {
-			return repoOf[i] < repoOf[j]
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].repo != entries[j].repo {
+			return entries[i].repo < entries[j].repo
 		}
-		return all[i].Path < all[j].Path
+		return entries[i].result.Path < entries[j].result.Path
 	})
 
 	// Apply offset/limit to merged results.
 	if offset > 0 {
-		if offset > len(all) {
-			offset = len(all)
+		if offset > len(entries) {
+			offset = len(entries)
 		}
-		all = all[offset:]
+		entries = entries[offset:]
 	}
-	if limit > 0 && len(all) > limit {
-		all = all[:limit]
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
 	}
 
-	for i, r := range all {
-		ref := "repo://" + url.PathEscape(repoOf[i]) + "/" + r.Path
+	for _, e := range entries {
+		ref := "repo://" + url.PathEscape(e.repo) + "/" + e.result.Path
 		if longFmt {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s\t(%s)\t%s\n", ref, humanSize(r.Size), r.ModTime)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\t(%s)\t%s\n", ref, humanSize(e.result.Size), e.result.ModTime)
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ref)
 		}

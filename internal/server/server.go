@@ -395,6 +395,8 @@ func mapError(err error) (int, string) {
 		return http.StatusBadRequest, "BAD_REQUEST"
 	case errors.Is(err, store.ErrContentNotReady):
 		return http.StatusNotFound, "CONTENT_NOT_READY"
+	case errors.Is(err, store.ErrNotSupported):
+		return http.StatusNotImplemented, "NOT_SUPPORTED"
 	default:
 		return http.StatusInternalServerError, "INTERNAL_ERROR"
 	}

@@ -815,5 +815,5 @@ func paginateNodes(nodes []store.Node, limit, offset int) []store.Node {
 
 // Glob is not supported by the legacy postgres adapter.
 func (a *Adapter) Glob(_ context.Context, _ store.GlobRequest) (*store.GlobResponse, error) {
-	return nil, fmt.Errorf("glob is not supported by the legacy postgres backend; use doc_postgres")
+	return nil, store.ErrNotSupported
 }
