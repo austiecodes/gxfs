@@ -421,18 +421,26 @@ func (d *DocAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.Gl
 		return &store.GlobResponse{Total: 0}, nil
 	}
 
-	// Fetch page of results.
-	dataSQL, err := DocGlobDataSQL(d.cfg)
-	if err != nil {
-		return nil, err
-	}
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 100
-	}
-	rows, err := d.pool.Query(ctx, dataSQL, repo, "^"+regex+"$", limit, req.Offset)
-	if err != nil {
-		return nil, fmt.Errorf("doc glob query: %w", err)
+	// Fetch results.
+	var rows pgx.Rows
+	if req.Limit > 0 {
+		dataSQL, err := DocGlobDataSQL(d.cfg)
+		if err != nil {
+			return nil, err
+		}
+		rows, err = d.pool.Query(ctx, dataSQL, repo, "^"+regex+"$", req.Limit, req.Offset)
+		if err != nil {
+			return nil, fmt.Errorf("doc glob query: %w", err)
+		}
+	} else {
+		allSQL, err := DocGlobDataAllSQL(d.cfg)
+		if err != nil {
+			return nil, err
+		}
+		rows, err = d.pool.Query(ctx, allSQL, repo, "^"+regex+"$")
+		if err != nil {
+			return nil, fmt.Errorf("doc glob query: %w", err)
+		}
 	}
 	defer rows.Close()
 
