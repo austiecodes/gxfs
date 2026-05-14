@@ -76,6 +76,47 @@ func TestReplaceUnderRefreshesOnlyRequestedRoot(t *testing.T) {
 	}
 }
 
+func TestReplaceUnderPreservesNestedSubMountEntries(t *testing.T) {
+	// Regression test: sync pull on a parent mount should not clobber
+	// nested cross-repo sub-mount entries that live under the same path prefix.
+	manifest := Manifest{Entries: []Entry{
+		{Local: "docs/readme.md", Mount: "docs", ContentHash: "sha256:own"},
+		{Local: "docs/lib/openai-go/quickstart.md", Mount: "docs/lib/openai-go", ContentHash: "sha256:cross"},
+		{Local: "other/keep.md", Mount: "other", ContentHash: "sha256:keep"},
+	}}
+
+	// Pull on parent mount "docs" — should replace docs/readme.md but
+	// preserve docs/lib/openai-go/quickstart.md because its mount is different.
+	got := ReplaceUnder(manifest, "docs", []Entry{
+		{Local: "docs/readme.md", Mount: "docs", ContentHash: "sha256:new"},
+	})
+
+	if len(got.Entries) != 3 {
+		t.Fatalf("Entries len = %d, want 3: %+v", len(got.Entries), got.Entries)
+	}
+
+	// Check that the sub-mount entry survived
+	found := false
+	for _, e := range got.Entries {
+		if e.Local == "docs/lib/openai-go/quickstart.md" {
+			found = true
+			if e.ContentHash != "sha256:cross" {
+				t.Fatalf("sub-mount entry hash = %q, want sha256:cross", e.ContentHash)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("sub-mount entry docs/lib/openai-go/quickstart.md was clobbered")
+	}
+
+	// Check that the parent entry was updated
+	for _, e := range got.Entries {
+		if e.Local == "docs/readme.md" && e.ContentHash != "sha256:new" {
+			t.Fatalf("parent entry hash = %q, want sha256:new", e.ContentHash)
+		}
+	}
+}
+
 func TestEntriesUnderAndUpdateEntries(t *testing.T) {
 	manifest := Manifest{Entries: []Entry{
 		{Local: "docs/a.md", ContentHash: "sha256:a", Materialized: true},

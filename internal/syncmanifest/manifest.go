@@ -96,9 +96,12 @@ func ReplaceUnder(existing Manifest, root string, entries []Entry) Manifest {
 	}
 
 	root = cleanManifestPath(root)
+	cleanRoot := root
 	next := existing.Entries[:0]
 	for _, entry := range existing.Entries {
-		if !isUnder(entry.Local, root) {
+		// Keep entries that are NOT under this root, OR belong to a different mount.
+		// This prevents sync pull on a parent mount from clobbering nested sub-mount entries.
+		if !isUnder(entry.Local, cleanRoot) || (entry.Mount != "" && entry.Mount != cleanRoot) {
 			next = append(next, entry)
 		}
 	}
