@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 
+	"io"
+
 	"gxfs/internal/client"
 	"gxfs/internal/config"
 	"gxfs/internal/mount"
@@ -29,6 +31,7 @@ type fakeClient struct {
 	grepMatches     []store.Match
 	lsNodes         []store.Node
 	statNode        *store.Node
+	statErr         error
 	catContent      string
 	lsReq           store.LSRequest
 	findReq         store.FindRequest
@@ -127,7 +130,10 @@ func (f *fakeClient) Find(_ context.Context, req store.FindRequest) (*store.Find
 	return &store.FindResponse{Nodes: nodes, Total: len(nodes)}, nil
 }
 
-func (f *fakeClient) Stat(context.Context, store.StatRequest) (*store.StatResponse, error) {
+func (f *fakeClient) Stat(_ context.Context, _ store.StatRequest) (*store.StatResponse, error) {
+	if f.statErr != nil {
+		return nil, f.statErr
+	}
 	node := store.Node{Path: "/docs", Name: "docs", Kind: "dir"}
 	if f.statNode != nil {
 		node = *f.statNode
@@ -144,8 +150,8 @@ func (f *fakeClient) Delete(_ context.Context, req store.DeleteRequest) (*store.
 	return &store.DeleteResponse{}, nil
 }
 
-func (f *fakeClient) Edit(context.Context, store.EditRequest) (*store.EditResponse, error) {
-	return nil, nil
+func (f *fakeClient) Edit(_ context.Context, req store.EditRequest) (*store.EditResponse, error) {
+	return &store.EditResponse{Path: req.Path, Replaced: 1}, nil
 }
 
 func (f *fakeClient) BatchHashes(_ context.Context, _ store.HashRequest) (*store.HashResponse, error) {
@@ -3319,4 +3325,103 @@ func (t *testConflictAdapter) Edit(ctx context.Context, req store.EditRequest) (
 		return nil, store.ErrConflict
 	}
 	return t.testNoopAdapter.Edit(ctx, req)
+}
+
+// --- #14 Strict CAS Regression Tests ---
+
+func TestWriteSelfRepoNoBaselineStillWorks(t *testing.T) {
+	// Self-repo write without manifest baseline should NOT be blocked.
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	fake := &fakeClient{
+		putReqs: nil,
+	}
+	// No manifest file exists.
+	cmd := newRootCommand(fake, fake, "my-repo", nil)
+	cmd.SetArgs([]string{"write", "/docs/new.md", "hello"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("self-repo write without baseline should succeed, got: %v", err)
+	}
+}
+
+func TestWriteSelfRepoEditNoBaselineStillWorks(t *testing.T) {
+	// Self-repo edit without manifest baseline should NOT be blocked.
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	fake := &fakeClient{
+		catContents: map[string]string{"/docs/readme.md": "old text here"},
+	}
+	cmd := newRootCommand(fake, fake, "my-repo", nil)
+	cmd.SetArgs([]string{"edit", "/docs/readme.md", "--old", "old", "--new", "new"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("self-repo edit without baseline should succeed, got: %v", err)
+	}
+}
+
+func TestWriteSelfRepoDeleteNoBaselineStillWorks(t *testing.T) {
+	// Self-repo delete without manifest baseline should NOT be blocked.
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	fake := &fakeClient{}
+	cmd := newRootCommand(fake, fake, "my-repo", nil)
+	cmd.SetArgs([]string{"delete", "/docs/old.md"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("self-repo delete without baseline should succeed, got: %v", err)
+	}
+}
+
+func TestStatErrorNotTreatedAsCreateOnly(t *testing.T) {
+	// When Stat returns a non-NotFound error, write should NOT fall through to create-only.
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	// Write mounts so cross-repo mount exists
+	mounts := config.MountsConfig{
+		Version: 1,
+		Mounts: []config.MountConfig{
+			{Local: "docs", Remote: "repo://self/docs", Mode: "writable", Source: "default"},
+			{Local: "libs/other", Remote: "repo://other-repo/docs", Mode: "writable", Source: "manual"},
+		},
+	}
+	if err := config.SaveMounts(filepath.Join(dir, ".gxfs", "mounts.toml"), mounts); err != nil {
+		t.Fatal(err)
+	}
+
+	// fakeClient.Stat returns a generic error (not ErrNotFound)
+	fake := &fakeClient{
+		statErr: fmt.Errorf("server error 500"),
+	}
+
+	resolver, err := mount.NewResolver("my-repo", []config.MountConfig{
+		{Local: "docs", Remote: "repo://self/docs", Mode: "writable"},
+		{Local: "libs/other", Remote: "repo://other-repo/docs", Mode: "writable"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCommand(fake, fake, "my-repo", resolver)
+	cmd.SetArgs([]string{"write", "libs/other/test.md", "content"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("write should fail when Stat returns non-NotFound error")
+	}
+	if !strings.Contains(err.Error(), "server error 500") {
+		t.Errorf("error = %q, want server error 500 to be propagated", err.Error())
+	}
 }

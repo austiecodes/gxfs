@@ -558,6 +558,18 @@ func formatMeta(meta map[string]string) string {
 	return strings.Join(pairs, ", ")
 }
 
+// isCrossRepoMount checks if a local path resolves to a cross-repo mount.
+func isCrossRepoMount(localPath string, repo string, resolver *mountadapter.Resolver) bool {
+	if resolver == nil {
+		return false
+	}
+	resolved, err := resolver.Resolve(localPath, mountadapter.OpWrite)
+	if err != nil {
+		return false
+	}
+	return resolved.RemoteRepo != repo
+}
+
 // setMountPathOnClient sets the X-Mount-Path header on the raw client adapter
 // if the path resolves to a cross-repo mount.
 func setMountPathOnClient(rawAdapter store.Adapter, localPath string, resolver *mountadapter.Resolver) {
@@ -622,14 +634,24 @@ func newWriteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *m
 				content = string(data)
 			}
 
-			expectedHash, hasBaseline := manifestHashForPath(path)
-			if !hasBaseline {
-				// No manifest baseline — check if remote file exists.
-				if _, statErr := adapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: path}); statErr == nil {
-					return fmt.Errorf("path %s exists remotely but has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+			var expectedHash string
+			crossRepo := isCrossRepoMount(path, repo, resolver)
+			if crossRepo {
+				hash, hasBaseline := manifestHashForPath(path)
+				if hasBaseline {
+					expectedHash = hash
+				} else {
+					// No baseline — stat remote to decide create vs error.
+					_, statErr := adapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: path})
+					if statErr == nil {
+						return fmt.Errorf("path %s exists remotely but has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+					}
+					if !errors.Is(statErr, store.ErrNotFound) {
+						return fmt.Errorf("stat %s: %w", path, statErr)
+					}
+					// Remote does not exist — create-only.
+					expectedHash = "*"
 				}
-				// File does not exist remotely — create-only.
-				expectedHash = "*"
 			}
 			setMountPathOnClient(rawAdapter, path, resolver)
 			resp, err := adapter.Put(cmd.Context(), store.PutRequest{
@@ -658,9 +680,13 @@ func newDeleteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			expectedHash, hasBaseline := manifestHashForPath(path)
-			if !hasBaseline {
-				return fmt.Errorf("path %s has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+			var expectedHash string
+			if isCrossRepoMount(path, repo, resolver) {
+				hash, hasBaseline := manifestHashForPath(path)
+				if !hasBaseline {
+					return fmt.Errorf("path %s has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+				}
+				expectedHash = hash
 			}
 			setMountPathOnClient(rawAdapter, path, resolver)
 			_, err := adapter.Delete(cmd.Context(), store.DeleteRequest{
@@ -770,9 +796,13 @@ func newEditCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
-			expectedHash, hasBaseline := manifestHashForPath(path)
-			if !hasBaseline {
-				return fmt.Errorf("path %s has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+			var expectedHash string
+			if isCrossRepoMount(path, repo, resolver) {
+				hash, hasBaseline := manifestHashForPath(path)
+				if !hasBaseline {
+					return fmt.Errorf("path %s has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+				}
+				expectedHash = hash
 			}
 			setMountPathOnClient(rawAdapter, path, resolver)
 			resp, err := adapter.Edit(cmd.Context(), store.EditRequest{
