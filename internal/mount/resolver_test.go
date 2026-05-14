@@ -85,6 +85,137 @@ func TestResolverRejectsRepoSelfWithoutPath(t *testing.T) {
 	}
 }
 
+func TestResolverCrossRepoMount(t *testing.T) {
+	r, err := NewResolver("my-project", []config.MountConfig{
+		{Local: "docs", Remote: "repo://self/docs", Mode: "writable"},
+		{Local: "vendor/openai-go", Remote: "repo://github%2Fopenai-go/", Mode: "readonly"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	// Resolve cross-repo mount point
+	resolved, err := r.Resolve("vendor/openai-go/docs/quickstart.md", OpRead)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.RemoteRepo != "github/openai-go" {
+		t.Fatalf("resolved.RemoteRepo = %q, want github/openai-go", resolved.RemoteRepo)
+	}
+	if resolved.RemotePath != "/docs/quickstart.md" {
+		t.Fatalf("resolved.RemotePath = %q, want /docs/quickstart.md", resolved.RemotePath)
+	}
+	if resolved.Mode != "readonly" {
+		t.Fatalf("resolved.Mode = %q, want readonly", resolved.Mode)
+	}
+
+	// Cross-repo mount is readonly — writes should fail
+	_, err = r.Resolve("vendor/openai-go/docs/quickstart.md", OpWrite)
+	if !errors.Is(err, store.ErrReadOnlyMount) {
+		t.Fatalf("Resolve() error = %v, want ErrReadOnlyMount", err)
+	}
+}
+
+func TestResolverCrossRepoSubtreeMount(t *testing.T) {
+	r, err := NewResolver("my-project", []config.MountConfig{
+		{Local: "vendor/openai-docs", Remote: "repo://github%2Fopenai-go/docs", Mode: "readonly"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	resolved, err := r.Resolve("vendor/openai-docs/api/chat.md", OpRead)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.RemoteRepo != "github/openai-go" {
+		t.Fatalf("resolved.RemoteRepo = %q, want github/openai-go", resolved.RemoteRepo)
+	}
+	if resolved.RemotePath != "/docs/api/chat.md" {
+		t.Fatalf("resolved.RemotePath = %q, want /docs/api/chat.md", resolved.RemotePath)
+	}
+}
+
+func TestResolverRejectsSelfRootMount(t *testing.T) {
+	_, err := NewResolver("my-project", []config.MountConfig{
+		{Local: "docs", Remote: "repo://self/", Mode: "writable"},
+	})
+	if err == nil {
+		t.Fatal("NewResolver() error = nil, want error for self root mount")
+	}
+	if !strings.Contains(err.Error(), "self root mount") {
+		t.Fatalf("error = %q, want hint about self root mount", err.Error())
+	}
+}
+
+func TestResolverRejectsCrossRepoWithoutRepoName(t *testing.T) {
+	_, err := NewResolver("my-project", []config.MountConfig{
+		{Local: "docs", Remote: "repo:///", Mode: "readonly"},
+	})
+	if err == nil {
+		t.Fatal("NewResolver() error = nil, want error for missing repo name")
+	}
+}
+
+func TestResolverCrossRepoToLocal(t *testing.T) {
+	r, err := NewResolver("my-project", []config.MountConfig{
+		{Local: "vendor/openai-go", Remote: "repo://github%2Fopenai-go/", Mode: "readonly"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	local, ok := r.ToLocal("github/openai-go", "/docs/quickstart.md")
+	if !ok {
+		t.Fatal("ToLocal() ok = false, want true")
+	}
+	if local != "vendor/openai-go/docs/quickstart.md" {
+		t.Fatalf("local = %q, want vendor/openai-go/docs/quickstart.md", local)
+	}
+
+	// Self repo should not match cross-repo mount
+	_, ok = r.ToLocal("my-project", "/docs/quickstart.md")
+	if ok {
+		t.Fatal("ToLocal() ok = true for my-project, want false")
+	}
+}
+
+func TestParseRemoteRef(t *testing.T) {
+	tests := []struct {
+		raw      string
+		wantRepo string
+		wantPath string
+		wantErr  bool
+	}{
+		{"repo://self/docs", "my-project", "/docs", false},
+		{"repo://self/", "", "", true},      // self root rejected
+		{"repo://other-repo/", "other-repo", "/", false},
+		{"repo://github%2Fopenai-go/", "github/openai-go", "/", false},
+		{"repo://github%2Fopenai-go/docs", "github/openai-go", "/docs", false},
+		{"repo://other-repo/docs", "other-repo", "/docs", false},
+		{"repo://other-repo", "other-repo", "/", false},
+		{"collection://stuff", "", "", true},
+		{"unknown://thing", "", "", true},
+	}
+
+	for _, tt := range tests {
+		repo, path, err := ParseRemoteRef("my-project", tt.raw)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ParseRemoteRef(%q) error = %v, wantErr %v", tt.raw, err, tt.wantErr)
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		if repo != tt.wantRepo {
+			t.Errorf("ParseRemoteRef(%q) repo = %q, want %q", tt.raw, repo, tt.wantRepo)
+		}
+		if path != tt.wantPath {
+			t.Errorf("ParseRemoteRef(%q) path = %q, want %q", tt.raw, path, tt.wantPath)
+		}
+	}
+}
+
 func TestResolverDetectsVirtualDirsFromMountPaths(t *testing.T) {
 	r, err := NewResolver("gxfs", []config.MountConfig{
 		{Local: "docs/gotchas/openai-go", Remote: "repo://self/shared/openai-go", Mode: "readonly"},

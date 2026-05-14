@@ -2,6 +2,7 @@ package mount
 
 import (
 	"fmt"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -162,16 +163,43 @@ func parseRemote(currentRepo, raw string) (string, string, error) {
 	case strings.HasPrefix(raw, selfPrefix):
 		remoteRoot := cleanRemote(strings.TrimPrefix(raw, selfPrefix))
 		if remoteRoot == "/" {
-			return "", "", fmt.Errorf("remote root cannot be /")
+			return "", "", fmt.Errorf("self root mount is not allowed")
 		}
 		return currentRepo, remoteRoot, nil
 	case strings.HasPrefix(raw, "collection://"):
 		return "", "", fmt.Errorf("collection mounts are not supported in phase 1")
 	case strings.HasPrefix(raw, "repo://"):
-		return "", "", fmt.Errorf("cross-repo mounts are not supported in phase 1")
+		rest := strings.TrimPrefix(raw, "repo://")
+		// Split at the first unencoded '/' to separate repo name from path.
+		// Repo names containing '/' (e.g. "github/openai-go") must be URL-encoded
+		// in the ref: repo://github%2Fopenai-go/docs
+		parts := strings.SplitN(rest, "/", 2)
+		if parts[0] == "" {
+			return "", "", fmt.Errorf("remote %q needs a repo name after repo://", raw)
+		}
+		remoteRepo, err := url.PathUnescape(parts[0])
+		if err != nil {
+			return "", "", fmt.Errorf("remote %q has invalid repo name: %w", raw, err)
+		}
+		remotePath := "/"
+		if len(parts) == 2 && parts[1] != "" {
+			remotePath = cleanRemote(parts[1])
+		}
+		// Reject self root mount (same as the selfPrefix branch above)
+		if remoteRepo == currentRepo && remotePath == "/" {
+			return "", "", fmt.Errorf("self root mount is not allowed")
+		}
+		return remoteRepo, remotePath, nil
 	default:
 		return "", "", fmt.Errorf("unsupported remote %q", raw)
 	}
+}
+
+// ParseRemoteRef parses a remote reference string (e.g. "repo://self/docs"
+// or "repo://other-repo/") into the target repo name and remote path.
+// It is the public entry point for parsing remote refs in CLI commands.
+func ParseRemoteRef(currentRepo, raw string) (repo, remotePath string, err error) {
+	return parseRemote(currentRepo, raw)
 }
 
 func cleanLocal(p string) string {
@@ -198,6 +226,9 @@ func underLocal(root, p string) bool {
 func underRemote(root, p string) bool {
 	root = cleanRemote(root)
 	p = cleanRemote(p)
+	if root == "/" {
+		return true // root matches everything
+	}
 	return p == root || strings.HasPrefix(p, root+"/")
 }
 

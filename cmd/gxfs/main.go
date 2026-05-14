@@ -33,12 +33,12 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 		Long:  "GXFS gives agents Unix-like commands for virtual filesystem content served by gxfs-server.",
 	}
 
-	cmd.AddCommand(newLSCommand(adapter, repo))
+	cmd.AddCommand(newLSCommand(adapter, rawAdapter, repo))
 	cmd.AddCommand(newTreeCommand(adapter, repo))
-	cmd.AddCommand(newCatCommand(adapter, repo))
+	cmd.AddCommand(newCatCommand(adapter, rawAdapter, repo))
 	cmd.AddCommand(newGrepCommand(adapter, repo))
 	cmd.AddCommand(newFindCommand(adapter, repo))
-	cmd.AddCommand(newStatCommand(adapter, repo))
+	cmd.AddCommand(newStatCommand(adapter, rawAdapter, repo))
 	cmd.AddCommand(newWriteCommand(adapter, repo))
 	cmd.AddCommand(newEditCommand(adapter, repo))
 	cmd.AddCommand(newDeleteCommand(adapter, repo))
@@ -53,7 +53,7 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 	return cmd
 }
 
-func newLSCommand(adapter store.Adapter, repo string) *cobra.Command {
+func newLSCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
 	var longFmt, classify, slashDir bool
 	var sortByTime, sortBySize, reverse bool
 	var recursive, allFiles, dirOnly bool
@@ -68,6 +68,18 @@ func newLSCommand(adapter store.Adapter, repo string) *cobra.Command {
 				return err
 			}
 			p := argPath(args, "/")
+
+			// Support direct remote ls: gxfs ls repo://other-repo/docs
+			if targetRepo, targetPath, ok := parseRepoRef(p); ok {
+				resp, err := rawAdapter.LS(cmd.Context(), store.LSRequest{Repo: targetRepo, Path: targetPath})
+				if err != nil {
+					return err
+				}
+				for _, node := range resp.Nodes {
+					fmt.Fprintln(cmd.OutOrStdout(), formatLSLine(node, longFmt, classify, slashDir))
+				}
+				return nil
+			}
 
 			sortField := "name"
 			sortReverse := false
@@ -200,7 +212,7 @@ func newTreeCommand(adapter store.Adapter, repo string) *cobra.Command {
 	return cmd
 }
 
-func newCatCommand(adapter store.Adapter, repo string) *cobra.Command {
+func newCatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
 	var numberAll, numberNonBlank, squeezeBlanks bool
 
 	cmd := &cobra.Command{
@@ -208,6 +220,16 @@ func newCatCommand(adapter store.Adapter, repo string) *cobra.Command {
 		Short: "Print VFS file content",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Support direct remote cat: gxfs cat repo://other-repo/docs/file.md
+			if targetRepo, targetPath, ok := parseRepoRef(args[0]); ok {
+				resp, err := rawAdapter.Cat(cmd.Context(), store.CatRequest{Repo: targetRepo, Path: targetPath})
+				if err != nil {
+					return err
+				}
+				fmt.Fprint(cmd.OutOrStdout(), resp.Content)
+				return nil
+			}
+
 			resp, err := adapter.Cat(cmd.Context(), store.CatRequest{Repo: repo, Path: args[0]})
 			if err != nil {
 				return err
@@ -442,7 +464,7 @@ func newFindCommand(adapter store.Adapter, repo string) *cobra.Command {
 	return cmd
 }
 
-func newStatCommand(adapter store.Adapter, repo string) *cobra.Command {
+func newStatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
 	var customFormat string
 	var terse bool
 
@@ -451,6 +473,20 @@ func newStatCommand(adapter store.Adapter, repo string) *cobra.Command {
 		Short: "Print VFS node metadata",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Support direct remote stat: gxfs stat repo://other-repo/docs/file.md
+			if targetRepo, targetPath, ok := parseRepoRef(args[0]); ok {
+				resp, err := rawAdapter.Stat(cmd.Context(), store.StatRequest{Repo: targetRepo, Path: targetPath})
+				if err != nil {
+					return err
+				}
+				node := resp.Node
+				fmt.Fprintf(cmd.OutOrStdout(), "  Path: %s\n", node.Path)
+				fmt.Fprintf(cmd.OutOrStdout(), "  Name: %s\n", node.Name)
+				fmt.Fprintf(cmd.OutOrStdout(), "  Kind: %s\n", node.Kind)
+				fmt.Fprintf(cmd.OutOrStdout(), "  Size: %d\n", node.Size)
+				return nil
+			}
+
 			resp, err := adapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: args[0]})
 			if err != nil {
 				return err
@@ -790,14 +826,14 @@ func cleanSyncMount(root string) string {
 
 // resolveRemoteDoc returns the correct remote_doc reference for a file.
 // When a mount resolver is available, it resolves the local path to get the
-// true remote path. Otherwise it falls back to the response node path.
+// true remote repo and path. Otherwise it falls back to the response node path.
 func resolveRemoteDoc(resolver *mountadapter.Resolver, repo, localPath, fallbackPath string) string {
 	if resolver != nil {
 		if resolved, err := resolver.Resolve(localPath, mountadapter.OpWrite); err == nil {
-			return "repo://self/" + strings.Trim(resolved.RemotePath, "/")
+			return "repo://" + resolved.RemoteRepo + "/" + strings.Trim(resolved.RemotePath, "/")
 		}
 	}
-	return "repo://self/" + strings.Trim(fallbackPath, "/")
+	return "repo://" + repo + "/" + strings.Trim(fallbackPath, "/")
 }
 func newSyncPullCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	var manifestPath string
@@ -855,6 +891,7 @@ func newSyncPullCommand(adapter, rawAdapter store.Adapter, repo string, resolver
 
 type remoteSyncFile struct {
 	LocalPath   string
+	RemoteRepo  string
 	RemotePath  string
 	Content     string
 	ContentHash string
@@ -921,6 +958,7 @@ func fetchFileContents(ctx context.Context, adapter store.Adapter, repo string, 
 			}
 			files[i] = remoteSyncFile{
 				LocalPath:   localPathFn(node),
+				RemoteRepo:  repo,
 				RemotePath:  node.Path,
 				Content:     cat.Content,
 				ContentHash: store.HashContent(cat.Content),
@@ -990,6 +1028,7 @@ func fetchChangedFileContents(ctx context.Context, adapter store.Adapter, repo s
 			// Unchanged — no Cat needed
 			files[i] = remoteSyncFile{
 				LocalPath:   localPath,
+				RemoteRepo:  repo,
 				RemotePath:  node.Path,
 				ContentHash: hash,
 				Size:        node.Size,
@@ -1016,6 +1055,7 @@ func fetchChangedFileContents(ctx context.Context, adapter store.Adapter, repo s
 			}
 			files[i] = remoteSyncFile{
 				LocalPath:   localPathFn(node),
+				RemoteRepo:  repo,
 				RemotePath:  node.Path,
 				Content:     cat.Content,
 				ContentHash: store.HashContent(cat.Content),
@@ -1051,13 +1091,14 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 	if err != nil {
 		return nil, fmt.Errorf("resolve mount %s: %w", localRoot, err)
 	}
-	stat, err := rawAdapter.Stat(ctx, store.StatRequest{Repo: repo, Path: resolved.RemotePath})
+	remoteRepo := resolved.RemoteRepo
+	stat, err := rawAdapter.Stat(ctx, store.StatRequest{Repo: remoteRepo, Path: resolved.RemotePath})
 	if err != nil {
 		return nil, err
 	}
 	nodes := []store.Node{stat.Node}
 	if stat.Node.Kind == "dir" {
-		resp, err := rawAdapter.LS(ctx, store.LSRequest{Repo: repo, Path: resolved.RemotePath, Recursive: true, All: true})
+		resp, err := rawAdapter.LS(ctx, store.LSRequest{Repo: remoteRepo, Path: resolved.RemotePath, Recursive: true, All: true})
 		if err != nil {
 			return nil, err
 		}
@@ -1075,7 +1116,7 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 	localBase := resolved.LocalPath
 
 	// Fetch known hashes for hash-skip optimization
-	hashResp, err := rawAdapter.BatchHashes(ctx, store.HashRequest{Repo: repo, Path: resolved.RemotePath})
+	hashResp, err := rawAdapter.BatchHashes(ctx, store.HashRequest{Repo: remoteRepo, Path: resolved.RemotePath})
 	if err != nil {
 		return nil, fmt.Errorf("batch hashes: %w", err)
 	}
@@ -1093,7 +1134,7 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 		}
 		return localPath
 	}
-	return fetchChangedFileContents(ctx, rawAdapter, repo, fileNodes, hashMap, manifest, localPathFn)
+	return fetchChangedFileContents(ctx, rawAdapter, remoteRepo, fileNodes, hashMap, manifest, localPathFn)
 }
 
 func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root string, manifest syncmanifest.Manifest, opts remoteSyncOptions) (remoteSyncPlan, error) {
@@ -1212,9 +1253,13 @@ func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, rawAdapter 
 }
 
 func (f remoteSyncFile) toManifestEntry(root string, materialized bool) syncmanifest.Entry {
+	repo := f.RemoteRepo
+	if repo == "" {
+		repo = "self"
+	}
 	return syncmanifest.Entry{
 		Local:        f.LocalPath,
-		RemoteDoc:    "repo://self/" + strings.Trim(f.RemotePath, "/"),
+		RemoteDoc:    "repo://" + repo + "/" + strings.Trim(f.RemotePath, "/"),
 		Mount:        cleanSyncMount(root),
 		ContentHash:  f.ContentHash,
 		Size:         f.Size,
@@ -1469,7 +1514,7 @@ func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <remote-ref> <local-path>",
 		Short: "Add a mount point",
-		Long:  "Add a mount point mapping a remote path to a local path.\nOnly repo://self/<path> references are supported in this version.",
+		Long:  "Add a mount point mapping a remote path to a local path.\nSupports repo://self/<path> and repo://<other-repo>/<path> references.",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			remoteRef := args[0]
@@ -1479,22 +1524,27 @@ func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 				return fmt.Errorf("local path must be a non-empty relative path")
 			}
 
-			if !strings.HasPrefix(remoteRef, "repo://self/") {
-				return fmt.Errorf("only repo://self/<path> references are supported; got %q", remoteRef)
-			}
-			remotePath := strings.TrimPrefix(remoteRef, "repo://self")
-			if remotePath == "" || remotePath == "/" {
-				return fmt.Errorf("remote path cannot be empty")
+			// Parse the remote ref to extract target repo and path.
+			targetRepo, remotePath, err := mountadapter.ParseRemoteRef(repo, remoteRef)
+			if err != nil {
+				return err
 			}
 
 			if mode != "readonly" && mode != "writable" {
 				return fmt.Errorf("mode must be readonly or writable, got %q", mode)
 			}
 
+			// Cross-repo mounts are always readonly.
+			if targetRepo != repo && mode == "writable" {
+				return fmt.Errorf("cross-repo mounts must be readonly")
+			}
+
 			// Use raw adapter (direct client, no mount resolver) to validate
-			// the remote path exists on the server.
-			if _, err := rawAdapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: remotePath}); err != nil {
-				return fmt.Errorf("remote path %s does not exist: %w", remoteRef, err)
+			// the remote path exists on the server, using the target repo.
+			if remotePath != "/" {
+				if _, err := rawAdapter.Stat(cmd.Context(), store.StatRequest{Repo: targetRepo, Path: remotePath}); err != nil {
+					return fmt.Errorf("remote path %s does not exist: %w", remoteRef, err)
+				}
 			}
 
 			mountsPath := defaultMountsPath()
@@ -1972,6 +2022,26 @@ func argPath(args []string, fallback string) string {
 		return fallback
 	}
 	return args[0]
+}
+
+// parseRepoRef parses a "repo://<name>/<path>" argument into repo and path.
+// Returns ("", "", false) if the argument is not a repo ref.
+func parseRepoRef(arg string) (repo, p string, ok bool) {
+	if !strings.HasPrefix(arg, "repo://") {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(arg, "repo://")
+	parts := strings.SplitN(rest, "/", 2)
+	if parts[0] == "" {
+		return "", "", false
+	}
+	repo = parts[0]
+	if len(parts) == 2 && parts[1] != "" {
+		p = "/" + parts[1]
+	} else {
+		p = "/"
+	}
+	return repo, p, true
 }
 
 func main() {
