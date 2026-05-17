@@ -869,12 +869,14 @@ func locateAllRepos(cmd *cobra.Command, rawAdapter store.Adapter, query string, 
 
 	var allResults []store.LocateResult
 	var failedRepos []string
+	var totalHits int
 	for range repos {
 		res := <-results
 		if res.err != nil {
 			failedRepos = append(failedRepos, res.repo)
 			continue
 		}
+		totalHits += res.resp.Total
 		for _, r := range res.resp.Results {
 			// Update ref with URL-encoded repo name for round-trip safety
 			r.Ref = "repo://" + url.PathEscape(res.repo) + r.Path
@@ -887,7 +889,7 @@ func locateAllRepos(cmd *cobra.Command, rawAdapter store.Adapter, query string, 
 		return allResults[i].Score > allResults[j].Score
 	})
 
-	// Apply limit
+	// Apply limit to results only, Total remains pre-limit sum
 	if limit > 0 && len(allResults) > limit {
 		allResults = allResults[:limit]
 	}
@@ -902,7 +904,7 @@ func locateAllRepos(cmd *cobra.Command, rawAdapter store.Adapter, query string, 
 		return fmt.Errorf("locate failed for all repos")
 	}
 
-	resp := &store.LocateResponse{Results: allResults, Total: len(allResults)}
+	resp := &store.LocateResponse{Results: allResults, Total: totalHits}
 	if jsonOutput {
 		return printLocateJSON(cmd, resp)
 	}

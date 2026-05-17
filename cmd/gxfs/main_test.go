@@ -44,12 +44,14 @@ type fakeClient struct {
 	putReqs         []store.PutRequest
 	searchReq       store.SearchRequest
 	searchResp      *store.SearchResponse
-	batchHashesResp *store.HashResponse
-	locateReq       store.LocateRequest
-	locateResp      *store.LocateResponse
-	locateErr       error
-	repoList        []string
-	repoListErr     error
+	batchHashesResp  *store.HashResponse
+	locateReq        store.LocateRequest
+	locateResp       *store.LocateResponse
+	locateErr        error
+	locateErrByRepo  map[string]error
+	locateRespByRepo map[string]*store.LocateResponse
+	repoList         []string
+	repoListErr      error
 }
 
 func defaultLSNodes() []store.Node {
@@ -188,8 +190,26 @@ func (f *fakeClient) Glob(_ context.Context, req store.GlobRequest) (*store.Glob
 
 func (f *fakeClient) Locate(_ context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
 	f.locateReq = req
+	// Check repo-specific error first
+	if f.locateErrByRepo != nil {
+		if err, ok := f.locateErrByRepo[req.Repo]; ok {
+			return nil, err
+		}
+	}
 	if f.locateErr != nil {
 		return nil, f.locateErr
+	}
+	// Check repo-specific response
+	if f.locateRespByRepo != nil {
+		if resp, ok := f.locateRespByRepo[req.Repo]; ok {
+			// Fill in Ref if not set
+			for i := range resp.Results {
+				if resp.Results[i].Ref == "" {
+					resp.Results[i].Ref = "repo://" + url.PathEscape(req.Repo) + resp.Results[i].Path
+				}
+			}
+			return resp, nil
+		}
 	}
 	if f.locateResp != nil {
 		// Fill in Ref if not set (simulates real adapter behavior)
@@ -3544,11 +3564,16 @@ func TestLocateAllReposSomeReposFail(t *testing.T) {
 	// Test that --all-repos warns about partial failures but still returns results
 	fake := &fakeClient{
 		repoList: []string{"repo-a", "repo-b"},
-		locateResp: &store.LocateResponse{
-			Results: []store.LocateResult{
-				{Path: "/doc.md", Score: 1.0, Snippet: "found"},
+		locateErrByRepo: map[string]error{
+			"repo-a": fmt.Errorf("connection refused"),
+		},
+		locateRespByRepo: map[string]*store.LocateResponse{
+			"repo-b": {
+				Results: []store.LocateResult{
+					{Path: "/doc.md", Score: 1.0, Snippet: "found"},
+				},
+				Total: 1,
 			},
-			Total: 1,
 		},
 	}
 	cmd := newRootCommand(fake, fake, "test-repo", nil)
@@ -3558,9 +3583,20 @@ func TestLocateAllReposSomeReposFail(t *testing.T) {
 	var errOut bytes.Buffer
 	cmd.SetErr(&errOut)
 
-	// With the current implementation, if all repos succeed, no warning
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Check stderr has warning about repo-a failure
+	errStr := errOut.String()
+	if !strings.Contains(errStr, "warning") || !strings.Contains(errStr, "repo-a") {
+		t.Errorf("stderr = %q, want warning about repo-a failure", errStr)
+	}
+
+	// Check stdout has results from repo-b
+	outStr := out.String()
+	if !strings.Contains(outStr, "repo-b") {
+		t.Errorf("stdout = %q, want results from repo-b", outStr)
 	}
 }
 
@@ -3592,5 +3628,58 @@ func TestLocateJSONOutput(t *testing.T) {
 	}
 	if len(resp.Results) != 1 {
 		t.Errorf("results count = %d, want 1", len(resp.Results))
+	}
+}
+
+func TestLocateAllReposTotalSemantics(t *testing.T) {
+	// Test that Total is pre-limit sum of all repo totals
+	fake := &fakeClient{
+		repoList: []string{"repo-a", "repo-b"},
+		locateRespByRepo: map[string]*store.LocateResponse{
+			"repo-a": {
+				Results: []store.LocateResult{
+					{Path: "/a1.md", Score: 2.0, Snippet: "high"},
+					{Path: "/a2.md", Score: 1.0, Snippet: "low"},
+				},
+				Total: 5, // More hits than returned results
+			},
+			"repo-b": {
+				Results: []store.LocateResult{
+					{Path: "/b1.md", Score: 1.5, Snippet: "mid"},
+				},
+				Total: 3,
+			},
+		},
+	}
+	cmd := newRootCommand(fake, fake, "test-repo", nil)
+	cmd.SetArgs([]string{"locate", "query", "--all-repos", "--limit", "2", "--json"})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var resp store.LocateResponse
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+
+	// Total should be 5 + 3 = 8 (pre-limit sum), not 2 (post-limit count)
+	if resp.Total != 8 {
+		t.Errorf("Total = %d, want 8 (pre-limit sum of repo totals)", resp.Total)
+	}
+
+	// Results should be limited to 2
+	if len(resp.Results) != 2 {
+		t.Errorf("Results count = %d, want 2 (limited)", len(resp.Results))
+	}
+
+	// Results should be sorted by score (highest first)
+	if len(resp.Results) >= 2 {
+		if resp.Results[0].Score < resp.Results[1].Score {
+			t.Errorf("results not sorted by score descending")
+		}
 	}
 }
