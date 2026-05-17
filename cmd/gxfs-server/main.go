@@ -6,11 +6,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/zeromicro/go-zero/rest"
 
 	"gxfs/internal/config"
@@ -98,11 +101,188 @@ func defaultString(value, fallback string) string {
 	return value
 }
 
+// redactDSN returns a safe-to-print version of a DSN with credentials stripped.
+// For postgres://user:pass@host:port/dbname, returns postgres://host:port/dbname
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "<redacted>"
+	}
+	// Check if it looks like a valid postgres DSN
+	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
+		return "<redacted>"
+	}
+	// Strip credentials
+	if u.User != nil {
+		u.User = nil
+	}
+	return u.String()
+}
+
+// storageTarget represents a unique database target for GC.
+type storageTarget struct {
+	dsn    string
+	schema string
+}
+
+// label returns a safe-to-print label for this target.
+func (t storageTarget) label() string {
+	return fmt.Sprintf("%s/%s", redactDSN(t.dsn), t.schema)
+}
+
+// collectGCTargets extracts unique doc_postgres storage targets from server config.
+func collectGCTargets(cfg config.ServerConfig) []storageTarget {
+	seen := make(map[storageTarget]bool)
+	var targets []storageTarget
+	for _, repo := range cfg.Repos {
+		if repo.Backend.Type != "doc_postgres" {
+			continue
+		}
+		pg := repo.Backend.Postgres
+		if pg.DSN == "" {
+			continue
+		}
+		t := storageTarget{dsn: pg.DSN, schema: pg.Schema}
+		if !seen[t] {
+			seen[t] = true
+			targets = append(targets, t)
+		}
+	}
+	// Sort for deterministic output
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].dsn != targets[j].dsn {
+			return targets[i].dsn < targets[j].dsn
+		}
+		return targets[i].schema < targets[j].schema
+	})
+	return targets
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})))
 
+	cmd := newRootCommand()
+	if err := cmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func newRootCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "gxfs-server",
+		Short: "GXFS virtual filesystem server",
+		Long:  "GXFS server provides a REST API for virtual filesystem content backed by PostgreSQL.",
+		Run: func(cmd *cobra.Command, args []string) {
+			runServer()
+		},
+	}
+
+	cmd.AddCommand(newGCCommand())
+	return cmd
+}
+
+func newGCCommand() *cobra.Command {
+	var dryRun bool
+	var force bool
+	var graceHours int
+	var limit int
+	var configPath string
+
+	cmd := &cobra.Command{
+		Use:   "gc run",
+		Short: "Run orphan document garbage collection",
+		Long: `Garbage collect orphan documents that have no references in repo_paths or collections.
+
+Orphan documents are those that:
+  - Have no references in gxfs_repo_paths
+  - Have no references in gxfs_collection_docs
+  - Were last updated more than the grace period ago (to protect in-progress creates)
+
+By default, runs in dry-run mode to preview candidates without deleting.
+Use --force to actually delete.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun && force {
+				return fmt.Errorf("cannot use both --dry-run and --force")
+			}
+			// Default to dry-run if neither flag is set
+			if !force {
+				dryRun = true
+			}
+
+			path := configPath
+			if path == "" {
+				path = os.Getenv("GXFS_SERVER_CONFIG")
+			}
+			if path == "" {
+				path = "conf/server.toml"
+			}
+
+			cfg, err := config.LoadServer(path)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			targets := collectGCTargets(cfg)
+			if len(targets) == 0 {
+				return fmt.Errorf("no doc_postgres repos configured")
+			}
+
+			req := postgres.GCRequest{
+				DryRun:     dryRun,
+				GraceHours: graceHours,
+				Limit:      limit,
+			}
+
+			var totalCount int
+			for _, target := range targets {
+				result, err := postgres.GCWithPool(context.Background(), target.dsn, target.schema, req)
+				if err != nil {
+					return fmt.Errorf("gc %s: %w", target.label(), err)
+				}
+				totalCount += result.Count
+
+				if dryRun {
+					fmt.Fprintf(cmd.OutOrStdout(), "Target %s: found %d orphan document(s)\n", target.label(), result.Count)
+					if len(result.Candidates) > 0 {
+						fmt.Fprintf(cmd.OutOrStdout(), "  Sample candidates (up to %d):\n", limit)
+						for _, c := range result.Candidates {
+							fmt.Fprintf(cmd.OutOrStdout(), "    - id: %s\n", c.ID)
+							if c.Title != "" {
+								fmt.Fprintf(cmd.OutOrStdout(), "      title: %s\n", c.Title)
+							}
+							if c.LegacyPath != "" {
+								fmt.Fprintf(cmd.OutOrStdout(), "      legacy_path: %s\n", c.LegacyPath)
+							}
+						}
+					}
+				}
+			}
+
+			if dryRun {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nTotal: %d orphan document(s) across %d storage target(s)\n", totalCount, len(targets))
+				fmt.Fprintf(cmd.OutOrStdout(), "Run with --force to delete these documents.\n")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Deleted %d orphan document(s) across %d storage target(s)\n", totalCount, len(targets))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview candidates without deleting (default)")
+	cmd.Flags().BoolVar(&force, "force", false, "Actually delete orphan documents")
+	cmd.Flags().IntVar(&graceHours, "grace-hours", 1, "Grace period in hours (protects in-progress creates)")
+	cmd.Flags().IntVar(&limit, "limit", 10, "Max candidates to show in dry-run")
+	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to server config file (default: $GXFS_SERVER_CONFIG or conf/server.toml)")
+
+	return cmd
+}
+
+func runServer() {
 	path := os.Getenv("GXFS_SERVER_CONFIG")
 	if path == "" {
 		path = "conf/server.toml"
