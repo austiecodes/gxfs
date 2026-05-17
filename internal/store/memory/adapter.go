@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -225,7 +226,7 @@ func (a *Adapter) Locate(_ context.Context, req store.LocateRequest) (*store.Loc
 		}
 		snippet := snippetFromContent(content, terms)
 		results = append(results, store.LocateResult{
-			Ref:     "repo://" + req.Repo + n.Path,
+			Ref:     "repo://" + url.PathEscape(req.Repo) + n.Path,
 			Path:    n.Path,
 			Score:   1.0,
 			Snippet: snippet,

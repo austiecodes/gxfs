@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -337,7 +338,7 @@ func (a *Adapter) Locate(ctx context.Context, req store.LocateRequest) (*store.L
 			return nil, fmt.Errorf("scan locate result: %w", err)
 		}
 		results = append(results, store.LocateResult{
-			Ref:     "repo://" + req.Repo + filePath,
+			Ref:     "repo://" + url.PathEscape(req.Repo) + filePath,
 			Path:    filePath,
 			Score:   rank,
 			Snippet: snippet,

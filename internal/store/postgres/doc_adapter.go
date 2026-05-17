@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -403,7 +404,7 @@ func (d *DocAdapter) Locate(ctx context.Context, req store.LocateRequest) (*stor
 			return nil, fmt.Errorf("doc locate scan: %w", err)
 		}
 		results = append(results, store.LocateResult{
-			Ref:     "repo://" + req.Repo + filePath,
+			Ref:     "repo://" + url.PathEscape(req.Repo) + filePath,
 			Path:    filePath,
 			Score:   rank,
 			Snippet: snippet,

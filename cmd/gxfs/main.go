@@ -868,14 +868,16 @@ func locateAllRepos(cmd *cobra.Command, rawAdapter store.Adapter, query string, 
 	}
 
 	var allResults []store.LocateResult
+	var failedRepos []string
 	for range repos {
 		res := <-results
 		if res.err != nil {
-			continue // skip repos with errors
+			failedRepos = append(failedRepos, res.repo)
+			continue
 		}
 		for _, r := range res.resp.Results {
-			// Update ref to use actual repo name
-			r.Ref = "repo://" + res.repo + r.Path
+			// Update ref with URL-encoded repo name for round-trip safety
+			r.Ref = "repo://" + url.PathEscape(res.repo) + r.Path
 			allResults = append(allResults, r)
 		}
 	}
@@ -888,6 +890,16 @@ func locateAllRepos(cmd *cobra.Command, rawAdapter store.Adapter, query string, 
 	// Apply limit
 	if limit > 0 && len(allResults) > limit {
 		allResults = allResults[:limit]
+	}
+
+	// Report partial failures to stderr
+	if len(failedRepos) > 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: locate failed for %d repo(s): %s\n", len(failedRepos), strings.Join(failedRepos, ", "))
+	}
+
+	// If all repos failed, return an error
+	if len(failedRepos) == len(repos) {
+		return fmt.Errorf("locate failed for all repos")
 	}
 
 	resp := &store.LocateResponse{Results: allResults, Total: len(allResults)}
