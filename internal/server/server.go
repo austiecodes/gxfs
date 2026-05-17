@@ -21,10 +21,18 @@ func NewHandler(adapter store.Adapter, writableRepos map[string]bool) http.Handl
 	return &loggingMiddleware{next: h}
 }
 
+// NewHandlerWithCollections creates a handler with collection support.
+func NewHandlerWithCollections(adapter store.Adapter, writableRepos map[string]bool, collectionMgr store.CollectionManager) http.Handler {
+	inv, _ := adapter.(store.CacheInvalidator)
+	h := &handler{adapter: adapter, invalidator: inv, writableRepos: writableRepos, collectionMgr: collectionMgr}
+	return &loggingMiddleware{next: h}
+}
+
 type handler struct {
 	adapter       store.Adapter
 	invalidator   store.CacheInvalidator
-	writableRepos map[string]bool // repos that accept cross-repo writes
+	writableRepos map[string]bool        // repos that accept cross-repo writes
+	collectionMgr store.CollectionManager // optional: collection management
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +62,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]any{"repos": []any{}})
+		return
+	}
+
+	// Collection routes
+	if h.collectionMgr != nil && strings.HasPrefix(r.URL.Path, "/v1/collections") {
+		h.handleCollections(w, r)
 		return
 	}
 
@@ -307,6 +321,148 @@ func (h *handler) dispatchDelete(r *http.Request, repo, op string) (any, error) 
 	}
 }
 
+// handleCollections routes collection API requests.
+func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	// POST /v1/collections — create collection
+	if path == "/v1/collections" && r.Method == http.MethodPost {
+		var req store.CreateCollectionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+			return
+		}
+		resp, err := h.collectionMgr.CreateCollection(r.Context(), req)
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		writeJSON(w, resp)
+		return
+	}
+
+	// GET /v1/collections — list collections
+	if path == "/v1/collections" && r.Method == http.MethodGet {
+		resp, err := h.collectionMgr.ListCollections(r.Context())
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		writeJSON(w, resp)
+		return
+	}
+
+	// GET /v1/collections/{name} — get collection
+	// DELETE /v1/collections/{name} — delete collection
+	if strings.HasPrefix(path, "/v1/collections/") && strings.Count(path, "/") == 3 {
+		name, err := url.PathUnescape(strings.TrimPrefix(path, "/v1/collections/"))
+		if err != nil || name == "" {
+			http.NotFound(w, r)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			resp, err := h.collectionMgr.GetCollection(r.Context(), name)
+			if err != nil {
+				writeJSONError(w, err)
+				return
+			}
+			writeJSON(w, resp)
+			return
+		case http.MethodDelete:
+			if err := h.collectionMgr.DeleteCollection(r.Context(), name); err != nil {
+				writeJSONError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		default:
+			writeJSONErrorCode(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+			return
+		}
+	}
+
+	// PUT /v1/collections/{name}/members — add member
+	// DELETE /v1/collections/{name}/members — remove member
+	if strings.HasPrefix(path, "/v1/collections/") && strings.HasSuffix(path, "/members") {
+		namePath := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/collections/"), "/members")
+		name, err := url.PathUnescape(namePath)
+		if err != nil || name == "" {
+			http.NotFound(w, r)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodPut:
+			var req store.AddMemberRequest
+			req.Name = name
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSONErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+				return
+			}
+			resp, err := h.collectionMgr.AddMember(r.Context(), req)
+			if err != nil {
+				writeJSONError(w, err)
+				return
+			}
+			writeJSON(w, resp)
+			return
+		case http.MethodDelete:
+			memberPath := r.URL.Query().Get("path")
+			if memberPath == "" {
+				writeJSONErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "path is required")
+				return
+			}
+			if err := h.collectionMgr.RemoveMember(r.Context(), store.RemoveMemberRequest{
+				Name: name,
+				Path: memberPath,
+			}); err != nil {
+				writeJSONError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		default:
+			writeJSONErrorCode(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+			return
+		}
+	}
+
+	// GET /v1/collections/{name}/docs?path=/... — read member content
+	if strings.HasPrefix(path, "/v1/collections/") && strings.HasSuffix(path, "/docs") {
+		parts := strings.SplitN(strings.TrimPrefix(path, "/v1/collections/"), "/docs", 2)
+		if len(parts) == 0 || parts[0] == "" {
+			http.NotFound(w, r)
+			return
+		}
+		name, err := url.PathUnescape(parts[0])
+		if err != nil || name == "" {
+			http.NotFound(w, r)
+			return
+		}
+		memberPath := queryPath(r.URL.Query())
+
+		if r.Method != http.MethodGet {
+			writeJSONErrorCode(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+			return
+		}
+
+		resp, err := h.collectionMgr.GetMemberContent(r.Context(), store.GetMemberContentRequest{
+			Name: name,
+			Path: memberPath,
+		})
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		writeJSON(w, resp)
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
 func parsePath(p string) (repo string, op string, ok bool) {
 	rest := strings.TrimPrefix(p, "/v1/repos/")
 	if rest == p {
@@ -429,12 +585,15 @@ func mapError(err error) (int, string) {
 		return http.StatusNotFound, "NOT_FOUND"
 	case errors.Is(err, store.ErrUnknownRepo):
 		return http.StatusNotFound, "UNKNOWN_REPO"
+	case errors.Is(err, store.ErrCollectionNotFound):
+		return http.StatusNotFound, "COLLECTION_NOT_FOUND"
 	case errors.Is(err, store.ErrReadOnlyMount):
 		return http.StatusForbidden, "FORBIDDEN"
 	case errors.Is(err, store.ErrIsDir), errors.Is(err, store.ErrNotDir),
 		errors.Is(err, store.ErrEmptyOld), errors.Is(err, store.ErrCannotDeleteRoot),
 		errors.Is(err, store.ErrEmptyQuery),
-		errors.Is(err, store.ErrInvalidParam):
+		errors.Is(err, store.ErrInvalidParam),
+		errors.Is(err, store.ErrInvalidName):
 		return http.StatusBadRequest, "BAD_REQUEST"
 	case errors.Is(err, store.ErrContentNotReady):
 		return http.StatusNotFound, "CONTENT_NOT_READY"
@@ -442,6 +601,12 @@ func mapError(err error) (int, string) {
 		return http.StatusNotImplemented, "NOT_SUPPORTED"
 	case errors.Is(err, store.ErrConflict):
 		return http.StatusConflict, "CONFLICT"
+	case errors.Is(err, store.ErrNameExists):
+		return http.StatusConflict, "NAME_EXISTS"
+	case errors.Is(err, store.ErrMemberExists):
+		return http.StatusConflict, "MEMBER_EXISTS"
+	case errors.Is(err, store.ErrDocAlreadyInCollection):
+		return http.StatusConflict, "DOC_ALREADY_IN_COLLECTION"
 	default:
 		return http.StatusInternalServerError, "INTERNAL_ERROR"
 	}

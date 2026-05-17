@@ -35,9 +35,15 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 		Long:  "GXFS gives agents Unix-like commands for virtual filesystem content served by gxfs-server.",
 	}
 
+	// Try to get collection client from rawAdapter
+	var collectionClient *client.Client
+	if cli, ok := rawAdapter.(*client.Client); ok {
+		collectionClient = cli
+	}
+
 	cmd.AddCommand(newLSCommand(adapter, rawAdapter, repo))
 	cmd.AddCommand(newTreeCommand(adapter, repo))
-	cmd.AddCommand(newCatCommand(adapter, rawAdapter, repo))
+	cmd.AddCommand(newCatCommand(adapter, rawAdapter, repo, collectionClient))
 	cmd.AddCommand(newGrepCommand(adapter, repo))
 	cmd.AddCommand(newFindCommand(adapter, repo))
 	cmd.AddCommand(newStatCommand(adapter, rawAdapter, repo))
@@ -57,6 +63,9 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 	cmd.AddCommand(newGlobCommand(rawAdapter, repo))
 	cmd.AddCommand(newAttachCommand(rawAdapter, repo))
 	cmd.AddCommand(newHookCommand(adapter, rawAdapter, repo, resolver))
+	if collectionClient != nil {
+		cmd.AddCommand(newCollectionCommand(collectionClient))
+	}
 	return cmd
 }
 
@@ -217,19 +226,54 @@ func newTreeCommand(adapter store.Adapter, repo string) *cobra.Command {
 	return cmd
 }
 
-func newCatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
+func newCatCommand(adapter, rawAdapter store.Adapter, repo string, collectionClient *client.Client) *cobra.Command {
 	var numberAll, numberNonBlank, squeezeBlanks bool
 
 	cmd := &cobra.Command{
 		Use:   "cat <path>",
 		Short: "Print VFS file content",
-		Args:  cobra.ExactArgs(1),
+		Long: `Print VFS file content.
+
+Supports multiple path formats:
+  - Regular path: cat /docs/readme.md
+  - Repo ref: cat repo://other-repo/docs/readme.md
+  - Collection ref: cat collection://my-collection/docs/readme.md`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			path := args[0]
+
+			// Check for collection:// ref
+			if strings.HasPrefix(path, "collection://") {
+				if collectionClient == nil {
+					return fmt.Errorf("collection:// refs require a configured server")
+				}
+				name, colPath, err := parseCollectionRef(path)
+				if err != nil {
+					return err
+				}
+				resp, err := collectionClient.GetMemberContent(cmd.Context(), name, colPath)
+				if err != nil {
+					return err
+				}
+
+				out := cmd.OutOrStdout()
+				if !numberAll && !numberNonBlank && !squeezeBlanks {
+					fmt.Fprint(out, resp.Content)
+					return nil
+				}
+
+				lines := strings.Split(resp.Content, "\n")
+				if len(lines) > 0 && lines[len(lines)-1] == "" {
+					lines = lines[:len(lines)-1]
+				}
+				return printLines(out, lines, numberAll, numberNonBlank, squeezeBlanks)
+			}
+
 			// Resolve effective adapter/repo/path for repo:// refs.
 			effAdapter := adapter
 			effRepo := repo
-			effPath := args[0]
-			if targetRepo, targetPath, ok := parseRepoRef(repo, args[0]); ok {
+			effPath := path
+			if targetRepo, targetPath, ok := parseRepoRef(repo, path); ok {
 				effAdapter = rawAdapter
 				effRepo = targetRepo
 				effPath = targetPath
@@ -250,37 +294,65 @@ func newCatCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Comman
 			if len(lines) > 0 && lines[len(lines)-1] == "" {
 				lines = lines[:len(lines)-1]
 			}
-
-			if squeezeBlanks {
-				lines = squeezeBlankLines(lines)
-			}
-
-			if numberNonBlank {
-				n := 0
-				for _, line := range lines {
-					if strings.TrimSpace(line) == "" {
-						fmt.Fprintln(out, line)
-					} else {
-						n++
-						fmt.Fprintf(out, "%6d  %s\n", n, line)
-					}
-				}
-			} else if numberAll {
-				for i, line := range lines {
-					fmt.Fprintf(out, "%6d  %s\n", i+1, line)
-				}
-			} else {
-				for _, line := range lines {
-					fmt.Fprintln(out, line)
-				}
-			}
-			return nil
+			return printLines(out, lines, numberAll, numberNonBlank, squeezeBlanks)
 		},
 	}
 	cmd.Flags().BoolVarP(&numberAll, "number", "n", false, "number all output lines")
 	cmd.Flags().BoolVarP(&numberNonBlank, "number-nonblank", "b", false, "number non-blank output lines")
 	cmd.Flags().BoolVarP(&squeezeBlanks, "squeeze-blank", "s", false, "squeeze multiple blank lines into one")
 	return cmd
+}
+
+// parseCollectionRef parses collection://name/path into (name, path).
+func parseCollectionRef(ref string) (string, string, error) {
+	if !strings.HasPrefix(ref, "collection://") {
+		return "", "", fmt.Errorf("invalid collection ref: must start with collection://")
+	}
+	rest := ref[13:] // len("collection://")
+	if rest == "" {
+		return "", "", fmt.Errorf("invalid collection ref: missing collection name")
+	}
+	// Find the first /
+	slashIdx := strings.Index(rest, "/")
+	if slashIdx < 0 {
+		return "", "", fmt.Errorf("invalid collection ref: missing path")
+	}
+	name := rest[:slashIdx]
+	path := rest[slashIdx:]
+	if name == "" {
+		return "", "", fmt.Errorf("invalid collection ref: empty collection name")
+	}
+	if path == "" || path == "/" {
+		return "", "", fmt.Errorf("invalid collection ref: missing document path")
+	}
+	return name, path, nil
+}
+
+func printLines(out io.Writer, lines []string, numberAll, numberNonBlank, squeezeBlanks bool) error {
+	if squeezeBlanks {
+		lines = squeezeBlankLines(lines)
+	}
+
+	if numberNonBlank {
+		n := 0
+		for _, line := range lines {
+			if strings.TrimSpace(line) == "" {
+				fmt.Fprintln(out, line)
+			} else {
+				n++
+				fmt.Fprintf(out, "%6d  %s\n", n, line)
+			}
+		}
+	} else if numberAll {
+		for i, line := range lines {
+			fmt.Fprintf(out, "%6d  %s\n", i+1, line)
+		}
+	} else {
+		for _, line := range lines {
+			fmt.Fprintln(out, line)
+		}
+	}
+	return nil
 }
 
 func squeezeBlankLines(lines []string) []string {

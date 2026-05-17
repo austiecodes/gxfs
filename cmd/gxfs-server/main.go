@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 	"github.com/zeromicro/go-zero/rest"
 
@@ -312,7 +313,44 @@ func runServer() {
 			writableRepos[repo.Name] = true
 		}
 	}
-	handler := server.NewHandler(adapter, writableRepos)
+
+	// Create collection manager if we have a doc_postgres backend
+	// V1 constraint: all doc_postgres backends must share the same (dsn, schema)
+	// to ensure collection membership lookup works correctly across repos.
+	var collectionMgr store.CollectionManager
+	var collectionPool *pgxpool.Pool
+	var collectionSchema string
+	seenStorage := make(map[string]bool) // key: "dsn|schema"
+	for _, repo := range cfg.Repos {
+		if repo.Backend.Type == "doc_postgres" {
+			pg := repo.Backend.Postgres
+			storageKey := fmt.Sprintf("%s|%s", pg.DSN, pg.Schema)
+			seenStorage[storageKey] = true
+			if collectionPool == nil {
+				pool, err := pgxpool.New(context.Background(), pg.DSN)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, fmt.Errorf("connect collection db: %w", err))
+					os.Exit(1)
+				}
+				collectionPool = pool
+				collectionSchema = pg.Schema
+			}
+		}
+	}
+	if len(seenStorage) > 1 {
+		fmt.Fprintln(os.Stderr, "error: V1 collections require all doc_postgres backends to share the same (dsn, schema). Found multiple distinct storage targets.")
+		os.Exit(1)
+	}
+	if collectionPool != nil {
+		collectionMgr = postgres.NewCollectionAdapter(collectionPool, collectionSchema)
+	}
+
+	var handler http.Handler
+	if collectionMgr != nil {
+		handler = server.NewHandlerWithCollections(adapter, writableRepos, collectionMgr)
+	} else {
+		handler = server.NewHandler(adapter, writableRepos)
+	}
 
 	srv := rest.MustNewServer(rest.RestConf{Host: host, Port: port})
 	defer srv.Stop()
@@ -323,5 +361,13 @@ func runServer() {
 	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
 	srv.AddRoute(rest.Route{Method: http.MethodPut, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
 	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
+	// Collection routes
+	srv.AddRoute(rest.Route{Method: http.MethodPost, Path: "/v1/collections", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/collections", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/collections/:name", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/collections/:name", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodPut, Path: "/v1/collections/:name/members", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/collections/:name/members", Handler: handler.ServeHTTP})
+	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/collections/:name/docs", Handler: handler.ServeHTTP})
 	srv.Start()
 }

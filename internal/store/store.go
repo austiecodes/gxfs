@@ -20,6 +20,11 @@ var (
 	ErrNotModified      = errors.New("not modified")
 	ErrConflict         = errors.New("conflict: content hash mismatch")
 	ErrNotSupported     = errors.New("operation not supported")
+	ErrInvalidName      = errors.New("invalid name: must be lowercase alphanumeric with - or _")
+	ErrNameExists       = errors.New("collection name already exists")
+	ErrCollectionNotFound = errors.New("collection not found")
+	ErrMemberExists     = errors.New("member path already exists in collection")
+	ErrDocAlreadyInCollection = errors.New("document already in collection")
 )
 
 type Node struct {
@@ -300,4 +305,85 @@ type GlobResponse struct {
 // operation (like search), not a mounted-view browsing operation.
 type Globber interface {
 	Glob(ctx context.Context, req GlobRequest) (*GlobResponse, error)
+}
+
+// === Collection Types ===
+
+// Collection represents a curated set of documents across repos.
+type Collection struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// CollectionMember represents a document reference in a collection.
+type CollectionMember struct {
+	Path  string `json:"path"`   // path within the collection (e.g., "/guide.md")
+	DocID string `json:"doc_id"` // reference to gxfs_docs.id
+}
+
+// CreateCollectionRequest is the input for creating a collection.
+type CreateCollectionRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// CreateCollectionResponse is the output for creating a collection.
+type CreateCollectionResponse struct {
+	Collection Collection `json:"collection"`
+}
+
+// ListCollectionsResponse is the output for listing collections.
+type ListCollectionsResponse struct {
+	Collections []Collection `json:"collections"`
+}
+
+// GetCollectionResponse is the output for getting a collection.
+type GetCollectionResponse struct {
+	Collection Collection         `json:"collection"`
+	Members    []CollectionMember `json:"members"`
+}
+
+// AddMemberRequest is the input for adding a document to a collection.
+type AddMemberRequest struct {
+	Name       string `json:"name"`        // collection name
+	SourceRef  string `json:"source_ref"`  // repo://repo-name/path
+	Path       string `json:"path"`        // path within collection
+}
+
+// AddMemberResponse is the output for adding a member.
+type AddMemberResponse struct {
+	Member CollectionMember `json:"member"`
+}
+
+// RemoveMemberRequest is the input for removing a document from a collection.
+type RemoveMemberRequest struct {
+	Name string `json:"name"` // collection name
+	Path string `json:"path"` // path within collection
+}
+
+// GetMemberContentRequest is the input for reading a collection member's content.
+type GetMemberContentRequest struct {
+	Name string `json:"name"` // collection name
+	Path string `json:"path"` // path within collection
+}
+
+// GetMemberContentResponse is the output for reading a collection member's content.
+type GetMemberContentResponse struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Hash    string `json:"hash"`
+}
+
+// CollectionManager provides collection CRUD and membership operations.
+type CollectionManager interface {
+	CreateCollection(ctx context.Context, req CreateCollectionRequest) (*CreateCollectionResponse, error)
+	ListCollections(ctx context.Context) (*ListCollectionsResponse, error)
+	GetCollection(ctx context.Context, name string) (*GetCollectionResponse, error)
+	DeleteCollection(ctx context.Context, name string) error
+	AddMember(ctx context.Context, req AddMemberRequest) (*AddMemberResponse, error)
+	RemoveMember(ctx context.Context, req RemoveMemberRequest) error
+	GetMemberContent(ctx context.Context, req GetMemberContentRequest) (*GetMemberContentResponse, error)
 }

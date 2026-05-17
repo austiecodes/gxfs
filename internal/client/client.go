@@ -503,3 +503,108 @@ func (c *Client) url(repo, op string, q url.Values) (string, error) {
 	base.RawQuery = q.Encode()
 	return base.String(), nil
 }
+
+// === Collection Methods ===
+
+// CreateCollection creates a new collection.
+func (c *Client) CreateCollection(ctx context.Context, req store.CreateCollectionRequest) (*store.CreateCollectionResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections"
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal create collection request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build create collection request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var resp store.CreateCollectionResponse
+	if err := c.do(httpReq, "create_collection", &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// ListCollections lists all collections.
+func (c *Client) ListCollections(ctx context.Context) (*store.ListCollectionsResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build list collections request: %w", err)
+	}
+	var resp store.ListCollectionsResponse
+	if err := c.do(req, "list_collections", &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// GetCollection gets a collection by name.
+func (c *Client) GetCollection(ctx context.Context, name string) (*store.GetCollectionResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build get collection request: %w", err)
+	}
+	var resp store.GetCollectionResponse
+	if err := c.do(req, "get_collection", &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// DeleteCollection deletes a collection by name.
+func (c *Client) DeleteCollection(ctx context.Context, name string) error {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("build delete collection request: %w", err)
+	}
+	return c.do(req, "delete_collection", nil)
+}
+
+// AddMember adds a document to a collection.
+func (c *Client) AddMember(ctx context.Context, req store.AddMemberRequest) (*store.AddMemberResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(req.Name) + "/members"
+	body, err := json.Marshal(map[string]string{
+		"source_ref": req.SourceRef,
+		"path":       req.Path,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal add member request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build add member request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var resp store.AddMemberResponse
+	if err := c.do(httpReq, "add_member", &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// RemoveMember removes a document from a collection.
+func (c *Client) RemoveMember(ctx context.Context, name, path string) error {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(name) + "/members?path=" + url.QueryEscape(path)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("build remove member request: %w", err)
+	}
+	return c.do(req, "remove_member", nil)
+}
+
+// GetMemberContent reads a document's content via collection membership.
+func (c *Client) GetMemberContent(ctx context.Context, name, path string) (*store.GetMemberContentResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(name) + "/docs?path=" + url.QueryEscape(path)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build get member content request: %w", err)
+	}
+	var resp store.GetMemberContentResponse
+	if err := c.do(req, "get_member_content", &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
