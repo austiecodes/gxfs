@@ -185,6 +185,58 @@ func (a *Adapter) Search(_ context.Context, req store.SearchRequest) (*store.Sea
 	return &store.SearchResponse{Results: results, Total: total}, nil
 }
 
+func (a *Adapter) Locate(_ context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return nil, store.ErrEmptyQuery
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	terms := strings.Fields(strings.ToLower(query))
+
+	nodes, err := a.tree.Find("/", "", vfs.FindOptions{Type: "file", All: true})
+	if err != nil {
+		return nil, err
+	}
+
+	var results []store.LocateResult
+	total := 0
+	for _, n := range nodes {
+		content, err := a.tree.Cat(n.Path)
+		if err != nil {
+			continue
+		}
+		lowerContent := strings.ToLower(content)
+		match := true
+		for _, t := range terms {
+			if !strings.Contains(lowerContent, t) {
+				match = false
+				break
+			}
+		}
+		if !match {
+			continue
+		}
+		total++
+		if len(results) >= limit {
+			continue
+		}
+		snippet := snippetFromContent(content, terms)
+		results = append(results, store.LocateResult{
+			Ref:     "repo://" + req.Repo + n.Path,
+			Path:    n.Path,
+			Score:   1.0,
+			Snippet: snippet,
+		})
+	}
+	if results == nil {
+		results = []store.LocateResult{}
+	}
+	return &store.LocateResponse{Results: results, Total: total}, nil
+}
+
 func snippetFromContent(content string, terms []string) string {
 	lines := strings.Split(content, "\n")
 	for _, line := range lines {

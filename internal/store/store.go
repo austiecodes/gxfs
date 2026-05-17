@@ -202,6 +202,7 @@ type Adapter interface {
 	Searcher
 	BatchHasher
 	Globber
+	Locator
 }
 
 type Writer interface {
@@ -236,6 +237,32 @@ type SearchResponse struct {
 
 type Searcher interface {
 	Search(ctx context.Context, req SearchRequest) (*SearchResponse, error)
+}
+
+// LocateRequest is the input for Locate — lexical discovery with ranking.
+type LocateRequest struct {
+	Repo  string
+	Query string
+	Limit int // max results, default 10
+}
+
+// LocateResult is a single document match returned by Locate.
+type LocateResult struct {
+	Ref     string  `json:"ref"`     // repo://repo-name/path format
+	Path    string  `json:"path"`    // original path within repo
+	Score   float64 `json:"score"`   // lexical ranking score
+	Snippet string  `json:"snippet"` // context snippet with highlights
+}
+
+// LocateResponse is the output for Locate.
+type LocateResponse struct {
+	Results []LocateResult `json:"results"`
+	Total   int            `json:"total"`
+}
+
+// Locator provides lexical discovery with ranking, designed for cross-repo exploration.
+type Locator interface {
+	Locate(ctx context.Context, req LocateRequest) (*LocateResponse, error)
 }
 
 type CacheInvalidator interface {

@@ -82,6 +82,10 @@ func (f *fakeAdapter) Glob(_ context.Context, req store.GlobRequest) (*store.Glo
 	return &store.GlobResponse{Results: []store.GlobResult{}, Total: 0}, nil
 }
 
+func (f *fakeAdapter) Locate(_ context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
+	return &store.LocateResponse{Results: []store.LocateResult{}, Total: 0}, nil
+}
+
 func TestHandlerRoutesLS(t *testing.T) {
 	adapter := &fakeAdapter{}
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/ls?path=/docs", nil)
@@ -461,6 +465,10 @@ func (a *readOnlyAdapter) Search(_ context.Context, _ store.SearchRequest) (*sto
 
 func (a *readOnlyAdapter) Glob(_ context.Context, _ store.GlobRequest) (*store.GlobResponse, error) {
 	return &store.GlobResponse{Results: []store.GlobResult{}}, nil
+}
+
+func (a *readOnlyAdapter) Locate(_ context.Context, _ store.LocateRequest) (*store.LocateResponse, error) {
+	return &store.LocateResponse{Results: []store.LocateResult{}}, nil
 }
 
 func TestHandlerMapsReadOnlyMountErrorToForbidden(t *testing.T) {

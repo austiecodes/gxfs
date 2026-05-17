@@ -127,6 +127,14 @@ func (r *Registry) Search(ctx context.Context, req SearchRequest) (*SearchRespon
 	return adapter.Search(ctx, req)
 }
 
+func (r *Registry) Locate(ctx context.Context, req LocateRequest) (*LocateResponse, error) {
+	adapter, err := r.adapter(req.Repo)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.Locate(ctx, req)
+}
+
 func (r *Registry) BatchHashes(ctx context.Context, req HashRequest) (*HashResponse, error) {
 	adapter, err := r.adapter(req.Repo)
 	if err != nil {

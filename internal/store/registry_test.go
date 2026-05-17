@@ -66,6 +66,10 @@ func (f *registryFakeAdapter) Glob(_ context.Context, _ store.GlobRequest) (*sto
 	return &store.GlobResponse{Results: []store.GlobResult{}}, nil
 }
 
+func (f *registryFakeAdapter) Locate(_ context.Context, _ store.LocateRequest) (*store.LocateResponse, error) {
+	return &store.LocateResponse{Results: []store.LocateResult{}}, nil
+}
+
 func TestRegistryRoutesByRepo(t *testing.T) {
 	alpha := &registryFakeAdapter{}
 	beta := &registryFakeAdapter{}

@@ -308,6 +308,18 @@ func (c *Client) Search(ctx context.Context, req store.SearchRequest) (*store.Se
 	return &resp, nil
 }
 
+func (c *Client) Locate(ctx context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
+	var resp store.LocateResponse
+	q := url.Values{"q": {req.Query}}
+	if req.Limit > 0 {
+		q.Set("limit", strconv.Itoa(req.Limit))
+	}
+	if err := c.get(ctx, req.Repo, "locate", q, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) Glob(ctx context.Context, req store.GlobRequest) (*store.GlobResponse, error) {
 	var resp store.GlobResponse
 	q := url.Values{"pattern": {req.Pattern}}

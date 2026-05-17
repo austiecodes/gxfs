@@ -181,6 +181,12 @@ func (f *fakeClient) Glob(_ context.Context, req store.GlobRequest) (*store.Glob
 	}, Total: 2}, nil
 }
 
+func (f *fakeClient) Locate(_ context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
+	return &store.LocateResponse{Results: []store.LocateResult{
+		{Ref: "repo://gxfs/docs/readme.md", Path: "/docs/readme.md", Score: 1.0, Snippet: "example snippet"},
+	}, Total: 1}, nil
+}
+
 func (f *fakeClient) RepoList(_ context.Context) ([]string, error) {
 	return []string{"my-project", "github/openai-go"}, nil
 }
@@ -3299,6 +3305,9 @@ func (t *testNoopAdapter) BatchHashes(ctx context.Context, req store.HashRequest
 }
 func (t *testNoopAdapter) Glob(ctx context.Context, req store.GlobRequest) (*store.GlobResponse, error) {
 	return &store.GlobResponse{}, nil
+}
+func (t *testNoopAdapter) Locate(ctx context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
+	return &store.LocateResponse{}, nil
 }
 func (t *testNoopAdapter) Repos() []string { return []string{"test"} }
 func (t *testNoopAdapter) Invalidate()     {}

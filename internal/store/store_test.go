@@ -57,6 +57,10 @@ func (fakeAdapter) Glob(_ context.Context, _ store.GlobRequest) (*store.GlobResp
 	return &store.GlobResponse{Results: []store.GlobResult{}}, nil
 }
 
+func (fakeAdapter) Locate(_ context.Context, _ store.LocateRequest) (*store.LocateResponse, error) {
+	return &store.LocateResponse{Results: []store.LocateResult{}}, nil
+}
+
 var _ store.Adapter = fakeAdapter{}
 
 func TestCapabilityRequestTypesCarryRepoAndPath(t *testing.T) {

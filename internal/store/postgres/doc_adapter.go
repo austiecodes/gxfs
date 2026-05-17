@@ -362,6 +362,60 @@ func (d *DocAdapter) Search(ctx context.Context, req store.SearchRequest) (*stor
 	return &store.SearchResponse{Results: results, Total: total}, nil
 }
 
+func (d *DocAdapter) Locate(ctx context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
+	repo := d.repo(req.Repo)
+
+	countQuery, err := DocLocateCountSQL(d.cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var total int
+	if err := d.pool.QueryRow(ctx, countQuery, repo, req.Query).Scan(&total); err != nil {
+		return nil, fmt.Errorf("doc locate count: %w", err)
+	}
+	if total == 0 {
+		return &store.LocateResponse{Total: 0}, nil
+	}
+
+	dataQuery, err := DocLocateDataSQL(d.cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	rows, err := d.pool.Query(ctx, dataQuery, repo, req.Query, limit, 0)
+	if err != nil {
+		return nil, fmt.Errorf("doc locate data: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.LocateResult
+	for rows.Next() {
+		var filePath string
+		var rank float64
+		var snippet string
+		if err := rows.Scan(&filePath, &rank, &snippet); err != nil {
+			return nil, fmt.Errorf("doc locate scan: %w", err)
+		}
+		results = append(results, store.LocateResult{
+			Ref:     "repo://" + req.Repo + filePath,
+			Path:    filePath,
+			Score:   rank,
+			Snippet: snippet,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("doc locate rows: %w", err)
+	}
+
+	return &store.LocateResponse{Results: results, Total: total}, nil
+}
+
 func (d *DocAdapter) BatchHashes(ctx context.Context, req store.HashRequest) (*store.HashResponse, error) {
 	repo := d.repo(req.Repo)
 

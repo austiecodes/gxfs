@@ -251,6 +251,83 @@ func SearchDataSQL(cfg Config) (string, error) {
 	), nil
 }
 
+// LocateCountSQL returns a query that counts documents matching a full-text query.
+// This is used by Locate for discovery-level search across the entire repo.
+func LocateCountSQL(cfg Config) (string, error) {
+	nodesTable, err := quoteTable(cfg.Schema, cfg.NodesTable)
+	if err != nil {
+		return "", err
+	}
+	contentTable, err := quoteTable(cfg.Schema, cfg.ContentTable)
+	if err != nil {
+		return "", err
+	}
+	mappingTable, err := quoteTable(cfg.Schema, cfg.RepoNodesTable)
+	if err != nil {
+		return "", err
+	}
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	kindCol, err := quoteIdent(cfg.Files.KindColumn)
+	if err != nil {
+		return "", fmt.Errorf("kind column: %w", err)
+	}
+	return fmt.Sprintf(
+		"select count(*) from %s c "+
+			"join %s n on c.%s = n.%s "+
+			"join %s r on n.%s = r.%s, "+
+			"plainto_tsquery('english', $2) as query "+
+			"where r.repo = $1 and n.%s = 'file' and c.content_search @@ query",
+		contentTable,
+		nodesTable, pathCol, pathCol,
+		mappingTable, pathCol, pathCol,
+		kindCol,
+	), nil
+}
+
+// LocateDataSQL returns a query that selects locate results with rank and snippet.
+// Locate is designed for discovery - it searches the entire repo and returns
+// document-level results with lexical ranking via ts_rank_cd.
+func LocateDataSQL(cfg Config) (string, error) {
+	nodesTable, err := quoteTable(cfg.Schema, cfg.NodesTable)
+	if err != nil {
+		return "", err
+	}
+	contentTable, err := quoteTable(cfg.Schema, cfg.ContentTable)
+	if err != nil {
+		return "", err
+	}
+	mappingTable, err := quoteTable(cfg.Schema, cfg.RepoNodesTable)
+	if err != nil {
+		return "", err
+	}
+	pathCol, err := quoteIdent(cfg.Files.PathColumn)
+	if err != nil {
+		return "", fmt.Errorf("path column: %w", err)
+	}
+	kindCol, err := quoteIdent(cfg.Files.KindColumn)
+	if err != nil {
+		return "", fmt.Errorf("kind column: %w", err)
+	}
+	return fmt.Sprintf(
+		"select n.%s, ts_rank_cd(c.content_search, query, 32) as rank, "+
+			"ts_headline('english', c.content, query, 'StartSel=**,StopSel=**,MaxWords=60,MinWords=15') as snippet "+
+			"from %s c "+
+			"join %s n on c.%s = n.%s "+
+			"join %s r on n.%s = r.%s, "+
+			"plainto_tsquery('english', $2) as query "+
+			"where r.repo = $1 and n.%s = 'file' and c.content_search @@ query "+
+			"order by rank desc limit $3 offset $4",
+		pathCol,
+		contentTable,
+		nodesTable, pathCol, pathCol,
+		mappingTable, pathCol, pathCol,
+		kindCol,
+	), nil
+}
+
 func BatchHashesSQL(cfg Config) (string, error) {
 	nodesTable, err := quoteTable(cfg.Schema, cfg.NodesTable)
 	if err != nil {

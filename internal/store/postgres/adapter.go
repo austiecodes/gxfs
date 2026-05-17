@@ -295,6 +295,63 @@ func (a *Adapter) Search(ctx context.Context, req store.SearchRequest) (*store.S
 	return &store.SearchResponse{Results: results, Total: total}, nil
 }
 
+func (a *Adapter) Locate(ctx context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return nil, store.ErrEmptyQuery
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	repo := a.repo(req.Repo)
+
+	countQuery, err := LocateCountSQL(a.cfg)
+	if err != nil {
+		return nil, err
+	}
+	var total int
+	if err := a.pool.QueryRow(ctx, countQuery, repo, query).Scan(&total); err != nil {
+		return nil, fmt.Errorf("locate count: %w", err)
+	}
+	if total == 0 {
+		return &store.LocateResponse{Results: []store.LocateResult{}, Total: 0}, nil
+	}
+
+	dataQuery, err := LocateDataSQL(a.cfg)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := a.pool.Query(ctx, dataQuery, repo, query, limit, 0)
+	if err != nil {
+		return nil, fmt.Errorf("locate postgres: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.LocateResult
+	for rows.Next() {
+		var filePath string
+		var rank float64
+		var snippet string
+		if err := rows.Scan(&filePath, &rank, &snippet); err != nil {
+			return nil, fmt.Errorf("scan locate result: %w", err)
+		}
+		results = append(results, store.LocateResult{
+			Ref:     "repo://" + req.Repo + filePath,
+			Path:    filePath,
+			Score:   rank,
+			Snippet: snippet,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read locate results: %w", err)
+	}
+	if results == nil {
+		results = []store.LocateResult{}
+	}
+	return &store.LocateResponse{Results: results, Total: total}, nil
+}
+
 func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindResponse, error) {
 	repo := a.repo(req.Repo)
 	tree, err := a.treeFor(ctx, repo)

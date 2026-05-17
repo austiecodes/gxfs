@@ -105,6 +105,48 @@ func DocSearchDataSQL(cfg Config) (string, error) {
 	), nil
 }
 
+// DocLocateCountSQL returns a query that counts documents matching a full-text query.
+// This is used by Locate for discovery-level search across the entire repo.
+func DocLocateCountSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"select count(*) from %s rp join %s d on rp.doc_id = d.id, "+
+			"plainto_tsquery('english', $2) as query "+
+			"where rp.repo = $1 and d.content_search @@ query",
+		pathsTable, docsTable,
+	), nil
+}
+
+// DocLocateDataSQL returns a query that selects locate results with rank and snippet.
+// Locate is designed for discovery - it searches the entire repo and returns
+// document-level results with lexical ranking via ts_rank_cd.
+func DocLocateDataSQL(cfg Config) (string, error) {
+	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"select rp.path, ts_rank_cd(d.content_search, query, 32) as rank, "+
+			"ts_headline('english', d.content, query, 'StartSel=**,StopSel=**,MaxWords=60,MinWords=15') as snippet "+
+			"from %s rp join %s d on rp.doc_id = d.id, "+
+			"plainto_tsquery('english', $2) as query "+
+			"where rp.repo = $1 and d.content_search @@ query "+
+			"order by rank desc limit $3 offset $4",
+		pathsTable, docsTable,
+	), nil
+}
+
 // DocBatchHashesSQL returns a query that selects content hashes for all files
 // under a prefix.
 func DocBatchHashesSQL(cfg Config) (string, error) {

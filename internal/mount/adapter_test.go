@@ -73,6 +73,10 @@ func (f *fakeStore) Glob(_ context.Context, _ store.GlobRequest) (*store.GlobRes
 	return &store.GlobResponse{Results: []store.GlobResult{}}, nil
 }
 
+func (f *fakeStore) Locate(_ context.Context, _ store.LocateRequest) (*store.LocateResponse, error) {
+	return &store.LocateResponse{Results: []store.LocateResult{}}, nil
+}
+
 func TestAdapterTranslatesRequestAndResponsePaths(t *testing.T) {
 	resolver, err := NewResolver("gxfs", []config.MountConfig{
 		{Local: "docs", Remote: "repo://self/remote-docs", Mode: "writable"},

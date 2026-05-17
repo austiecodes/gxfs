@@ -238,6 +238,20 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 			Limit:   globLimit,
 			Offset:  globOffset,
 		})
+	case "locate":
+		locator, ok := h.adapter.(store.Locator)
+		if !ok {
+			return nil, fmt.Errorf("locate is not supported by this backend")
+		}
+		locateLimit, err := queryIntNonNeg(q, "limit")
+		if err != nil {
+			return nil, err
+		}
+		return locator.Locate(r.Context(), store.LocateRequest{
+			Repo:  repo,
+			Query: q.Get("q"),
+			Limit: locateLimit,
+		})
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", op)
 	}
