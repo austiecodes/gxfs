@@ -1,4 +1,4 @@
-package main
+package command
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 	"gxfs/internal/store"
 )
 
-func newCollectionCommand(cli *client.Client) *cobra.Command {
+func NewCollectionCommand(cli *client.Client) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "collection",
 		Short: "Collection management commands",

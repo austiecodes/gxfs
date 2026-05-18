@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"gxfs/cmd/gxfs/command"
 	"gxfs/internal/client"
 	"gxfs/internal/config"
 	"gxfs/internal/mount"
@@ -27,23 +28,23 @@ import (
 )
 
 type fakeClient struct {
-	grepReq         store.GrepRequest
-	grepMatches     []store.Match
-	lsNodes         []store.Node
-	statNode        *store.Node
-	statErr         error
-	catContent      string
-	lsReq           store.LSRequest
-	findReq         store.FindRequest
-	findNodes       []store.Node
-	treeReq         store.TreeRequest
-	treeText        string
-	catReqs         []store.CatRequest
-	catMu           sync.Mutex
-	catContents     map[string]string
-	putReqs         []store.PutRequest
-	searchReq       store.SearchRequest
-	searchResp      *store.SearchResponse
+	grepReq          store.GrepRequest
+	grepMatches      []store.Match
+	lsNodes          []store.Node
+	statNode         *store.Node
+	statErr          error
+	catContent       string
+	lsReq            store.LSRequest
+	findReq          store.FindRequest
+	findNodes        []store.Node
+	treeReq          store.TreeRequest
+	treeText         string
+	catReqs          []store.CatRequest
+	catMu            sync.Mutex
+	catContents      map[string]string
+	putReqs          []store.PutRequest
+	searchReq        store.SearchRequest
+	searchResp       *store.SearchResponse
 	batchHashesResp  *store.HashResponse
 	locateReq        store.LocateRequest
 	locateResp       *store.LocateResponse
@@ -432,9 +433,9 @@ func TestFormatLSLine(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatLSLine(tt.node, tt.long, tt.classify, tt.slashDir)
+			got := command.FormatLSLine(tt.node, tt.long, tt.classify, tt.slashDir)
 			if got != tt.want {
-				t.Fatalf("formatLSLine() = %q, want %q", got, tt.want)
+				t.Fatalf("command.FormatLSLine() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -1744,7 +1745,7 @@ materialized = true
 func executeInit(t *testing.T, args ...string) string {
 	t.Helper()
 
-	cmd := newInitCommand()
+	cmd := command.NewInitCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
@@ -1785,7 +1786,7 @@ func TestInitWritesSettingsAndAgentsInstructions(t *testing.T) {
 	}
 
 	agents := readTextFile(t, filepath.Join(dir, "AGENTS.md"))
-	if !strings.Contains(agents, gxfsInstructionsStart) || !strings.Contains(agents, gxfsInstructionsEnd) {
+	if !strings.Contains(agents, command.GXFSInstructionsStart) || !strings.Contains(agents, command.GXFSInstructionsEnd) {
 		t.Fatalf("AGENTS.md missing GXFS markers: %q", agents)
 	}
 	if !strings.Contains(agents, "Use gxfs CLI to browse") || !strings.Contains(agents, "gxfs tree docs -L 3") {
@@ -1802,10 +1803,10 @@ func TestInitReplacesExistingInstructions(t *testing.T) {
 	executeInit(t, dir)
 
 	agents := readTextFile(t, filepath.Join(dir, "AGENTS.md"))
-	if got := strings.Count(agents, gxfsInstructionsStart); got != 1 {
+	if got := strings.Count(agents, command.GXFSInstructionsStart); got != 1 {
 		t.Fatalf("GXFS start marker count = %d, want 1 in %q", got, agents)
 	}
-	if got := strings.Count(agents, gxfsInstructionsEnd); got != 1 {
+	if got := strings.Count(agents, command.GXFSInstructionsEnd); got != 1 {
 		t.Fatalf("GXFS end marker count = %d, want 1 in %q", got, agents)
 	}
 }
@@ -1815,7 +1816,7 @@ func TestInitAgentClaudeWritesClaudeMD(t *testing.T) {
 	executeInit(t, "--agent", "claude", dir)
 
 	claude := readTextFile(t, filepath.Join(dir, "CLAUDE.md"))
-	if !strings.Contains(claude, gxfsInstructionsStart) {
+	if !strings.Contains(claude, command.GXFSInstructionsStart) {
 		t.Fatalf("CLAUDE.md missing GXFS instructions: %q", claude)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
@@ -1828,7 +1829,7 @@ func TestInitClaudeFlagAliasesAgentClaude(t *testing.T) {
 	executeInit(t, "--claude", dir)
 
 	claude := readTextFile(t, filepath.Join(dir, "CLAUDE.md"))
-	if !strings.Contains(claude, gxfsInstructionsStart) {
+	if !strings.Contains(claude, command.GXFSInstructionsStart) {
 		t.Fatalf("CLAUDE.md missing GXFS instructions: %q", claude)
 	}
 }
@@ -1900,7 +1901,7 @@ func TestInitReportsResolvedSymlinkTarget(t *testing.T) {
 
 	got := executeInit(t, dir)
 	claude := readTextFile(t, claudePath)
-	if !strings.Contains(claude, gxfsInstructionsStart) {
+	if !strings.Contains(claude, command.GXFSInstructionsStart) {
 		t.Fatalf("CLAUDE.md missing GXFS instructions through symlink: %q", claude)
 	}
 	if !strings.Contains(got, "resolved to") {
@@ -1910,7 +1911,7 @@ func TestInitReportsResolvedSymlinkTarget(t *testing.T) {
 
 func TestInitRejectsUnsupportedAgent(t *testing.T) {
 	dir := t.TempDir()
-	cmd := newInitCommand()
+	cmd := command.NewInitCommand()
 	cmd.SetArgs([]string{"--agent", "gemini", dir})
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "unsupported agent") {
@@ -2901,8 +2902,8 @@ func TestHookSessionStartNoMounts(t *testing.T) {
 func TestClaudeHooksCreatesSettings(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := upsertClaudeProjectHooks(dir); err != nil {
-		t.Fatalf("upsertClaudeProjectHooks error = %v", err)
+	if err := command.UpsertClaudeProjectHooks(dir); err != nil {
+		t.Fatalf("command.UpsertClaudeProjectHooks error = %v", err)
 	}
 
 	settingsPath := filepath.Join(dir, ".claude", "settings.json")
@@ -2972,8 +2973,8 @@ func TestClaudeHooksMergeExisting(t *testing.T) {
 	existingData, _ := json.Marshal(existing)
 	writeTestFile(t, filepath.Join(claudeDir, "settings.json"), string(existingData))
 
-	if err := upsertClaudeProjectHooks(dir); err != nil {
-		t.Fatalf("upsertClaudeProjectHooks error = %v", err)
+	if err := command.UpsertClaudeProjectHooks(dir); err != nil {
+		t.Fatalf("command.UpsertClaudeProjectHooks error = %v", err)
 	}
 
 	data := readTextFile(t, filepath.Join(claudeDir, "settings.json"))
@@ -2997,12 +2998,12 @@ func TestClaudeHooksDeduplicateCommand(t *testing.T) {
 	dir := t.TempDir()
 
 	// Run twice — second should be a no-op.
-	if err := upsertClaudeProjectHooks(dir); err != nil {
+	if err := command.UpsertClaudeProjectHooks(dir); err != nil {
 		t.Fatalf("first call error = %v", err)
 	}
 	data1 := readTextFile(t, filepath.Join(dir, ".claude", "settings.json"))
 
-	if err := upsertClaudeProjectHooks(dir); err != nil {
+	if err := command.UpsertClaudeProjectHooks(dir); err != nil {
 		t.Fatalf("second call error = %v", err)
 	}
 	data2 := readTextFile(t, filepath.Join(dir, ".claude", "settings.json"))
@@ -3014,7 +3015,7 @@ func TestClaudeHooksDeduplicateCommand(t *testing.T) {
 
 func TestInitClaudeHooksProject(t *testing.T) {
 	dir := t.TempDir()
-	cmd := newInitCommand()
+	cmd := command.NewInitCommand()
 	cmd.SetArgs([]string{"--claude", "--claude-hooks", "project", dir})
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -3153,7 +3154,6 @@ func TestHookSessionStartPreservesLocalConflict(t *testing.T) {
 	}
 }
 
-
 // --- #14 Cross-repo Writable Mount Tests ---
 
 func TestMountAddCrossRepoWritable(t *testing.T) {
@@ -3177,39 +3177,6 @@ func TestMountAddCrossRepoWritable(t *testing.T) {
 }
 
 func TestServerCrossRepoWriteGateRejectsNonWritable(t *testing.T) {
-	var gotMethod, gotPath string
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(store.PutResponse{
-			Node: store.Node{Path: "/hello.txt", Name: "hello.txt", Kind: "file"},
-		})
-	}))
-	defer backend.Close()
-
-	// Create a simple handler that routes to the backend.
-	// For this test we just test the gate logic directly.
-	// Since server.NewHandler needs a store.Adapter, we use a fakeClient-based approach.
-	
-	// Simpler approach: test the gate logic by calling server.NewHandler with writableRepos.
-	// We need an adapter that can respond to writes.
-	fake := &fakeClient{
-		putReqs: nil,
-	}
-	// The fakeClient doesn't implement the full adapter interface needed for server.
-	// Let's test via HTTP instead.
-	_ = backend
-	_ = fake
-	_ = gotMethod
-	_ = gotPath
-	
-	// Use a real server.NewHandler with a test adapter.
-	// Since we can't easily create a memory adapter, test the server directly
-	// using httptest with a handler that embeds the gate logic.
-	
-	// Actually, let's test the write gate more directly through the server handler.
-	// Create a handler with writableRepos map.
 	noopAdapter := &testNoopAdapter{}
 	writableRepos := map[string]bool{} // target-repo not writable
 	handler := server.NewHandler(noopAdapter, writableRepos)
@@ -3387,9 +3354,7 @@ func TestWriteSelfRepoNoBaselineStillWorks(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	fake := &fakeClient{
-		putReqs: nil,
-	}
+	fake := &fakeClient{}
 	// No manifest file exists.
 	cmd := newRootCommand(fake, fake, "my-repo", nil)
 	cmd.SetArgs([]string{"write", "/docs/new.md", "hello"})
@@ -3542,7 +3507,7 @@ func TestLocateAllReposPartialFailure(t *testing.T) {
 	// Test that --all-repos reports partial failures
 	// We need a more sophisticated fake for this - one that returns different results per repo
 	fake := &fakeClient{
-		repoList: []string{"repo-a", "repo-b"},
+		repoList:  []string{"repo-a", "repo-b"},
 		locateErr: fmt.Errorf("locate failed"),
 	}
 	cmd := newRootCommand(fake, fake, "test-repo", nil)

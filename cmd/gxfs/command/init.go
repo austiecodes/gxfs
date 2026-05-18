@@ -1,0 +1,368 @@
+package command
+
+import (
+	"bytes"
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/template"
+
+	"github.com/spf13/cobra"
+)
+
+type initTemplateData struct {
+	Repo       string
+	ServerAddr string
+	DocsPath   string
+	AuthMode   string
+}
+
+const initSettingsTomlTemplate = `version = 1
+repo = "{{ .Repo }}"
+
+[server]
+addr = "{{ .ServerAddr }}"
+
+[auth]
+mode = "{{ .AuthMode }}"
+token_env = "GXFS_TOKEN"
+
+[docs]
+path = "{{ .DocsPath }}"
+
+[cache]
+metadata_ttl = "5m"
+content_ttl = "24h"
+materialize = "explicit"
+`
+
+const initMountsTomlTemplate = `version = 1
+
+[[mounts]]
+local = "{{ .DocsPath }}"
+remote = "repo://self/{{ .DocsPath }}"
+mode = "writable"
+source = "default"
+`
+
+const GXFSInstructionsStart = "<!-- GXFS_START -->"
+const GXFSInstructionsEnd = "<!-- GXFS_END -->"
+
+//go:embed instructions/agents.md
+var gxfsInstructionsTemplate string
+
+func NewInitCommand() *cobra.Command {
+	var claude bool
+	var agent string
+	var noInstructions bool
+	var repoName string
+	var serverAddr string
+	var docsPath string
+	var authMode string
+	var claudeHooks string
+
+	repoName = "github.com/user/repo"
+	serverAddr = "http://127.0.0.1:7635"
+	docsPath = "docs"
+	authMode = "bearer"
+
+	cmd := &cobra.Command{
+		Use:   "init [path]",
+		Short: "Initialize .gxfs config in a repo",
+		Long:  "Initialize .gxfs/settings.toml and .gxfs/mounts.toml in the target directory and inject GXFS usage instructions into AGENTS.md by default.",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) == 1 {
+				dir = args[0]
+			}
+
+			if authMode != "bearer" && authMode != "none" {
+				return fmt.Errorf("unsupported auth mode %q: use bearer or none", authMode)
+			}
+			docsPath = cleanLocalDocsPath(docsPath)
+			if docsPath == "" {
+				docsPath = "docs"
+			}
+
+			var target string
+			if !noInstructions {
+				agent = strings.ToLower(agent)
+				if claude {
+					if agent != "" && agent != "claude" {
+						return fmt.Errorf("--claude cannot be combined with --agent %s", agent)
+					}
+					agent = "claude"
+				}
+				var err error
+				target, err = instructionTargetPath(dir, agent)
+				if err != nil {
+					return err
+				}
+			}
+
+			gxfsDir := filepath.Join(dir, ".gxfs")
+			settingsPath := filepath.Join(gxfsDir, "settings.toml")
+			mountsPath := filepath.Join(gxfsDir, "mounts.toml")
+			templateData := initTemplateData{
+				Repo:       repoName,
+				ServerAddr: serverAddr,
+				DocsPath:   docsPath,
+				AuthMode:   authMode,
+			}
+
+			if _, err := os.Stat(settingsPath); err == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s already exists, skipping\n", settingsPath)
+			} else {
+				if err := os.MkdirAll(gxfsDir, 0o755); err != nil {
+					return fmt.Errorf("create %s: %w", gxfsDir, err)
+				}
+				settingsContent, err := renderInitTemplate("settings", initSettingsTomlTemplate, templateData)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(settingsPath, []byte(settingsContent), 0o644); err != nil {
+					return fmt.Errorf("write %s: %w", settingsPath, err)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", settingsPath)
+			}
+
+			if _, err := os.Stat(mountsPath); err == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s already exists, skipping\n", mountsPath)
+			} else {
+				if err := os.MkdirAll(gxfsDir, 0o755); err != nil {
+					return fmt.Errorf("create %s: %w", gxfsDir, err)
+				}
+				mountsContent, err := renderInitTemplate("mounts", initMountsTomlTemplate, templateData)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(mountsPath, []byte(mountsContent), 0o644); err != nil {
+					return fmt.Errorf("write %s: %w", mountsPath, err)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", mountsPath)
+			}
+
+			if !noInstructions {
+				actual, err := upsertInstructions(target, docsPath)
+				if err != nil {
+					return err
+				}
+				if actual != target {
+					fmt.Fprintf(cmd.OutOrStdout(), "updated GXFS instructions in %s (resolved to %s)\n", target, actual)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "updated GXFS instructions in %s\n", target)
+				}
+			}
+
+			if claudeHooks == "project" {
+				if err := UpsertClaudeProjectHooks(dir); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "updated .claude/settings.json\n")
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "initialized %s\n", gxfsDir)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&agent, "agent", "", "agent instructions target: agents or claude")
+	cmd.Flags().BoolVar(&claude, "claude", false, "append GXFS usage to CLAUDE.md (alias for --agent claude)")
+	cmd.Flags().BoolVar(&noInstructions, "no-instructions", false, "only create .gxfs config, without writing agent instructions")
+	cmd.Flags().StringVar(&repoName, "repo", repoName, "logical repository name")
+	cmd.Flags().StringVar(&serverAddr, "server", serverAddr, "gxfs-server base URL")
+	cmd.Flags().StringVar(&docsPath, "docs", docsPath, "local docs root")
+	cmd.Flags().StringVar(&authMode, "auth", authMode, "auth mode: bearer or none")
+	cmd.Flags().StringVar(&claudeHooks, "claude-hooks", "", "inject Claude Code hooks: project")
+	return cmd
+}
+
+func renderInitTemplate(name, raw string, data initTemplateData) (string, error) {
+	tmpl, err := template.New(name).Option("missingkey=error").Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse %s template: %w", name, err)
+	}
+
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, data); err != nil {
+		return "", fmt.Errorf("render %s template: %w", name, err)
+	}
+	return out.String(), nil
+}
+
+func instructionTargetPath(dir, agent string) (string, error) {
+	switch strings.ToLower(agent) {
+	case "", "agent", "agents":
+		return filepath.Join(dir, "AGENTS.md"), nil
+	case "claude":
+		return filepath.Join(dir, "CLAUDE.md"), nil
+	default:
+		return "", fmt.Errorf("unsupported agent %q: supported agents are agents and claude", agent)
+	}
+}
+
+func upsertInstructions(target, docsPath string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("create %s: %w", filepath.Dir(target), err)
+	}
+
+	actual := target
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+		actual = resolved
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("read %s: %w", target, err)
+	}
+
+	block, err := renderGXFSInstructions(docsPath)
+	if err != nil {
+		return "", err
+	}
+	content := replaceMarkedBlock(string(data), block)
+	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write %s: %w", target, err)
+	}
+	return actual, nil
+}
+
+func replaceMarkedBlock(content, block string) string {
+	start := strings.Index(content, GXFSInstructionsStart)
+	end := strings.Index(content, GXFSInstructionsEnd)
+	if start >= 0 && end >= start {
+		end += len(GXFSInstructionsEnd)
+		next := content[end:]
+		next = strings.TrimPrefix(next, "\n")
+		content = content[:start] + strings.TrimSpace(block) + "\n" + next
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		return content
+	}
+
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if content != "" {
+		content += "\n"
+	}
+	content += strings.TrimSpace(block) + "\n"
+	return content
+}
+
+func renderGXFSInstructions(docsPath string) (string, error) {
+	tmpl, err := template.New("gxfs-instructions").Option("missingkey=error").Parse(gxfsInstructionsTemplate)
+	if err != nil {
+		return "", fmt.Errorf("parse GXFS instructions template: %w", err)
+	}
+
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, struct {
+		DocsPath string
+	}{
+		DocsPath: docsPath,
+	}); err != nil {
+		return "", fmt.Errorf("render GXFS instructions template: %w", err)
+	}
+	return out.String(), nil
+}
+
+// UpsertClaudeProjectHooks writes a SessionStart hook into the project-level
+// .claude/settings.json. It merges with existing settings without overwriting
+// other hooks or settings.
+func UpsertClaudeProjectHooks(dir string) error {
+	claudeDir := filepath.Join(dir, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+
+	gxfsPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve gxfs path: %w", err)
+	}
+	gxfsPath, err = filepath.Abs(gxfsPath)
+	if err != nil {
+		return fmt.Errorf("absolute gxfs path: %w", err)
+	}
+
+	hookCommand := gxfsPath + " hook session-start"
+
+	var settings map[string]any
+	data, err := os.ReadFile(settingsPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", settingsPath, err)
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return fmt.Errorf("parse %s: %w", settingsPath, err)
+		}
+	}
+	if settings == nil {
+		settings = make(map[string]any)
+	}
+
+	hooks, _ := settings["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = make(map[string]any)
+		settings["hooks"] = hooks
+	}
+
+	sessionStart, _ := hooks["SessionStart"].([]any)
+	if sessionStart == nil {
+		sessionStart = []any{}
+	}
+
+	const matcher = "startup|resume"
+	for _, group := range sessionStart {
+		g, ok := group.(map[string]any)
+		if !ok || g["matcher"] != matcher {
+			continue
+		}
+		hookList, _ := g["hooks"].([]any)
+		for _, h := range hookList {
+			hm, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			if cmd, _ := hm["command"].(string); cmd == hookCommand {
+				return nil
+			}
+		}
+		g["hooks"] = append(hookList, map[string]any{
+			"type":    "command",
+			"command": hookCommand,
+		})
+		hooks["SessionStart"] = sessionStart
+		return writeClaudeSettings(settingsPath, claudeDir, settings)
+	}
+
+	sessionStart = append(sessionStart, map[string]any{
+		"matcher": matcher,
+		"hooks": []any{
+			map[string]any{
+				"type":    "command",
+				"command": hookCommand,
+			},
+		},
+	})
+	hooks["SessionStart"] = sessionStart
+	return writeClaudeSettings(settingsPath, claudeDir, settings)
+}
+
+func writeClaudeSettings(settingsPath, claudeDir string, settings map[string]any) error {
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", claudeDir, err)
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	if err := os.WriteFile(settingsPath, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", settingsPath, err)
+	}
+	return nil
+}

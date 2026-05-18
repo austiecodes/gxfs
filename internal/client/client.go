@@ -67,7 +67,6 @@ func (c *Client) RepoList(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-
 func (c *Client) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
 	var resp store.LSResponse
 	q := url.Values{"path": {req.Path}}
@@ -346,47 +345,6 @@ func (c *Client) get(ctx context.Context, repo, op string, q url.Values, out any
 		return fmt.Errorf("build %s request: %w", op, err)
 	}
 	return c.do(req, op, out)
-}
-
-func (c *Client) put(ctx context.Context, repo, op string, q url.Values, body string, out any) error {
-	endpoint, err := c.url(repo, op, q)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, strings.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build %s request: %w", op, err)
-	}
-	req.Header.Set("Content-Type", "text/plain")
-	return c.do(req, op, out)
-}
-
-func (c *Client) putJSON(ctx context.Context, repo, op string, q url.Values, body []byte, out any) error {
-	endpoint, err := c.url(repo, op, q)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build %s request: %w", op, err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return c.do(req, op, out)
-}
-
-func (c *Client) delete(ctx context.Context, repo string, q url.Values) error {
-	endpoint, err := c.url(repo, "delete", q)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
-	if err != nil {
-		return fmt.Errorf("build delete request: %w", err)
-	}
-	return c.do(req, "delete", nil)
 }
 
 // putWithHeaders is like put but sets CAS and cross-repo headers.

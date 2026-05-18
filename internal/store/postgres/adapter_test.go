@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -626,7 +627,7 @@ func TestDocAdapterCacheHit(t *testing.T) {
 	d.cachedTrees["test"] = &docCachedTree{tree: tree, loadedAt: time.Now()}
 
 	// treeFor should return cached tree (no pool needed).
-	got, err := d.treeFor(nil, "test")
+	got, err := d.treeFor(context.TODO(), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -731,7 +732,7 @@ func TestDocAdapterConcurrentTreeFor(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got, err := d.treeFor(nil, "test")
+			got, err := d.treeFor(context.TODO(), "test")
 			if err != nil {
 				t.Error(err)
 				return
