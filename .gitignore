@@ -1,8 +1,8 @@
 .worktrees/
 
 # Build binaries
-gxfs
-gxfs-server
+/gxfs
+/gxfs-server
 
 # Local config
 conf/
