@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -64,6 +65,20 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	logID := os.Getenv("GXFS_LOG_ID")
+	start := time.Now()
+	commandName := ""
+	if len(args) > 0 {
+		commandName = args[0]
+	}
+
+	exitCode := runInner(args, stdout, stderr)
+
+	appendAudit(logID, commandName, time.Since(start).Milliseconds(), exitCode)
+	return exitCode
+}
+
+func runInner(args []string, stdout, stderr io.Writer) int {
 	if isConfigFreeCommand(args) {
 		cmd := newRootCommand(nil, nil, "", nil)
 		cmd.SetArgs(args)
@@ -88,6 +103,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	rawClient := client.New(cfg.Server.Addr)
 	rawClient.SetClientRepo(cfg.Repo)
+	rawClient.SetLogID(os.Getenv("GXFS_LOG_ID"))
 
 	adapter, resolver, err := loadRuntimeAdapter(cfg, path, rawClient)
 	if err != nil {

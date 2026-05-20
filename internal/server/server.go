@@ -629,6 +629,10 @@ func (lm *loggingMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"duration_ms", time.Since(start).Milliseconds(),
 	}
 
+	if logID := r.Header.Get("X-Gxfs-Log-Id"); logID != "" {
+		attrs = append(attrs, "log_id", logID)
+	}
+
 	// Enhanced logging for cross-repo write operations.
 	if clientRepo := r.Header.Get("X-Client-Repo"); clientRepo != "" {
 		attrs = append(attrs,

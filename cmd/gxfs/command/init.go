@@ -56,6 +56,9 @@ const GXFSInstructionsEnd = "<!-- GXFS_END -->"
 //go:embed instructions/agents.md
 var gxfsInstructionsTemplate string
 
+//go:embed instructions/pre_tool_use.sh
+var preToolUseHookScript string
+
 func NewInitCommand() *cobra.Command {
 	var claude bool
 	var agent string
@@ -273,9 +276,9 @@ func renderGXFSInstructions(docsPath string) (string, error) {
 	return out.String(), nil
 }
 
-// UpsertClaudeProjectHooks writes a SessionStart hook into the project-level
-// .claude/settings.json. It merges with existing settings without overwriting
-// other hooks or settings.
+// UpsertClaudeProjectHooks writes SessionStart and PreToolUse hooks into the
+// project-level .claude/settings.json. It merges with existing settings without
+// overwriting other hooks or settings.
 func UpsertClaudeProjectHooks(dir string) error {
 	claudeDir := filepath.Join(dir, ".claude")
 	settingsPath := filepath.Join(claudeDir, "settings.json")
@@ -287,6 +290,11 @@ func UpsertClaudeProjectHooks(dir string) error {
 	gxfsPath, err = filepath.Abs(gxfsPath)
 	if err != nil {
 		return fmt.Errorf("absolute gxfs path: %w", err)
+	}
+
+	// Install the PreToolUse hook script into .claude/hooks/pre_tool_use.sh.
+	if err := installPreToolUseHook(claudeDir); err != nil {
+		return fmt.Errorf("install pre-tool-use hook: %w", err)
 	}
 
 	hookCommand := gxfsPath + " hook session-start"
@@ -311,46 +319,76 @@ func UpsertClaudeProjectHooks(dir string) error {
 		settings["hooks"] = hooks
 	}
 
+	// Upsert SessionStart hook.
 	sessionStart, _ := hooks["SessionStart"].([]any)
 	if sessionStart == nil {
 		sessionStart = []any{}
 	}
+	const sessionStartMatcher = "startup|resume"
+	sessionStart, changed := upsertHookGroup(sessionStart, sessionStartMatcher, map[string]any{
+		"type":    "command",
+		"command": hookCommand,
+	})
+	if changed {
+		hooks["SessionStart"] = sessionStart
+	}
 
-	const matcher = "startup|resume"
-	for _, group := range sessionStart {
+	// Upsert PreToolUse hook.
+	preToolUse, _ := hooks["PreToolUse"].([]any)
+	if preToolUse == nil {
+		preToolUse = []any{}
+	}
+	hooksDir := filepath.Join(claudeDir, "hooks")
+	preToolUseCmd := filepath.Join(hooksDir, "pre_tool_use.sh")
+	preToolUse, changed2 := upsertHookGroup(preToolUse, "Bash", map[string]any{
+		"type":    "command",
+		"command": preToolUseCmd,
+	})
+	if changed2 {
+		hooks["PreToolUse"] = preToolUse
+	}
+
+	if changed || changed2 {
+		return writeClaudeSettings(settingsPath, claudeDir, settings)
+	}
+	return nil
+}
+
+// upsertHookGroup ensures a matcher group contains the target hook entry.
+func upsertHookGroup(groups []any, matcher string, target map[string]any) ([]any, bool) {
+	for _, group := range groups {
 		g, ok := group.(map[string]any)
 		if !ok || g["matcher"] != matcher {
 			continue
 		}
 		hookList, _ := g["hooks"].([]any)
+		targetCmd, _ := target["command"].(string)
 		for _, h := range hookList {
 			hm, ok := h.(map[string]any)
 			if !ok {
 				continue
 			}
-			if cmd, _ := hm["command"].(string); cmd == hookCommand {
-				return nil
+			if cmd, _ := hm["command"].(string); cmd == targetCmd {
+				return groups, false
 			}
 		}
-		g["hooks"] = append(hookList, map[string]any{
-			"type":    "command",
-			"command": hookCommand,
-		})
-		hooks["SessionStart"] = sessionStart
-		return writeClaudeSettings(settingsPath, claudeDir, settings)
+		g["hooks"] = append(hookList, target)
+		return groups, true
 	}
-
-	sessionStart = append(sessionStart, map[string]any{
+	return append(groups, map[string]any{
 		"matcher": matcher,
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": hookCommand,
-			},
-		},
-	})
-	hooks["SessionStart"] = sessionStart
-	return writeClaudeSettings(settingsPath, claudeDir, settings)
+		"hooks":   []any{target},
+	}), true
+}
+
+// installPreToolUseHook writes the pre_tool_use.sh script into .claude/hooks/.
+func installPreToolUseHook(claudeDir string) error {
+	hooksDir := filepath.Join(claudeDir, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", hooksDir, err)
+	}
+	scriptPath := filepath.Join(hooksDir, "pre_tool_use.sh")
+	return os.WriteFile(scriptPath, []byte(preToolUseHookScript), 0o755)
 }
 
 func writeClaudeSettings(settingsPath, claudeDir string, settings map[string]any) error {

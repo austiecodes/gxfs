@@ -19,6 +19,7 @@ type Client struct {
 	http       *http.Client
 	clientRepo string // sent as X-Client-Repo header for cross-repo write gate
 	mountPath  string // sent as X-Mount-Path header for observability
+	logID      string // sent as X-Gxfs-Log-Id header for audit correlation
 }
 
 var _ store.Adapter = (*Client)(nil)
@@ -43,6 +44,11 @@ func (c *Client) ClientRepo() string {
 // SetMountPath sets the mount path sent as X-Mount-Path header.
 func (c *Client) SetMountPath(mp string) {
 	c.mountPath = mp
+}
+
+// SetLogID sets the audit log ID sent as X-Gxfs-Log-Id header.
+func (c *Client) SetLogID(id string) {
+	c.logID = id
 }
 
 // RepoList returns the list of repository names available on the server.
@@ -414,6 +420,9 @@ func (c *Client) do(req *http.Request, op string, out any) error {
 // beyond the normal 2xx range. For allowed codes, no JSON decode is attempted
 // and the caller handles the response.
 func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []int) error {
+	if c.logID != "" {
+		req.Header.Set("X-Gxfs-Log-Id", c.logID)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("call %s: %w", op, err)
