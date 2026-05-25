@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gxfs/internal/client"
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/client"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func NewCatCommand(adapter, rawAdapter store.Adapter, repo string, collectionClient *client.Client) *cobra.Command {

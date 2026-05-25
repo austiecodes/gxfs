@@ -17,10 +17,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/zeromicro/go-zero/rest"
 
-	"gxfs/internal/config"
-	"gxfs/internal/server"
-	"gxfs/internal/store"
-	"gxfs/internal/store/postgres"
+	"github.com/austiecodes/gxfs/internal/config"
+	"github.com/austiecodes/gxfs/internal/server"
+	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store/postgres"
 )
 
 func splitAddr(addr string) (string, int, error) {

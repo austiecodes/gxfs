@@ -1,4 +1,4 @@
-module gxfs
+module github.com/austiecodes/gxfs
 
 go 1.25.0
 

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func TestClientLSBuildsURLAndDecodesResponse(t *testing.T) {

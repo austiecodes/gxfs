@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 // CollectionAdapter implements store.CollectionManager over gxfs_collections and gxfs_collection_docs.

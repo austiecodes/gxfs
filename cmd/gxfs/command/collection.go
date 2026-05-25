@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gxfs/internal/client"
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/client"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func NewCollectionCommand(cli *client.Client) *cobra.Command {

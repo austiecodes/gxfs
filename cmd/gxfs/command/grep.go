@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func NewGrepCommand(adapter store.Adapter, repo string) *cobra.Command {

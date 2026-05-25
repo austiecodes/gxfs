@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 type fakeAdapter struct{}

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"gxfs/internal/store"
-	"gxfs/internal/store/postgres"
+	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store/postgres"
 )
 
 // TestDocAdapterIntegration verifies the read-only DocAdapter returns results

@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"gxfs/internal/store/postgres"
+	"github.com/austiecodes/gxfs/internal/store/postgres"
 )
 
 // TestGCDryRunForce tests the GC dry-run and force modes.

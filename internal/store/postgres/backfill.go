@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 // BackfillResult reports the outcome of a document table backfill.

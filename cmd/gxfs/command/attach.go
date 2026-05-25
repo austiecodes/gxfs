@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gxfs/internal/config"
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/config"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func NewAttachCommand(rawAdapter store.Adapter, repo string) *cobra.Command {

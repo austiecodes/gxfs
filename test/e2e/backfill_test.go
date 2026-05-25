@@ -11,8 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"gxfs/internal/store"
-	"gxfs/internal/store/postgres"
+	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store/postgres"
 )
 
 // TestBackfillDocsIntegration verifies BackfillDocs migrates legacy data

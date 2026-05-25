@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gxfs/internal/config"
+	"github.com/austiecodes/gxfs/internal/config"
 )
 
 func TestSplitAddr(t *testing.T) {
@@ -150,7 +150,7 @@ func TestCollectGCTargets(t *testing.T) {
 						Type: "doc_postgres",
 						Postgres: config.PostgresConfig{
 							DSN:    "postgres://user:pass@host1:5432/db1", // Same DSN
-							Schema: "public",                               // Same schema
+							Schema: "public",                              // Same schema
 						},
 					},
 				},

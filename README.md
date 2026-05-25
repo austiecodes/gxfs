@@ -12,52 +12,97 @@ The project has two binaries:
 The CLI never connects to the database directly. It reads `.gxfs/settings.toml`,
 talks to `gxfs-server`, and prints file-system-like output.
 
-## Quick Start
+## Install the CLI
 
-Build the binaries:
+The `gxfs` CLI is the thin client used by humans and agents. It does not connect
+to PostgreSQL directly; it reads `.gxfs/settings.toml` and talks to a
+`gxfs-server` HTTP endpoint.
+
+Install the CLI from GitHub:
 
 ```bash
-go build ./cmd/gxfs
-go build ./cmd/gxfs-server
+go install github.com/austiecodes/gxfs/cmd/gxfs@latest
 ```
 
-Create a CLI config and agent instructions in the current project:
+Or, from a local checkout:
 
 ```bash
-./gxfs init
+go install ./cmd/gxfs
+```
+
+Make sure Go's bin directory is on your `PATH`:
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+Then initialize a project config and agent instructions:
+
+```bash
+gxfs init
 ```
 
 By default this creates `.gxfs/settings.toml` and injects GXFS usage instructions
 into `AGENTS.md`. To target Claude Code instead:
 
 ```bash
-./gxfs init --agent claude
-# or, for backwards compatibility:
-./gxfs init --claude
+gxfs init --agent claude
 ```
 
 To create only the config file without touching agent instruction files:
 
 ```bash
-./gxfs init --no-instructions
+gxfs init --no-instructions
 ```
 
-Start the server with a server config:
+Install agent hooks when you want GXFS audit correlation to be injected
+automatically into agent-driven CLI calls:
 
 ```bash
-GXFS_SERVER_CONFIG=conf/server.toml ./gxfs-server
+# User-level hooks are the default.
+gxfs init --hook codex
+gxfs init --hook claude
+
+# Project-level hooks live in the current repo.
+gxfs init --hook codex --scope project
+gxfs init --hook claude --scope project
 ```
+
+Codex requires reviewing newly installed hooks before they run. After installing
+Codex hooks, open Codex and use `/hooks` to trust them.
 
 Use the CLI with a project config:
 
 ```bash
-GXFS_CONFIG=.gxfs/settings.toml ./gxfs tree /docs -L 3
-GXFS_CONFIG=.gxfs/settings.toml ./gxfs grep "auth" /docs
-GXFS_CONFIG=.gxfs/settings.toml ./gxfs cat /docs/README.md
+gxfs tree /docs -L 3
+gxfs grep "auth" /docs
+gxfs cat /docs/README.md
 ```
 
-If `GXFS_CONFIG` is not set, the CLI reads `.gxfs/settings.toml`. If
-`GXFS_SERVER_CONFIG` is not set, the server reads `conf/server.toml`.
+If `GXFS_CONFIG` is not set, the CLI reads `.gxfs/settings.toml`.
+
+## Deploy the Server
+
+The `gxfs-server` binary owns backend access and should run near the configured
+store. Install it separately from the CLI:
+
+```bash
+go install github.com/austiecodes/gxfs/cmd/gxfs-server@latest
+```
+
+Or, from a local checkout:
+
+```bash
+go install ./cmd/gxfs-server
+```
+
+Create a server config and start the server:
+
+```bash
+GXFS_SERVER_CONFIG=/etc/gxfs/server.toml gxfs-server
+```
+
+If `GXFS_SERVER_CONFIG` is not set, the server reads `conf/server.toml`.
 
 ## CLI Config
 
@@ -89,30 +134,22 @@ CLI config must not contain backend credentials.
 
 ## Server Config
 
-Example `conf/server.toml` using PostgreSQL:
+Example `/etc/gxfs/server.toml` using PostgreSQL document storage:
 
 ```toml
 addr = "127.0.0.1:7635"
 
 [[repos]]
 name = "github.com/user/repo"
+writable = true
 
 [repos.backend]
-type = "postgres"
+type = "doc_postgres"
 
 [repos.backend.postgres]
 dsn = "${GXFS_POSTGRES_DSN}"
 schema = "public"
-nodes_table = "vfs_nodes"
-content_table = "vfs_content"
-repo_nodes_table = "vfs_repo_nodes"
 cache_ttl = "30s"
-
-[repos.backend.postgres.files]
-path_column = "path"
-kind_column = "kind"
-size_column = "size"
-mtime_column = "updated_at"
 ```
 
 Notes:
@@ -120,8 +157,12 @@ Notes:
 - Environment variables in config files are expanded.
 - A server can configure multiple repos. Requests route by the
   `/v1/repos/{repo}/...` path segment to the matching repo backend.
-- PostgreSQL schema is auto-migrated on server startup. Missing GXFS tables are
-  created with `CREATE TABLE IF NOT EXISTS`.
+- `doc_postgres` is the current document-centric backend used by collections,
+  locate, cross-repo refs, and GC.
+- PostgreSQL schema is auto-migrated on server startup. Missing GXFS tables and
+  indexes are created with `CREATE TABLE IF NOT EXISTS`.
+- `writable = true` allows cross-repo writable mounts to write through to that
+  repo. Omit it or set it to `false` for read-only repos.
 - `cache_ttl` is optional. If omitted, the Postgres adapter keeps each repo's
   loaded tree until writes/deletes invalidate it or the process restarts.
 
@@ -282,6 +323,11 @@ into an agent instruction file.
 - `--agent claude`: write `CLAUDE.md`
 - `--claude`: alias for `--agent claude`
 - `--no-instructions`: write config only
+- `--hook codex`: install user-level Codex hooks in `~/.codex/`
+- `--hook claude`: install user-level Claude Code hooks in `~/.claude/`
+- `--hook codex --scope project`: install project Codex hooks in `.codex/`
+- `--hook claude --scope project`: install project Claude Code hooks in
+  `.claude/`
 
 The injected block is wrapped with:
 

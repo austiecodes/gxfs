@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"gxfs/internal/store"
-	"gxfs/internal/vfs"
+	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/vfs"
 )
 
 type Adapter struct {

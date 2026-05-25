@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"gxfs/internal/store"
-	"gxfs/internal/vfs"
+	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/vfs"
 )
 
 var _ store.Adapter = (*Adapter)(nil)

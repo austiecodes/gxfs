@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gxfs/internal/client"
-	mountadapter "gxfs/internal/mount"
-	"gxfs/internal/store"
-	"gxfs/internal/syncmanifest"
+	"github.com/austiecodes/gxfs/internal/client"
+	mountadapter "github.com/austiecodes/gxfs/internal/mount"
+	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/syncmanifest"
 )
 
 // isCrossRepoMount checks if a local path resolves to a cross-repo mount.

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 type registryFakeAdapter struct {

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func NewHandler(adapter store.Adapter, writableRepos map[string]bool) http.Handler {
@@ -31,7 +31,7 @@ func NewHandlerWithCollections(adapter store.Adapter, writableRepos map[string]b
 type handler struct {
 	adapter       store.Adapter
 	invalidator   store.CacheInvalidator
-	writableRepos map[string]bool        // repos that accept cross-repo writes
+	writableRepos map[string]bool         // repos that accept cross-repo writes
 	collectionMgr store.CollectionManager // optional: collection management
 }
 
@@ -565,8 +565,6 @@ func writeJSONErrorCode(w http.ResponseWriter, status int, code, message string)
 		},
 	})
 }
-
-
 
 // expectedHash returns the CAS hash from If-Match header or expected_hash query param.
 // If-None-Match: * maps to "*" (create-only).

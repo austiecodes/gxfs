@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	mountadapter "gxfs/internal/mount"
+	mountadapter "github.com/austiecodes/gxfs/internal/mount"
 )
 
 func argPath(args []string, fallback string) string {

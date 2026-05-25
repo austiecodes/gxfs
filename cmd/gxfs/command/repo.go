@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func NewRepoCommand(rawAdapter store.Adapter) *cobra.Command {

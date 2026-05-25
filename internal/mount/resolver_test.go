@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"gxfs/internal/config"
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/config"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func TestResolverUsesLongestLocalPrefix(t *testing.T) {
@@ -188,7 +188,7 @@ func TestParseRemoteRef(t *testing.T) {
 		wantErr  bool
 	}{
 		{"repo://self/docs", "my-project", "/docs", false},
-		{"repo://self/", "", "", true},      // self root rejected
+		{"repo://self/", "", "", true}, // self root rejected
 		{"repo://other-repo/", "other-repo", "/", false},
 		{"repo://github%2Fopenai-go/", "github/openai-go", "/", false},
 		{"repo://github%2Fopenai-go/docs", "github/openai-go", "/docs", false},

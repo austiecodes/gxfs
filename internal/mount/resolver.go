@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"gxfs/internal/config"
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/config"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 type Operation string

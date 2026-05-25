@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 type Client struct {

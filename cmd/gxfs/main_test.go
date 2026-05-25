@@ -18,14 +18,14 @@ import (
 	"sync"
 	"testing"
 
-	"gxfs/cmd/gxfs/command"
-	"gxfs/internal/client"
-	"gxfs/internal/config"
-	"gxfs/internal/mount"
-	"gxfs/internal/server"
-	"gxfs/internal/store"
-	"gxfs/internal/syncmanifest"
-	"gxfs/internal/vfs"
+	"github.com/austiecodes/gxfs/cmd/gxfs/command"
+	"github.com/austiecodes/gxfs/internal/client"
+	"github.com/austiecodes/gxfs/internal/config"
+	"github.com/austiecodes/gxfs/internal/mount"
+	"github.com/austiecodes/gxfs/internal/server"
+	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/syncmanifest"
+	"github.com/austiecodes/gxfs/internal/vfs"
 )
 
 type fakeClient struct {

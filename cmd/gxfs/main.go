@@ -12,11 +12,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gxfs/cmd/gxfs/command"
-	"gxfs/internal/client"
-	"gxfs/internal/config"
-	mountadapter "gxfs/internal/mount"
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/cmd/gxfs/command"
+	"github.com/austiecodes/gxfs/internal/client"
+	"github.com/austiecodes/gxfs/internal/config"
+	mountadapter "github.com/austiecodes/gxfs/internal/mount"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {

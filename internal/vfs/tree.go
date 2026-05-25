@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 const (

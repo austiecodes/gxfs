@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	"gxfs/internal/store"
-	"gxfs/internal/store/postgres"
+	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/store/postgres"
 )
 
 // TestCollectionCRUD tests basic collection create/read/delete operations.

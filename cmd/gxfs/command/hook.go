@@ -10,9 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	mountadapter "gxfs/internal/mount"
-	"gxfs/internal/store"
-	"gxfs/internal/syncmanifest"
+	mountadapter "github.com/austiecodes/gxfs/internal/mount"
+	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/gxfs/internal/syncmanifest"
 )
 
 func NewHookCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
