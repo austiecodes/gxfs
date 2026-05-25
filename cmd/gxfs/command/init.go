@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -67,12 +68,14 @@ func NewInitCommand() *cobra.Command {
 	var serverAddr string
 	var docsPath string
 	var authMode string
-	var claudeHooks string
+	var hookTarget string
+	var hookScope string
 
 	repoName = "github.com/user/repo"
 	serverAddr = "http://127.0.0.1:7635"
 	docsPath = "docs"
 	authMode = "bearer"
+	hookScope = "user"
 
 	cmd := &cobra.Command{
 		Use:   "init [path]",
@@ -87,6 +90,16 @@ func NewInitCommand() *cobra.Command {
 
 			if authMode != "bearer" && authMode != "none" {
 				return fmt.Errorf("unsupported auth mode %q: use bearer or none", authMode)
+			}
+			hookTarget = strings.ToLower(hookTarget)
+			hookScope = strings.ToLower(hookScope)
+			if hookTarget != "" {
+				if hookScope != "user" && hookScope != "project" {
+					return fmt.Errorf("unsupported --scope value %q: supported scopes are user and project", hookScope)
+				}
+				if hookTarget != "claude" && hookTarget != "codex" {
+					return fmt.Errorf("unsupported --hook value %q: supported hooks are claude and codex", hookTarget)
+				}
 			}
 			docsPath = cleanLocalDocsPath(docsPath)
 			if docsPath == "" {
@@ -163,11 +176,31 @@ func NewInitCommand() *cobra.Command {
 				}
 			}
 
-			if claudeHooks == "project" {
+			if hookTarget == "claude" && hookScope == "project" {
 				if err := UpsertClaudeProjectHooks(dir); err != nil {
 					return err
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "updated .claude/settings.json\n")
+			}
+			if hookTarget == "claude" && hookScope == "user" {
+				if err := UpsertClaudeUserHooks(); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "updated ~/.claude/settings.json\n")
+			}
+			if hookTarget == "codex" && hookScope == "project" {
+				if err := UpsertCodexProjectHooks(dir); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "updated .codex/hooks.json\n")
+				fmt.Fprintf(cmd.OutOrStdout(), "Codex requires reviewing new project hooks. Run Codex and use /hooks to trust them.\n")
+			}
+			if hookTarget == "codex" && hookScope == "user" {
+				if err := UpsertCodexUserHooks(); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "updated ~/.codex/hooks.json\n")
+				fmt.Fprintf(cmd.OutOrStdout(), "Codex requires reviewing new user hooks. Run Codex and use /hooks to trust them.\n")
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "initialized %s\n", gxfsDir)
@@ -181,7 +214,8 @@ func NewInitCommand() *cobra.Command {
 	cmd.Flags().StringVar(&serverAddr, "server", serverAddr, "gxfs-server base URL")
 	cmd.Flags().StringVar(&docsPath, "docs", docsPath, "local docs root")
 	cmd.Flags().StringVar(&authMode, "auth", authMode, "auth mode: bearer or none")
-	cmd.Flags().StringVar(&claudeHooks, "claude-hooks", "", "inject Claude Code hooks: project")
+	cmd.Flags().StringVar(&hookTarget, "hook", "", "agent hook target: claude or codex")
+	cmd.Flags().StringVar(&hookScope, "scope", hookScope, "hook installation scope: user or project")
 	return cmd
 }
 
@@ -280,7 +314,20 @@ func renderGXFSInstructions(docsPath string) (string, error) {
 // project-level .claude/settings.json. It merges with existing settings without
 // overwriting other hooks or settings.
 func UpsertClaudeProjectHooks(dir string) error {
-	claudeDir := filepath.Join(dir, ".claude")
+	return upsertClaudeHooks(filepath.Join(dir, ".claude"))
+}
+
+// UpsertClaudeUserHooks writes SessionStart and PreToolUse hooks into the
+// user-level ~/.claude/settings.json.
+func UpsertClaudeUserHooks() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve user home: %w", err)
+	}
+	return upsertClaudeHooks(filepath.Join(home, ".claude"))
+}
+
+func upsertClaudeHooks(claudeDir string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 
 	gxfsPath, err := os.Executable()
@@ -354,6 +401,119 @@ func UpsertClaudeProjectHooks(dir string) error {
 	return nil
 }
 
+// UpsertCodexProjectHooks writes SessionStart and PreToolUse hooks into the
+// project-level .codex/hooks.json. It merges with existing hooks without
+// overwriting unrelated events or duplicate hook entries.
+func UpsertCodexProjectHooks(dir string) error {
+	codexDir, useGitRootCommand, err := codexProjectHooksDir(dir)
+	if err != nil {
+		return err
+	}
+	return upsertCodexHooks(codexDir, useGitRootCommand)
+}
+
+// UpsertCodexUserHooks writes SessionStart and PreToolUse hooks into the
+// user-level ~/.codex/hooks.json.
+func UpsertCodexUserHooks() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve user home: %w", err)
+	}
+	return upsertCodexHooks(filepath.Join(home, ".codex"), false)
+}
+
+func codexProjectHooksDir(dir string) (string, bool, error) {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", false, fmt.Errorf("absolute project dir: %w", err)
+	}
+	out, err := exec.Command("git", "-C", absDir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return filepath.Join(absDir, ".codex"), false, nil
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return filepath.Join(absDir, ".codex"), false, nil
+	}
+	return filepath.Join(root, ".codex"), true, nil
+}
+
+func upsertCodexHooks(codexDir string, useGitRootCommand bool) error {
+	hooksPath := filepath.Join(codexDir, "hooks.json")
+
+	gxfsPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve gxfs path: %w", err)
+	}
+	gxfsPath, err = filepath.Abs(gxfsPath)
+	if err != nil {
+		return fmt.Errorf("absolute gxfs path: %w", err)
+	}
+
+	if err := installPreToolUseHook(codexDir); err != nil {
+		return fmt.Errorf("install pre-tool-use hook: %w", err)
+	}
+
+	var config map[string]any
+	data, err := os.ReadFile(hooksPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", hooksPath, err)
+	}
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("parse %s: %w", hooksPath, err)
+		}
+	}
+	if config == nil {
+		config = make(map[string]any)
+	}
+
+	hooks, _ := config["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = make(map[string]any)
+		config["hooks"] = hooks
+	}
+
+	sessionStart, _ := hooks["SessionStart"].([]any)
+	if sessionStart == nil {
+		sessionStart = []any{}
+	}
+	sessionStart, changed := upsertHookGroup(sessionStart, "startup|resume", map[string]any{
+		"type":          "command",
+		"command":       shellCommandArg(gxfsPath) + " hook session-start",
+		"statusMessage": "Refreshing GXFS docs",
+	})
+	if changed {
+		hooks["SessionStart"] = sessionStart
+	}
+
+	preToolUse, _ := hooks["PreToolUse"].([]any)
+	if preToolUse == nil {
+		preToolUse = []any{}
+	}
+	preToolUseCmd := shellCommandArg(filepath.Join(codexDir, "hooks", "pre_tool_use.sh"))
+	if useGitRootCommand {
+		preToolUseCmd = `"$(git rev-parse --show-toplevel)/.codex/hooks/pre_tool_use.sh"`
+	}
+	preToolUse, changed2 := upsertHookGroup(preToolUse, "Bash", map[string]any{
+		"type":          "command",
+		"command":       "/bin/bash " + preToolUseCmd,
+		"statusMessage": "Preparing GXFS audit context",
+	})
+	if changed2 {
+		hooks["PreToolUse"] = preToolUse
+	}
+
+	if changed || changed2 {
+		return writeJSONFile(hooksPath, codexDir, config)
+	}
+	return nil
+}
+
+func shellCommandArg(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
 // upsertHookGroup ensures a matcher group contains the target hook entry.
 func upsertHookGroup(groups []any, matcher string, target map[string]any) ([]any, bool) {
 	for _, group := range groups {
@@ -381,9 +541,10 @@ func upsertHookGroup(groups []any, matcher string, target map[string]any) ([]any
 	}), true
 }
 
-// installPreToolUseHook writes the pre_tool_use.sh script into .claude/hooks/.
-func installPreToolUseHook(claudeDir string) error {
-	hooksDir := filepath.Join(claudeDir, "hooks")
+// installPreToolUseHook writes the pre_tool_use.sh script into a tool-specific
+// hooks directory such as .claude/hooks or .codex/hooks.
+func installPreToolUseHook(configDir string) error {
+	hooksDir := filepath.Join(configDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", hooksDir, err)
 	}
@@ -392,15 +553,19 @@ func installPreToolUseHook(claudeDir string) error {
 }
 
 func writeClaudeSettings(settingsPath, claudeDir string, settings map[string]any) error {
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", claudeDir, err)
+	return writeJSONFile(settingsPath, claudeDir, settings)
+}
+
+func writeJSONFile(path, dir string, value any) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	data, err := json.MarshalIndent(settings, "", "  ")
+	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal settings: %w", err)
+		return fmt.Errorf("marshal %s: %w", path, err)
 	}
-	if err := os.WriteFile(settingsPath, append(data, '\n'), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", settingsPath, err)
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
 }

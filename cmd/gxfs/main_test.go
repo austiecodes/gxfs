@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -2950,6 +2951,29 @@ func TestClaudeHooksCreatesSettings(t *testing.T) {
 	}
 }
 
+func TestClaudeHooksCreatesUserSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := command.UpsertClaudeUserHooks(); err != nil {
+		t.Fatalf("command.UpsertClaudeUserHooks error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Fatalf("stat user settings.json: %v", err)
+	}
+
+	scriptPath := filepath.Join(home, ".claude", "hooks", "pre_tool_use.sh")
+	info, err := os.Stat(scriptPath)
+	if err != nil {
+		t.Fatalf("stat pre_tool_use.sh: %v", err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("pre_tool_use.sh mode = %v, want 0755", info.Mode().Perm())
+	}
+}
+
 func TestClaudeHooksMergeExisting(t *testing.T) {
 	dir := t.TempDir()
 	claudeDir := filepath.Join(dir, ".claude")
@@ -3013,10 +3037,219 @@ func TestClaudeHooksDeduplicateCommand(t *testing.T) {
 	}
 }
 
-func TestInitClaudeHooksProject(t *testing.T) {
+func TestCodexHooksCreatesHooksJSON(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := command.UpsertCodexProjectHooks(dir); err != nil {
+		t.Fatalf("command.UpsertCodexProjectHooks error = %v", err)
+	}
+
+	hooksPath := filepath.Join(dir, ".codex", "hooks.json")
+	data, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("read hooks.json: %v", err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("parse hooks.json: %v", err)
+	}
+
+	hooks, ok := config["hooks"].(map[string]any)
+	if !ok {
+		t.Fatal("hooks.json missing hooks object")
+	}
+	sessionStart, ok := hooks["SessionStart"].([]any)
+	if !ok || len(sessionStart) == 0 {
+		t.Fatal("hooks.json missing hooks.SessionStart array")
+	}
+	sessionGroup := sessionStart[0].(map[string]any)
+	if sessionGroup["matcher"] != "startup|resume" {
+		t.Errorf("SessionStart matcher = %v, want startup|resume", sessionGroup["matcher"])
+	}
+	sessionHooks := sessionGroup["hooks"].([]any)
+	sessionHook := sessionHooks[0].(map[string]any)
+	if sessionHook["type"] != "command" {
+		t.Errorf("SessionStart hook type = %v, want command", sessionHook["type"])
+	}
+	sessionCmd, _ := sessionHook["command"].(string)
+	if !strings.Contains(sessionCmd, "hook session-start") {
+		t.Errorf("SessionStart command = %q, want hook session-start", sessionCmd)
+	}
+
+	preToolUse, ok := hooks["PreToolUse"].([]any)
+	if !ok || len(preToolUse) == 0 {
+		t.Fatal("hooks.json missing hooks.PreToolUse array")
+	}
+	preGroup := preToolUse[0].(map[string]any)
+	if preGroup["matcher"] != "Bash" {
+		t.Errorf("PreToolUse matcher = %v, want Bash", preGroup["matcher"])
+	}
+	preHooks := preGroup["hooks"].([]any)
+	preHook := preHooks[0].(map[string]any)
+	preCmd, _ := preHook["command"].(string)
+	if !strings.Contains(preCmd, ".codex/hooks/pre_tool_use.sh") {
+		t.Errorf("PreToolUse command = %q, want .codex hook script", preCmd)
+	}
+
+	scriptPath := filepath.Join(dir, ".codex", "hooks", "pre_tool_use.sh")
+	info, err := os.Stat(scriptPath)
+	if err != nil {
+		t.Fatalf("stat pre_tool_use.sh: %v", err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Errorf("pre_tool_use.sh mode = %v, want 0755", info.Mode().Perm())
+	}
+}
+
+func TestCodexHooksCreatesUserHooksJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := command.UpsertCodexUserHooks(); err != nil {
+		t.Fatalf("command.UpsertCodexUserHooks error = %v", err)
+	}
+
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	data, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("read user hooks.json: %v", err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("parse user hooks.json: %v", err)
+	}
+	hooks := config["hooks"].(map[string]any)
+	preToolUse := hooks["PreToolUse"].([]any)
+	preGroup := preToolUse[0].(map[string]any)
+	preHooks := preGroup["hooks"].([]any)
+	preHook := preHooks[0].(map[string]any)
+	preCmd, _ := preHook["command"].(string)
+	if !strings.Contains(preCmd, filepath.Join(home, ".codex", "hooks", "pre_tool_use.sh")) {
+		t.Errorf("PreToolUse command = %q, want user-level hook script path", preCmd)
+	}
+}
+
+func TestCodexProjectHooksResolveGitRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := exec.Command("git", "init", root).Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	subdir := filepath.Join(root, "nested", "pkg")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := command.UpsertCodexProjectHooks(subdir); err != nil {
+		t.Fatalf("command.UpsertCodexProjectHooks error = %v", err)
+	}
+
+	rootHooksPath := filepath.Join(root, ".codex", "hooks.json")
+	if _, err := os.Stat(rootHooksPath); err != nil {
+		t.Fatalf("stat root hooks.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(subdir, ".codex", "hooks.json")); !os.IsNotExist(err) {
+		t.Fatalf("subdir hooks.json exists or stat failed: %v", err)
+	}
+
+	var config map[string]any
+	data, err := os.ReadFile(rootHooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("parse hooks.json: %v", err)
+	}
+	hooks := config["hooks"].(map[string]any)
+	preToolUse := hooks["PreToolUse"].([]any)
+	preGroup := preToolUse[0].(map[string]any)
+	preHooks := preGroup["hooks"].([]any)
+	preHook := preHooks[0].(map[string]any)
+	preCmd, _ := preHook["command"].(string)
+	if !strings.Contains(preCmd, "git rev-parse --show-toplevel") {
+		t.Errorf("PreToolUse command = %q, want git-root based path", preCmd)
+	}
+}
+
+func TestCodexHooksMergeExisting(t *testing.T) {
+	dir := t.TempDir()
+	codexDir := filepath.Join(dir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	existing := map[string]any{
+		"hooks": map[string]any{
+			"PostToolUse": []any{
+				map[string]any{
+					"matcher": "Bash",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": "echo review"},
+					},
+				},
+			},
+		},
+	}
+	existingData, _ := json.Marshal(existing)
+	writeTestFile(t, filepath.Join(codexDir, "hooks.json"), string(existingData))
+
+	if err := command.UpsertCodexProjectHooks(dir); err != nil {
+		t.Fatalf("command.UpsertCodexProjectHooks error = %v", err)
+	}
+
+	data := readTextFile(t, filepath.Join(codexDir, "hooks.json"))
+	var config map[string]any
+	if err := json.Unmarshal([]byte(data), &config); err != nil {
+		t.Fatalf("parse hooks.json: %v", err)
+	}
+	hooks := config["hooks"].(map[string]any)
+	if _, ok := hooks["PostToolUse"]; !ok {
+		t.Fatal("PostToolUse was removed by merge")
+	}
+	if _, ok := hooks["SessionStart"]; !ok {
+		t.Fatal("SessionStart was not added")
+	}
+	if _, ok := hooks["PreToolUse"]; !ok {
+		t.Fatal("PreToolUse was not added")
+	}
+}
+
+func TestCodexHooksDeduplicateCommand(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := command.UpsertCodexProjectHooks(dir); err != nil {
+		t.Fatalf("first call error = %v", err)
+	}
+	data1 := readTextFile(t, filepath.Join(dir, ".codex", "hooks.json"))
+
+	if err := command.UpsertCodexProjectHooks(dir); err != nil {
+		t.Fatalf("second call error = %v", err)
+	}
+	data2 := readTextFile(t, filepath.Join(dir, ".codex", "hooks.json"))
+
+	if data1 != data2 {
+		t.Error("second call should be a no-op but hooks.json changed")
+	}
+}
+
+func TestCodexHooksInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	codexDir := filepath.Join(dir, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(codexDir, "hooks.json"), "{not-json")
+
+	if err := command.UpsertCodexProjectHooks(dir); err == nil {
+		t.Fatal("UpsertCodexProjectHooks error = nil, want parse error")
+	}
+}
+
+func TestInitHookCodexProject(t *testing.T) {
 	dir := t.TempDir()
 	cmd := command.NewInitCommand()
-	cmd.SetArgs([]string{"--claude", "--claude-hooks", "project", dir})
+	cmd.SetArgs([]string{"--hook", "codex", "--scope", "project", dir})
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 
@@ -3025,13 +3258,80 @@ func TestInitClaudeHooksProject(t *testing.T) {
 	}
 
 	output := out.String()
-	if !strings.Contains(output, ".claude/settings.json") {
-		t.Errorf("init output = %q, want settings.json update", output)
+	if !strings.Contains(output, ".codex/hooks.json") {
+		t.Errorf("init output = %q, want hooks.json update", output)
+	}
+	if !strings.Contains(output, "/hooks") {
+		t.Errorf("init output = %q, want Codex trust hint", output)
+	}
+
+	hooksPath := filepath.Join(dir, ".codex", "hooks.json")
+	if _, err := os.Stat(hooksPath); os.IsNotExist(err) {
+		t.Fatal("hooks.json not created")
+	}
+}
+
+func TestInitHookCodexDefaultUserScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	cmd := command.NewInitCommand()
+	cmd.SetArgs([]string{"--hook", "codex", dir})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init error = %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "~/.codex/hooks.json") {
+		t.Errorf("init output = %q, want user hooks.json update", output)
+	}
+	userHooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if _, err := os.Stat(userHooksPath); os.IsNotExist(err) {
+		t.Fatal("user hooks.json not created")
+	}
+	projectHooksPath := filepath.Join(dir, ".codex", "hooks.json")
+	if _, err := os.Stat(projectHooksPath); err == nil {
+		t.Fatal("project hooks.json created for default user scope")
+	}
+}
+
+func TestInitHookClaudeProject(t *testing.T) {
+	dir := t.TempDir()
+	cmd := command.NewInitCommand()
+	cmd.SetArgs([]string{"--hook", "claude", "--scope", "project", dir})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init error = %v", err)
 	}
 
 	settingsPath := filepath.Join(dir, ".claude", "settings.json")
 	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
 		t.Fatal("settings.json not created")
+	}
+}
+
+func TestInitHookUnsupportedScope(t *testing.T) {
+	dir := t.TempDir()
+	cmd := command.NewInitCommand()
+	cmd.SetArgs([]string{"--hook", "codex", "--scope", "global", dir})
+
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("init error = nil, want unsupported scope error")
+	}
+}
+
+func TestInitHookUnsupportedTarget(t *testing.T) {
+	dir := t.TempDir()
+	cmd := command.NewInitCommand()
+	cmd.SetArgs([]string{"--hook", "gemini", "--scope", "project", dir})
+
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("init error = nil, want unsupported hook target error")
 	}
 }
 

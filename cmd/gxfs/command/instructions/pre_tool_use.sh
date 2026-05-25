@@ -2,8 +2,8 @@
 # gxfs PreToolUse hook — intercepts gxfs commands and injects GXFS_LOG_ID
 # for three-layer audit correlation (hook → CLI → server).
 #
-# Installed by: gxfs init --claude-hooks=project
-# Format: Claude Code PreToolUse hook JSON on stdin, JSON on stdout.
+# Installed by: gxfs init --hook claude|codex --scope user|project
+# Format: Claude Code or Codex PreToolUse hook JSON on stdin, JSON on stdout.
 
 set -euo pipefail
 

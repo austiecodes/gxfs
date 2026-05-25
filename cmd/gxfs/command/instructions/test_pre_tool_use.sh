@@ -78,7 +78,12 @@ output=$(printf '%s' '{"session_id":"s1","tool_name":"Read","tool_input":{"file_
 assert_valid_json "non-Bash tool produces valid JSON" "$output"
 assert_no_updated_input "non-Bash tool is not rewritten" "$output"
 
-# Test 7: Hook audit log does not contain raw command text.
+# Test 7: Codex-shaped PreToolUse input is rewritten.
+output=$(printf '%s' '{"session_id":"s1","hook_event_name":"PreToolUse","turn_id":"t1","cwd":"/tmp/repo","tool_name":"Bash","tool_input":{"command":"gxfs locate auth --all-repos"}}' | bash "$SCRIPT" 2>/dev/null)
+assert_valid_json "Codex-shaped input produces valid JSON" "$output"
+assert_has_updated_input "Codex-shaped input is rewritten" "$output" "GXFS_LOG_ID="
+
+# Test 8: Hook audit log does not contain raw command text.
 tmpdir=$(mktemp -d)
 trap "rm -rf $tmpdir" EXIT
 mkdir -p "$tmpdir/.gxfs"
