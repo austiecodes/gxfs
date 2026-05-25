@@ -12,6 +12,17 @@ The project has two binaries:
 The CLI never connects to the database directly. It reads `.gxfs/settings.toml`,
 talks to `gxfs-server`, and prints file-system-like output.
 
+## Features
+
+| Area | What GXFS provides | Primary commands |
+| --- | --- | --- |
+| Virtual filesystem browsing | Unix-like listing, tree rendering, reads, metadata inspection, substring or regex grep, and path finding over mounted documentation. | `ls`, `tree`, `cat`, `stat`, `grep`, `find` |
+| Document discovery | Ranked full-text search, lexical lookup returning `repo://` references, glob discovery, and repository enumeration. Discovery can operate outside the mounted local view. | `search`, `locate`, `glob`, `repo list` |
+| Cross-repo mounts | A project can compose documentation from multiple repositories into local paths, with read-only or writable mount policy and direct remote preview. | `mount`, `attach`, `cat repo://...` |
+| Writing and synchronization | Create, replace, or delete remote docs; push local docs; pull remote metadata or files; track hashes and detect conflicting local/remote changes. | `write`, `edit`, `delete`, `sync`, `refresh`, `materialize`, `dematerialize` |
+| Collections | Group documents from multiple repositories under stable `collection://` paths and read the grouped content when the server enables collections. | `collection`, `cat collection://...` |
+| Agent integration and observability | Generate agent instructions, install Codex or Claude hooks, refresh docs at session start, and record CLI audit JSONL with optional correlation IDs. | `init`, `hook session-start` |
+
 ## Install the CLI
 
 The `gxfs` CLI is the thin client used by humans and agents. It does not connect
@@ -42,14 +53,16 @@ Then initialize a project config and agent instructions:
 gxfs init
 ```
 
-By default this creates `.gxfs/settings.toml` and injects GXFS usage instructions
-into `AGENTS.md`. To target Claude Code instead:
+By default this creates `.gxfs/settings.toml` and `.gxfs/mounts.toml`, then
+injects GXFS usage instructions into `AGENTS.md`. To target Claude Code
+instead:
 
 ```bash
 gxfs init --agent claude
 ```
 
-To create only the config file without touching agent instruction files:
+To create only the configuration files without touching agent instruction
+files:
 
 ```bash
 gxfs init --no-instructions
@@ -81,29 +94,6 @@ gxfs cat /docs/README.md
 
 If `GXFS_CONFIG` is not set, the CLI reads `.gxfs/settings.toml`.
 
-## Deploy the Server
-
-The `gxfs-server` binary owns backend access and should run near the configured
-store. Install it separately from the CLI:
-
-```bash
-go install github.com/austiecodes/gxfs/cmd/gxfs-server@latest
-```
-
-Or, from a local checkout:
-
-```bash
-go install ./cmd/gxfs-server
-```
-
-Create a server config and start the server:
-
-```bash
-GXFS_SERVER_CONFIG=/etc/gxfs/server.toml gxfs-server
-```
-
-If `GXFS_SERVER_CONFIG` is not set, the server reads `conf/server.toml`.
-
 ## CLI Config
 
 Example `.gxfs/settings.toml`:
@@ -114,11 +104,8 @@ repo = "github.com/user/repo"
 [server]
 addr = "http://127.0.0.1:7635"
 
-[mount]
-include = ["/"]
-
 [docs]
-path = "/docs"
+path = "docs"
 ```
 
 Fields:
@@ -126,45 +113,27 @@ Fields:
 - `repo`: logical repository name. This must match a repo configured on the
   server.
 - `server.addr`: gxfs-server base URL.
-- `mount.include`: visible path prefixes for the CLI. Defaults to `["/"]`.
 - `docs.path`: default documentation root used in generated agent instructions.
-  Defaults to `/docs`.
+  It is also used for the default self mount when no mount file exists.
+  Defaults to `docs`.
 
 CLI config must not contain backend credentials.
 
-## Server Config
-
-Example `/etc/gxfs/server.toml` using PostgreSQL document storage:
+Mounted paths are configured separately in `.gxfs/mounts.toml`:
 
 ```toml
-addr = "127.0.0.1:7635"
+version = 1
 
-[[repos]]
-name = "github.com/user/repo"
-writable = true
-
-[repos.backend]
-type = "doc_postgres"
-
-[repos.backend.postgres]
-dsn = "${GXFS_POSTGRES_DSN}"
-schema = "public"
-cache_ttl = "30s"
+[[mounts]]
+local = "docs"
+remote = "repo://self/docs"
+mode = "writable"
+source = "default"
 ```
 
-Notes:
-
-- Environment variables in config files are expanded.
-- A server can configure multiple repos. Requests route by the
-  `/v1/repos/{repo}/...` path segment to the matching repo backend.
-- `doc_postgres` is the current document-centric backend used by collections,
-  locate, cross-repo refs, and GC.
-- PostgreSQL schema is auto-migrated on server startup. Missing GXFS tables and
-  indexes are created with `CREATE TABLE IF NOT EXISTS`.
-- `writable = true` allows cross-repo writable mounts to write through to that
-  repo. Omit it or set it to `false` for read-only repos.
-- `cache_ttl` is optional. If omitted, the Postgres adapter keeps each repo's
-  loaded tree until writes/deletes invalidate it or the process restarts.
+Each mount maps a local CLI path to a remote repository path. Cross-repository
+mounts use `repo://<repo>/<path>` references and default to `readonly` when
+created with `gxfs mount add`.
 
 ## Common CLI Commands
 
@@ -184,6 +153,16 @@ Read content:
 gxfs cat /docs/guide.md
 gxfs cat -n /docs/guide.md
 gxfs cat -b /docs/guide.md
+```
+
+Discover content, including unmounted repositories:
+
+```bash
+gxfs search "migration rollback" --path /docs
+gxfs locate "openai client" --all-repos
+gxfs glob "**/*.md" --all-repos
+gxfs repo list
+gxfs cat repo://shared-docs/docs/guide.md
 ```
 
 Search content:
@@ -218,6 +197,16 @@ gxfs delete /docs/new.md
 gxfs delete /docs/old-section
 ```
 
+Compose a local view from other repositories:
+
+```bash
+gxfs mount add repo://shared-docs/docs docs/shared
+gxfs mount add repo://shared-docs/docs docs/shared --mode writable
+gxfs mount list
+gxfs attach openai-go --into docs/libs/openai-go
+gxfs mount remove docs/shared
+```
+
 Sync local docs into GXFS:
 
 ```bash
@@ -228,6 +217,16 @@ gxfs refresh docs
 gxfs materialize docs
 gxfs dematerialize docs
 gxfs sync push docs --manifest .gxfs/manifest.toml
+```
+
+Manage shared document collections when enabled by the server:
+
+```bash
+gxfs collection create best-practices --description "Reusable guidance"
+gxfs collection add best-practices /go/errors.md --source repo://shared-docs/go/errors.md
+gxfs collection show best-practices
+gxfs cat collection://best-practices/go/errors.md
+gxfs collection rm best-practices /go/errors.md
 ```
 
 ## Command Reference
@@ -314,10 +313,62 @@ Use `--all` to replace every occurrence.
 
 Deletes a file or directory. Directory deletes are recursive.
 
+`gxfs search <query>`
+
+Runs ranked full-text search in the current repository and prints matching
+snippets. Unlike mounted browsing commands, search is repository discovery.
+
+- `--path`: limit results to a path prefix.
+- `--limit`, `--offset`: paginate results.
+- `--json`: emit structured output.
+
+`gxfs locate <query>`
+
+Performs ranked lexical lookup and emits `repo://` references suitable for
+`gxfs cat` or mounting.
+
+- `--all-repos`: query every repository configured on the server.
+- `--limit`: cap returned results.
+- `--json`: emit structured output.
+
+`gxfs glob <pattern>`
+
+Discovers document paths by glob, including `**` recursive matching.
+
+- `--all-repos`: query every configured repository.
+- `--limit`, `--offset`: paginate results.
+- `--long`: include size and modification time.
+
+`gxfs repo list`
+
+Lists repositories available from the configured server.
+
+`gxfs mount add <remote-ref> <local-path>`
+
+Adds a mapping in `.gxfs/mounts.toml` from a local path to
+`repo://self/<path>` or `repo://<repo>/<path>` and refreshes the local
+manifest unless disabled.
+
+- `--mode readonly|writable`: controls whether local writes may flow through
+  the mount. Defaults to `readonly`.
+- `--force`: replace a mount at the same local path.
+- `--no-refresh`: skip the post-add manifest refresh.
+
+Use `gxfs mount list` to inspect mappings and `gxfs mount remove <local-path>`
+to remove a mapping after any materialized files beneath it have been
+dematerialized.
+
+`gxfs attach <keyword-or-repo> --into <local-path>`
+
+Finds a uniquely matching repository name and adds a read-only root mount.
+
+- `--dry-run`: preview the resolved mount.
+- `--force`: replace a mount already using the target local path.
+
 `gxfs init [path]`
 
-Creates `.gxfs/settings.toml` and, unless disabled, injects GXFS instructions
-into an agent instruction file.
+Creates `.gxfs/settings.toml` and `.gxfs/mounts.toml` and, unless disabled,
+injects GXFS instructions into an agent instruction file.
 
 - default: write `AGENTS.md`
 - `--agent claude`: write `CLAUDE.md`
@@ -385,6 +436,30 @@ materialized files.
 - `--manifest`: custom manifest path. Defaults to `.gxfs/manifest.toml`.
 - `--keep-files`: update the manifest but leave local files in place.
 
+`gxfs collection <subcommand>`
+
+Manages named cross-repository document sets when enabled by the configured
+server. Collection names accept lowercase letters, digits, `-`, and `_`.
+
+- `create <name> [--description <text>]`: create a collection.
+- `list [--json]`: list collections.
+- `show <name> [--json]`: show members and their `collection://` references.
+- `add <name> <collection-path> --source repo://<repo>/<path>`: add a source
+  document at a stable collection path.
+- `rm <name> <collection-path>`: remove a member.
+
+Use `gxfs cat collection://<name>/<path>` to read a collection member.
+
+`gxfs config doctor`
+
+Prints the configured repository selected for CLI requests.
+
+`gxfs hook session-start`
+
+Refreshes manifest metadata and changed materialized files for agent session
+startup. Installed Codex and Claude hooks call this operation with a timeout
+so it does not block the session.
+
 ## Agent Usage
 
 For agent workflows, treat GXFS as the canonical way to browse shared project
@@ -399,34 +474,3 @@ gxfs cat /docs/file.md
 over scanning local files when the information is meant to come from shared
 internal documentation. The default docs root is `/docs`, configurable through
 `[docs].path` in `.gxfs/settings.toml`.
-
-## Development
-
-Run tests:
-
-```bash
-go test ./...
-```
-
-Run Postgres e2e tests:
-
-```bash
-go test -count=1 -tags=e2e ./e2e
-```
-
-Build:
-
-```bash
-go build ./cmd/gxfs
-go build ./cmd/gxfs-server
-```
-
-Key packages:
-
-- `cmd/gxfs`: Cobra CLI commands.
-- `cmd/gxfs-server`: HTTP server entrypoint.
-- `internal/client`: HTTP client that implements the store adapter interface.
-- `internal/server`: HTTP API handler.
-- `internal/store`: shared adapter interfaces and request/response types.
-- `internal/store/postgres`: PostgreSQL adapter and embedded migrations.
-- `internal/vfs`: in-memory tree semantics used by adapters.

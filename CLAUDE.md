@@ -1,19 +1,12 @@
 # AGENTS
 
-# CLAUDE.md
-
-This file provides guidance to Claude Code (`claude.ai/code`) when working with code in this repository.
-
 ## Document Index
 
-- [Implementation plan](docs/superpowers/plans/2026-05-03-gxfs-vfs-cli-server.md) — step-by-step implementation plan with checkbox tracking
-- [Design spec](docs/superpowers/specs/2026-05-03-gxfs-vfs-cli-server-design.md) — architecture decisions, interface definitions, and test strategy
+- `docs/dev/README.md` — developer and operator guide: server configuration, maintenance commands, build/test workflow, and package layout
 - `docs/gotchas/` — pitfall notes. Create subdirectories by topic (for example `pg/`, `testing/`, or `go-zero/`). One Markdown file per pitfall, using the format: problem -> cause -> solution
 
 ## Documentation Update Rules
 
-- Update the relevant plan or spec whenever implementation changes behavior, architecture, public interfaces, config shape, storage design, or test strategy in a way that makes the existing docs stale.
-- Update the relevant plan or spec whenever a task meaningfully changes scope, sequencing, or completion status and the existing checkbox or milestone tracking no longer matches reality.
 - Add or update a file under `docs/gotchas/` whenever you hit a non-obvious bug, tooling issue, integration trap, flaky behavior, or debugging lesson that is likely to waste time again if left undocumented.
 - Treat `docs/gotchas/` as a required follow-up for real pitfalls encountered during implementation or testing, not as optional extra documentation.
 
