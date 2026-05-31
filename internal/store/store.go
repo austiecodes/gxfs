@@ -15,6 +15,7 @@ var (
 	ErrReadOnlyMount          = errors.New("read-only mount")
 	ErrCannotDeleteRoot       = errors.New("cannot delete root")
 	ErrUnknownRepo            = errors.New("unknown repo")
+	ErrRepoExists             = errors.New("repo already exists")
 	ErrUnknownSource          = errors.New("unknown source")
 	ErrEmptyQuery             = errors.New("search query cannot be empty")
 	ErrInvalidParam           = errors.New("invalid parameter")
@@ -279,6 +280,55 @@ type CacheInvalidator interface {
 // the list of available repositories. Registry implements this natively.
 type Reposer interface {
 	Repos() []string
+}
+
+// RepoInfo describes a repository namespace registered in the durable catalog.
+type RepoInfo struct {
+	Name      string `json:"name"`
+	Writable  bool   `json:"writable"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// RegisterRepoRequest is the input for registering a repository namespace.
+type RegisterRepoRequest struct {
+	Name     string `json:"name"`
+	Writable bool   `json:"writable"`
+}
+
+// RegisterRepoResponse is the output for registering a repository namespace.
+type RegisterRepoResponse struct {
+	Repo RepoInfo `json:"repo"`
+}
+
+// RepoRegistry manages repository namespaces in a durable registry.
+type RepoRegistry interface {
+	ListRepos(ctx context.Context) ([]RepoInfo, error)
+	RegisterRepo(ctx context.Context, req RegisterRepoRequest) (*RegisterRepoResponse, error)
+}
+
+// DocNamespace describes a shared docs:// namespace.
+type DocNamespace struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Writable    bool   `json:"writable"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// Docset describes a curated docset:// namespace.
+type Docset struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// NamespaceCatalog lists durable source namespaces.
+type NamespaceCatalog interface {
+	ListDocNamespaces(ctx context.Context) ([]DocNamespace, error)
+	ListDocsets(ctx context.Context) ([]Docset, error)
 }
 
 // MountSource describes a namespace that can be used as a mount source.

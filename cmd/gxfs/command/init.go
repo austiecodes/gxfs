@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"unicode"
 
+	"github.com/austiecodes/gxfs/internal/client"
 	"github.com/spf13/cobra"
 )
 
@@ -69,7 +71,6 @@ type initModes struct {
 }
 
 func NewInitCommand() *cobra.Command {
-	var claude bool
 	var agent string
 	var noInstructions bool
 	var instructionMode string
@@ -79,6 +80,7 @@ func NewInitCommand() *cobra.Command {
 	var authMode string
 	var hookTarget string
 	var hookScope string
+	var registerRepo bool
 
 	instructionMode = "md"
 	repoName = "github.com/user/repo"
@@ -100,6 +102,11 @@ func NewInitCommand() *cobra.Command {
 
 			if authMode != "bearer" && authMode != "none" {
 				return fmt.Errorf("unsupported auth mode %q: use bearer or none", authMode)
+			}
+			var err error
+			repoName, err = validateInitRepoName(repoName)
+			if err != nil {
+				return err
 			}
 			hookTarget = strings.ToLower(hookTarget)
 			hookScope = strings.ToLower(hookScope)
@@ -123,13 +130,6 @@ func NewInitCommand() *cobra.Command {
 			var target string
 			if !noInstructions && modes.md {
 				agent = strings.ToLower(agent)
-				if claude {
-					if agent != "" && agent != "claude" {
-						return fmt.Errorf("--claude cannot be combined with --agent %s", agent)
-					}
-					agent = "claude"
-				}
-				var err error
 				target, err = instructionTargetPath(dir, agent)
 				if err != nil {
 					return err
@@ -224,16 +224,23 @@ func NewInitCommand() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Codex requires reviewing new user hooks. Run Codex and use /hooks to trust them.\n")
 			}
 
+			if registerRepo {
+				if err := client.New(serverAddr).RegisterRepo(cmd.Context(), repoName); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "registered repo %s\n", repoName)
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "initialized %s\n", gxfsDir)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&agent, "agent", "", "agent instructions target: agents or claude")
-	cmd.Flags().BoolVar(&claude, "claude", false, "append GXFS usage to CLAUDE.md (alias for --agent claude)")
 	cmd.Flags().BoolVar(&noInstructions, "no-instructions", false, "only create .gxfs config, without writing agent instructions")
 	cmd.Flags().StringVar(&instructionMode, "mode", instructionMode, "instruction outputs: md, skill, or md,skill")
 	cmd.Flags().StringVar(&repoName, "repo", repoName, "logical repository name")
 	cmd.Flags().StringVar(&serverAddr, "server", serverAddr, "gxfs-server base URL")
+	cmd.Flags().BoolVar(&registerRepo, "register", false, "register the repository with gxfs-server")
 	cmd.Flags().StringVar(&docsPath, "docs", docsPath, "local docs root")
 	cmd.Flags().StringVar(&authMode, "auth", authMode, "auth mode: bearer or none")
 	cmd.Flags().StringVar(&hookTarget, "hook", "", "agent hook target: claude or codex")
@@ -252,6 +259,22 @@ func renderInitTemplate(name, raw string, data initTemplateData) (string, error)
 		return "", fmt.Errorf("render %s template: %w", name, err)
 	}
 	return out.String(), nil
+}
+
+func validateInitRepoName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", fmt.Errorf("invalid repo name: must not be empty")
+	}
+	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") {
+		return "", fmt.Errorf("invalid repo name %q: must not start or end with /", name)
+	}
+	for _, r := range name {
+		if unicode.IsSpace(r) {
+			return "", fmt.Errorf("invalid repo name %q: must not contain whitespace", name)
+		}
+	}
+	return name, nil
 }
 
 func parseInitModes(raw string) (initModes, error) {

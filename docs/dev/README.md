@@ -37,45 +37,35 @@ Example `/etc/gxfs/server.toml` using PostgreSQL document storage:
 ```toml
 addr = "127.0.0.1:7635"
 
-[[repos]]
-name = "github.com/user/repo"
-writable = true
-
-[repos.backend]
+[backend]
 type = "doc_postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = "${GXFS_POSTGRES_DSN}"
 schema = "public"
 cache_ttl = "30s"
 
-[[docs]]
-name = "openai-go-sdk"
-writable = false
-
-[docs.backend]
-type = "doc_namespace_postgres"
-
-[docs.backend.postgres]
-dsn = "${GXFS_POSTGRES_DSN}"
-schema = "public"
-cache_ttl = "30s"
+[registry]
+refresh_interval = "10s"
 ```
 
 - Environment variables in config files are expanded.
-- A server can configure multiple repositories. HTTP requests route by
-  `/v1/repos/{repo}/...`.
-- A server can configure reusable docs namespaces. HTTP requests route by
-  `/v1/docs/{name}/...`, and clients can mount them with
+- Server config describes infrastructure only. Repositories and docs namespaces
+  are registered in PostgreSQL, not in `[[repos]]` or `[[docs]]` TOML sections.
+- Register a repository with
+  `gxfs init --register --repo github.com/user/repo --server http://127.0.0.1:7635`
+  or by posting to `/v1/repos`.
+- Registered repository HTTP requests route by `/v1/repos/{repo}/...`.
+- Registered reusable docs namespaces route by `/v1/docs/{name}/...`, and
+  clients can mount them with
   `gxfs mount add docs://<name>/<path> <local-path>`.
-- Repo namespaces support `postgres` and `doc_postgres`. Docs namespaces support
-  `doc_postgres` and `doc_namespace_postgres`; path-centric `postgres` is
-  repo-only.
-- `doc_postgres` is the document-centric backend required by shared docs
-  namespaces, collections, and orphan-content GC.
+- `backend.type = "postgres"` keeps path-centric repo storage.
+  `backend.type = "doc_postgres"` enables document-centric repo storage and is
+  required for shared docs namespaces, collections, and orphan-content GC.
 - PostgreSQL schema migration runs during server startup.
-- `writable = true` permits cross-repository writable mounts to target that
-  repository. Otherwise cross-repository writes are rejected.
+- Registered repos carry their own writable flag. Writable repos permit
+  cross-repository writable mounts; otherwise cross-repository writes are
+  rejected.
 - `cache_ttl` is optional. Without it, repository trees remain cached until
   mutation invalidation or process restart.
 

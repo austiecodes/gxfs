@@ -42,6 +42,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 	writeFile(t, serverConfig, serverConfigText(serverPort, pgPort))
 
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
+	registerRepo(t, serverPort, "e2e-test")
 
 	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
 	cliMounts := filepath.Join(tmp, ".gxfs", "mounts.toml")
@@ -294,6 +295,7 @@ func TestGXFSPostgresAutoMigratesEmptyDatabase(t *testing.T) {
 	writeFile(t, serverConfig, serverConfigText(serverPort, pgPort))
 
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
+	registerRepo(t, serverPort, "e2e-test")
 
 	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
 	cliMounts := filepath.Join(tmp, ".gxfs", "mounts.toml")
@@ -329,6 +331,8 @@ func TestGXFSPostgresServerRoutesMultipleRepos(t *testing.T) {
 	writeFile(t, serverConfig, multiRepoServerConfigText(serverPort, pgPort))
 
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
+	registerRepo(t, serverPort, "alpha")
+	registerRepo(t, serverPort, "beta")
 
 	alphaConfig := filepath.Join(tmp, "alpha", ".gxfs", "settings.toml")
 	alphaMounts := filepath.Join(tmp, "alpha", ".gxfs", "mounts.toml")
@@ -384,6 +388,7 @@ func TestGXFSPostgresDocsNamespaceMountE2E(t *testing.T) {
 	writeFile(t, serverConfig, docsNamespaceServerConfigText(serverPort, pgPort))
 
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
+	registerRepo(t, serverPort, "e2e-test")
 	seedDocsNamespace(t, containerName, "shared", "/reference/guide.md", "Shared namespace guide\n")
 
 	projectDir := filepath.Join(tmp, "docs-namespace-project")
@@ -651,6 +656,36 @@ func startServer(t *testing.T, repoRoot, serverPath, configPath string, port int
 	waitForServer(t, fmt.Sprintf("http://127.0.0.1:%d/healthz", port), cmd, &output)
 }
 
+func registerRepo(t *testing.T, serverPort int, repo string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	body := fmt.Sprintf(`{"name":%q,"writable":true}`, repo)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/v1/repos", serverPort),
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("create repo registration request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("register repo %q: %v", repo, err)
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("register repo %q status = %d, body = %s", repo, resp.StatusCode, string(data))
+	}
+}
+
 func waitForServer(t *testing.T, healthURL string, cmd *exec.Cmd, output *strings.Builder) {
 	t.Helper()
 
@@ -737,20 +772,17 @@ func serverConfigText(serverPort, pgPort int) string {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	return fmt.Sprintf(`addr = "127.0.0.1:%d"
 
-[[repos]]
-name = "e2e-test"
-
-[repos.backend]
+[backend]
 type = "postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = %q
 schema = "public"
 nodes_table = "vfs_nodes"
 content_table = "vfs_content"
 repo_nodes_table = "vfs_repo_nodes"
 
-[repos.backend.postgres.files]
+[backend.postgres.files]
 path_column = "path"
 kind_column = "kind"
 size_column = "size"
@@ -762,89 +794,44 @@ func multiRepoServerConfigText(serverPort, pgPort int) string {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	return fmt.Sprintf(`addr = "127.0.0.1:%d"
 
-[[repos]]
-name = "alpha"
-
-[repos.backend]
+[backend]
 type = "postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = %q
 schema = "public"
 nodes_table = "vfs_nodes"
 content_table = "vfs_content"
 repo_nodes_table = "vfs_repo_nodes"
 
-[repos.backend.postgres.files]
+[backend.postgres.files]
 path_column = "path"
 kind_column = "kind"
 size_column = "size"
 mtime_column = "updated_at"
-
-[[repos]]
-name = "beta"
-
-[repos.backend]
-type = "postgres"
-
-[repos.backend.postgres]
-dsn = %q
-schema = "public"
-nodes_table = "vfs_nodes"
-content_table = "vfs_content"
-repo_nodes_table = "vfs_repo_nodes"
-
-[repos.backend.postgres.files]
-path_column = "path"
-kind_column = "kind"
-size_column = "size"
-mtime_column = "updated_at"
-`, serverPort, dsn, dsn)
+`, serverPort, dsn)
 }
 
 func docsNamespaceServerConfigText(serverPort, pgPort int) string {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	return fmt.Sprintf(`addr = "127.0.0.1:%d"
 
-[[repos]]
-name = "e2e-test"
-
-[repos.backend]
+[backend]
 type = "doc_postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = %q
 schema = "public"
 nodes_table = "vfs_nodes"
 content_table = "vfs_content"
 repo_nodes_table = "vfs_repo_nodes"
 
-[repos.backend.postgres.files]
+[backend.postgres.files]
 path_column = "path"
 kind_column = "kind"
 size_column = "size"
 mtime_column = "updated_at"
-
-[[docs]]
-name = "shared"
-writable = true
-
-[docs.backend]
-type = "doc_namespace_postgres"
-
-[docs.backend.postgres]
-dsn = %q
-schema = "public"
-nodes_table = "vfs_nodes"
-content_table = "vfs_content"
-repo_nodes_table = "vfs_repo_nodes"
-
-[docs.backend.postgres.files]
-path_column = "path"
-kind_column = "kind"
-size_column = "size"
-mtime_column = "updated_at"
-`, serverPort, dsn, dsn)
+`, serverPort, dsn)
 }
 
 func cliConfigText(serverPort int) string {
@@ -903,20 +890,17 @@ func docPostgresServerConfigText(serverPort, pgPort int) string {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	return fmt.Sprintf(`addr = "127.0.0.1:%d"
 
-[[repos]]
-name = "e2e-test"
-
-[repos.backend]
+[backend]
 type = "doc_postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = %q
 schema = "public"
 nodes_table = "vfs_nodes"
 content_table = "vfs_content"
 repo_nodes_table = "vfs_repo_nodes"
 
-[repos.backend.postgres.files]
+[backend.postgres.files]
 path_column = "path"
 kind_column = "kind"
 size_column = "size"
@@ -952,6 +936,7 @@ func TestDocPostgresServerE2E(t *testing.T) {
 	writeFile(t, serverConfig, docPostgresServerConfigText(serverPort, pgPort))
 
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
+	registerRepo(t, serverPort, "e2e-test")
 
 	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
 	cliMounts := filepath.Join(tmp, ".gxfs", "mounts.toml")

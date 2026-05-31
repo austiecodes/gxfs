@@ -77,6 +77,21 @@ func (c *Client) RepoList(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
+// RegisterRepo creates a repository on the server.
+func (c *Client) RegisterRepo(ctx context.Context, name string) error {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/repos"
+	body, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		return fmt.Errorf("marshal register_repo request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build register_repo request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.do(req, "register_repo", nil)
+}
+
 func (c *Client) MountSources(ctx context.Context) ([]store.MountSource, error) {
 	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/mount-sources"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -496,6 +511,8 @@ func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []
 				return fmt.Errorf("%w: %w", store.ErrNotFound, err)
 			case "UNKNOWN_REPO":
 				return fmt.Errorf("%w: %w", store.ErrUnknownRepo, err)
+			case "REPO_EXISTS":
+				return fmt.Errorf("%w: %w", store.ErrRepoExists, err)
 			case "UNKNOWN_SOURCE":
 				return fmt.Errorf("%w: %w", store.ErrUnknownSource, err)
 			case "NOT_SUPPORTED":

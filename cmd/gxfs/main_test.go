@@ -2031,13 +2031,17 @@ func TestInitAgentClaudeWritesClaudeMD(t *testing.T) {
 	}
 }
 
-func TestInitClaudeFlagAliasesAgentClaude(t *testing.T) {
+func TestInitClaudeFlagRemoved(t *testing.T) {
 	dir := t.TempDir()
-	executeInit(t, "--claude", dir)
+	cmd := command.NewInitCommand()
+	cmd.SetArgs([]string{"--claude", dir})
 
-	claude := readTextFile(t, filepath.Join(dir, "CLAUDE.md"))
-	if !strings.Contains(claude, command.GXFSInstructionsStart) {
-		t.Fatalf("CLAUDE.md missing GXFS instructions: %q", claude)
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unknown flag: --claude") {
+		t.Fatalf("init --claude error = %v, want unknown flag", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "CLAUDE.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("CLAUDE.md exists after removed flag, err=%v", statErr)
 	}
 }
 
@@ -2108,6 +2112,74 @@ func TestInitWritesSettingsAndMountsTemplatesFromFlags(t *testing.T) {
 		if !strings.Contains(mounts, want) {
 			t.Fatalf("mounts.toml = %q, missing %q", mounts, want)
 		}
+	}
+}
+
+func TestInitRegisterPostsRepoAndWritesConfig(t *testing.T) {
+	dir := t.TempDir()
+	var gotMethod string
+	var gotPath string
+	var gotName string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode register body: %v", err)
+		}
+		gotName = body.Name
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"repo":{"name":"austiecodes/xxxx"}}`)
+	}))
+	defer server.Close()
+
+	got := executeInit(t,
+		"--no-instructions",
+		"--repo", " austiecodes/xxxx ",
+		"--register",
+		"--server", server.URL,
+		dir,
+	)
+
+	if gotMethod != http.MethodPost || gotPath != "/v1/repos" {
+		t.Fatalf("register request = %s %s, want POST /v1/repos", gotMethod, gotPath)
+	}
+	if gotName != "austiecodes/xxxx" {
+		t.Fatalf("register body name = %q, want austiecodes/xxxx", gotName)
+	}
+	settings := readTextFile(t, filepath.Join(dir, ".gxfs", "settings.toml"))
+	if !strings.Contains(settings, `repo = "austiecodes/xxxx"`) {
+		t.Fatalf("settings.toml = %q, want trimmed repo", settings)
+	}
+	if !strings.Contains(got, "registered repo austiecodes/xxxx") {
+		t.Fatalf("init output = %q, want register message", got)
+	}
+}
+
+func TestInitRejectsInvalidRepoNamesBeforeWriting(t *testing.T) {
+	tests := []string{
+		"",
+		"   ",
+		"/owner/repo",
+		"owner/repo/",
+		"owner repo/name",
+		"owner/\trepo",
+	}
+	for _, repo := range tests {
+		t.Run(fmt.Sprintf("%q", repo), func(t *testing.T) {
+			dir := t.TempDir()
+			cmd := command.NewInitCommand()
+			cmd.SetArgs([]string{"--no-instructions", "--repo", repo, dir})
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), "invalid repo name") {
+				t.Fatalf("init --repo %q error = %v, want invalid repo name", repo, err)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, ".gxfs", "settings.toml")); !os.IsNotExist(statErr) {
+				t.Fatalf("settings.toml exists after invalid repo, err=%v", statErr)
+			}
+		})
 	}
 }
 

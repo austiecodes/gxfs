@@ -6,7 +6,7 @@
 #   2. Force delete (removes orphans, referenced docs safe)
 #   3. Grace period protection (fresh orphan excluded)
 #   4. DSN redaction (password not leaked in output)
-#   5. Multi-backend dedupe (same DSN -> 1 target)
+#   5. Infra backend target count
 #   6. Zero-target error handling
 #
 # Prerequisites:
@@ -131,14 +131,10 @@ DSN_CONFIG="${VERIFY_DIR}/dsn-test.toml"
 cat > "$DSN_CONFIG" <<TOML
 addr = ":19999"
 
-[[repos]]
-name = "test-repo"
-writable = true
-
-[repos.backend]
+[backend]
 type = "doc_postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = "postgresql://myuser:supersecret@localhost:5432/${VERIFY_DB}"
 schema = "public"
 TOML
@@ -151,42 +147,27 @@ else
     PASS_COUNT=$((PASS_COUNT + 1))
 fi
 
-# --- Scenario 5: Multi-backend dedupe ---
-echo "--- Scenario 5: Multi-backend dedupe ---"
-# Config with two repos pointing to same DSN+schema -> should produce 1 target
+# --- Scenario 5: Infra backend target count ---
+echo "--- Scenario 5: Infra backend target count ---"
+# Infra-only config points to one DSN+schema -> should produce 1 target.
 DEDUP_CONFIG="${VERIFY_DIR}/dedup-test.toml"
 cat > "$DEDUP_CONFIG" <<TOML
 addr = ":19999"
 
-[[repos]]
-name = "repo-a"
-writable = true
-
-[repos.backend]
+[backend]
 type = "doc_postgres"
 
-[repos.backend.postgres]
-dsn = "postgresql://${VERIFY_USER}@localhost:5432/${VERIFY_DB}"
-schema = "public"
-
-[[repos]]
-name = "repo-b"
-writable = true
-
-[repos.backend]
-type = "doc_postgres"
-
-[repos.backend.postgres]
+[backend.postgres]
 dsn = "postgresql://${VERIFY_USER}@localhost:5432/${VERIFY_DB}"
 schema = "public"
 TOML
 GC_OUT=$(GXFS_SERVER_CONFIG="$DEDUP_CONFIG" "$BINARY" gc --dry-run 2>&1 || true)
 TARGET_COUNT=$(echo "$GC_OUT" | grep -c "Target " || true)
 if [ "$TARGET_COUNT" = "1" ]; then
-    printf "${GREEN}PASS${NC} Multi-backend dedupe: 2 repos -> 1 target\n"
+    printf "${GREEN}PASS${NC} Infra backend target count: 1 backend -> 1 target\n"
     PASS_COUNT=$((PASS_COUNT + 1))
 else
-    printf "${RED}FAIL${NC} Multi-backend dedupe: expected 1 target, got %s\n" "$TARGET_COUNT"
+    printf "${RED}FAIL${NC} Infra backend target count: expected 1 target, got %s\n" "$TARGET_COUNT"
     printf "  Output: %s\n" "$GC_OUT"
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
@@ -197,21 +178,17 @@ NOTARGET_CONFIG="${VERIFY_DIR}/notarget-test.toml"
 cat > "$NOTARGET_CONFIG" <<TOML
 addr = ":19999"
 
-[[repos]]
-name = "legacy-repo"
-writable = true
-
-[repos.backend]
+[backend]
 type = "postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = "postgresql://${VERIFY_USER}@localhost:5432/${VERIFY_DB}"
 schema = "public"
 nodes_table = "vfs_nodes"
 content_table = "vfs_content"
 TOML
 GC_OUT=$(GXFS_SERVER_CONFIG="$NOTARGET_CONFIG" "$BINARY" gc --dry-run 2>&1 || true)
-if [[ "$GC_OUT" == *"no doc_postgres repos"* ]]; then
+if [[ "$GC_OUT" == *"no doc_postgres storage targets configured"* ]]; then
     printf "${GREEN}PASS${NC} Zero-target: error message correct\n"
     PASS_COUNT=$((PASS_COUNT + 1))
 else

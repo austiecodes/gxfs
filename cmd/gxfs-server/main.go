@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,47 +42,33 @@ func splitAddr(addr string) (string, int, error) {
 	return host, port, nil
 }
 
-func adapterFromServerConfig(ctx context.Context, cfg config.ServerConfig) (store.Adapter, error) {
-	repoNames := make(map[string]struct{}, len(cfg.Repos))
-	for _, repo := range cfg.Repos {
-		if _, exists := repoNames[repo.Name]; exists {
-			return nil, fmt.Errorf("duplicate repo %q", repo.Name)
-		}
-		if err := validateRepoBackendType(repo.Backend.Type); err != nil {
-			return nil, fmt.Errorf("repo %s: %w", repo.Name, err)
-		}
-		repoNames[repo.Name] = struct{}{}
+func dynamicRegistryFromServerConfig(ctx context.Context, cfg config.ServerConfig, pool *pgxpool.Pool) (*server.DynamicRegistry, error) {
+	if err := validateRepoBackendType(cfg.Backend.Type); err != nil {
+		return nil, fmt.Errorf("default backend: %w", err)
 	}
 
-	docsNames := make(map[string]struct{}, len(cfg.Docs))
-	for _, docs := range cfg.Docs {
-		if _, exists := docsNames[docs.Name]; exists {
-			return nil, fmt.Errorf("duplicate docs namespace %q", docs.Name)
+	baseCfg := postgresConfigFromServer(cfg)
+	catalog := postgres.NewRegistry(pool, baseCfg)
+	factory := func(_ context.Context, source server.DynamicSource) (store.Adapter, error) {
+		sourceCfg := baseCfg
+		sourceCfg.Repo = source.Name
+		switch source.Kind {
+		case store.SourceKindRepo:
+			switch cfg.Backend.Type {
+			case "postgres":
+				return postgres.New(pool, sourceCfg), nil
+			case "doc_postgres":
+				return postgres.NewDocAdapter(pool, sourceCfg), nil
+			default:
+				return nil, fmt.Errorf("unsupported backend type: %s", cfg.Backend.Type)
+			}
+		case store.SourceKindDocs:
+			return postgres.NewDocsNamespaceAdapter(pool, sourceCfg), nil
+		default:
+			return nil, fmt.Errorf("%w: %s", store.ErrNotSupported, source.Kind)
 		}
-		if err := validateDocsNamespaceBackendType(docs.Backend.Type); err != nil {
-			return nil, fmt.Errorf("docs namespace %s: %w", docs.Name, err)
-		}
-		docsNames[docs.Name] = struct{}{}
 	}
-
-	repoAdapters := make(map[string]store.Adapter, len(cfg.Repos))
-	for _, repo := range cfg.Repos {
-		adapter, err := adapterFromRepoConfig(ctx, repo)
-		if err != nil {
-			return nil, fmt.Errorf("repo %s: %w", repo.Name, err)
-		}
-		repoAdapters[repo.Name] = adapter
-	}
-
-	docsAdapters := make(map[string]store.Adapter, len(cfg.Docs))
-	for _, docs := range cfg.Docs {
-		adapter, err := adapterFromDocsNamespaceConfig(ctx, docs)
-		if err != nil {
-			return nil, fmt.Errorf("docs namespace %s: %w", docs.Name, err)
-		}
-		docsAdapters[docs.Name] = adapter
-	}
-	return store.NewNamespaceRegistry(repoAdapters, docsAdapters)
+	return server.NewDynamicRegistry(ctx, catalog, catalog, factory)
 }
 
 func adapterFromRepoConfig(ctx context.Context, repo config.RepoConfig) (store.Adapter, error) {
@@ -136,6 +121,10 @@ func postgresConfigFromDocsNamespace(docs config.DocsNamespaceConfig) postgres.C
 	return postgresConfigFromBackend(docs.Name, docs.Backend)
 }
 
+func postgresConfigFromServer(cfg config.ServerConfig) postgres.Config {
+	return postgresConfigFromBackend("", cfg.Backend)
+}
+
 func postgresConfigFromBackend(scope string, backend config.BackendConfig) postgres.Config {
 	files := backend.Postgres.Files
 	pg := backend.Postgres
@@ -174,13 +163,20 @@ func apiRoutes(handler http.Handler) []rest.Route {
 		{Method: http.MethodGet, Path: "/healthz", Handler: handler.ServeHTTP},
 		{Method: http.MethodDelete, Path: "/v1/cache", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/repos", Handler: handler.ServeHTTP},
+		{Method: http.MethodPost, Path: "/v1/repos", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/mount-sources", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/repos/:repo/:repo2/:op", Handler: handler.ServeHTTP},
 		{Method: http.MethodPut, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodPut, Path: "/v1/repos/:repo/:repo2/:op", Handler: handler.ServeHTTP},
 		{Method: http.MethodDelete, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodDelete, Path: "/v1/repos/:repo/:repo2/:op", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/docs/:name/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/docs/:name/:name2/:op", Handler: handler.ServeHTTP},
 		{Method: http.MethodPut, Path: "/v1/docs/:name/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodPut, Path: "/v1/docs/:name/:name2/:op", Handler: handler.ServeHTTP},
 		{Method: http.MethodDelete, Path: "/v1/docs/:name/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodDelete, Path: "/v1/docs/:name/:name2/:op", Handler: handler.ServeHTTP},
 		// Collection routes
 		{Method: http.MethodPost, Path: "/v1/collections", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/collections", Handler: handler.ServeHTTP},
@@ -221,29 +217,14 @@ func (t storageTarget) label() string {
 	return fmt.Sprintf("%s/%s", redactDSN(t.dsn), t.schema)
 }
 
-// collectGCTargets extracts unique document storage targets from server config.
+// collectGCTargets extracts the document storage target from infra-only server config.
 func collectGCTargets(cfg config.ServerConfig) []storageTarget {
 	seen := make(map[storageTarget]bool)
 	var targets []storageTarget
-	for _, repo := range cfg.Repos {
-		if repo.Backend.Type != "doc_postgres" {
-			continue
-		}
-		targets = appendGCTarget(targets, seen, repo.Backend.Postgres)
+	switch cfg.Backend.Type {
+	case "doc_postgres", "doc_namespace_postgres":
+		targets = appendGCTarget(targets, seen, cfg.Backend.Postgres)
 	}
-	for _, docs := range cfg.Docs {
-		switch docs.Backend.Type {
-		case "doc_postgres", "doc_namespace_postgres":
-			targets = appendGCTarget(targets, seen, docs.Backend.Postgres)
-		}
-	}
-	// Sort for deterministic output
-	sort.Slice(targets, func(i, j int) bool {
-		if targets[i].dsn != targets[j].dsn {
-			return targets[i].dsn < targets[j].dsn
-		}
-		return targets[i].schema < targets[j].schema
-	})
 	return targets
 }
 
@@ -400,56 +381,52 @@ func runServer() {
 		os.Exit(1)
 	}
 
-	adapter, err := adapterFromServerConfig(context.Background(), cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pgCfg := postgresConfigFromServer(cfg)
+	pool, err := pgxpool.New(ctx, pgCfg.DSN)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmt.Errorf("connect postgres: %w", err))
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	if err := ensurePostgresSchema(ctx, pool, pgCfg); err != nil {
+		fmt.Fprintln(os.Stderr, fmt.Errorf("migrate postgres schema: %w", err))
+		os.Exit(1)
+	}
+	if cfg.Backend.Type == "doc_postgres" {
+		result, err := postgres.BackfillDocs(ctx, pool, pgCfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, fmt.Errorf("doc backfill: %w", err))
+			os.Exit(1)
+		}
+		slog.Info("doc adapter backfill",
+			"docs_inserted", result.DocsInserted,
+			"paths_inserted", result.PathsInserted,
+			"hashes_computed", result.HashesComputed,
+		)
+	}
+
+	adapter, err := dynamicRegistryFromServerConfig(ctx, cfg, pool)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
-	// Build writable repos map from server config.
-	writableRepos := make(map[string]bool, len(cfg.Repos))
-	for _, repo := range cfg.Repos {
-		if repo.Writable {
-			writableRepos[repo.Name] = true
-		}
-	}
-
-	// Create collection manager if we have a doc_postgres backend
-	// V1 constraint: all doc_postgres backends must share the same (dsn, schema)
-	// to ensure collection membership lookup works correctly across repos.
-	var collectionMgr store.CollectionManager
-	var collectionPool *pgxpool.Pool
-	var collectionSchema string
-	seenStorage := make(map[string]bool) // key: "dsn|schema"
-	for _, repo := range cfg.Repos {
-		if repo.Backend.Type == "doc_postgres" {
-			pg := repo.Backend.Postgres
-			storageKey := fmt.Sprintf("%s|%s", pg.DSN, pg.Schema)
-			seenStorage[storageKey] = true
-			if collectionPool == nil {
-				pool, err := pgxpool.New(context.Background(), pg.DSN)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, fmt.Errorf("connect collection db: %w", err))
-					os.Exit(1)
-				}
-				collectionPool = pool
-				collectionSchema = pg.Schema
-			}
-		}
-	}
-	if len(seenStorage) > 1 {
-		fmt.Fprintln(os.Stderr, "error: V1 collections require all doc_postgres backends to share the same (dsn, schema). Found multiple distinct storage targets.")
+	refreshInterval, err := time.ParseDuration(cfg.Registry.RefreshInterval)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmt.Errorf("invalid registry.refresh_interval: %w", err))
 		os.Exit(1)
 	}
-	if collectionPool != nil {
-		collectionMgr = postgres.NewCollectionAdapter(collectionPool, collectionSchema)
-	}
+	adapter.StartRefreshLoop(ctx, refreshInterval)
 
 	var handler http.Handler
-	if collectionMgr != nil {
-		handler = server.NewHandlerWithCollections(adapter, writableRepos, collectionMgr)
+	if cfg.Backend.Type == "doc_postgres" {
+		collectionMgr := postgres.NewCollectionAdapter(pool, pgCfg.Schema)
+		handler = server.NewHandlerWithCollections(adapter, nil, collectionMgr)
 	} else {
-		handler = server.NewHandler(adapter, writableRepos)
+		handler = server.NewHandler(adapter, nil)
 	}
 
 	srv := rest.MustNewServer(rest.RestConf{Host: host, Port: port})
@@ -459,4 +436,17 @@ func runServer() {
 		srv.AddRoute(route)
 	}
 	srv.Start()
+}
+
+func ensurePostgresSchema(ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) error {
+	statements, err := postgres.SchemaSQL(cfg)
+	if err != nil {
+		return err
+	}
+	for _, stmt := range statements {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }

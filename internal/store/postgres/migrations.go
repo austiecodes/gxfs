@@ -18,6 +18,7 @@ type migrationData struct {
 	NodesTable             string
 	ContentTable           string
 	RepoNodesTable         string
+	ReposTable             string
 	DocsTable              string
 	RepoPathsTable         string
 	DocNamespacesTable     string
@@ -31,6 +32,7 @@ type migrationData struct {
 }
 
 func SchemaSQL(cfg Config) ([]string, error) {
+	cfg = withMigrationDefaults(cfg)
 	data, err := migrationTemplateData(cfg)
 	if err != nil {
 		return nil, err
@@ -66,6 +68,31 @@ func SchemaSQL(cfg Config) ([]string, error) {
 		}
 	}
 	return statements, nil
+}
+
+func withMigrationDefaults(cfg Config) Config {
+	if cfg.NodesTable == "" {
+		cfg.NodesTable = "vfs_nodes"
+	}
+	if cfg.ContentTable == "" {
+		cfg.ContentTable = "vfs_content"
+	}
+	if cfg.RepoNodesTable == "" {
+		cfg.RepoNodesTable = "vfs_repo_nodes"
+	}
+	if cfg.Files.PathColumn == "" {
+		cfg.Files.PathColumn = "path"
+	}
+	if cfg.Files.KindColumn == "" {
+		cfg.Files.KindColumn = "kind"
+	}
+	if cfg.Files.SizeColumn == "" {
+		cfg.Files.SizeColumn = "size"
+	}
+	if cfg.Files.MTimeColumn == "" {
+		cfg.Files.MTimeColumn = "updated_at"
+	}
+	return cfg
 }
 
 func migrationTemplateData(cfg Config) (migrationData, error) {
@@ -106,6 +133,10 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 		}
 	}
 
+	reposTable, err := quoteTable(cfg.Schema, "gxfs_repos")
+	if err != nil {
+		return migrationData{}, err
+	}
 	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
 	if err != nil {
 		return migrationData{}, err
@@ -136,6 +167,7 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 		NodesTable:             nodesTable,
 		ContentTable:           contentTable,
 		RepoNodesTable:         repoNodesTable,
+		ReposTable:             reposTable,
 		DocsTable:              docsTable,
 		RepoPathsTable:         repoPathsTable,
 		DocNamespacesTable:     docNamespacesTable,

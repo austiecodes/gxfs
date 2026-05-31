@@ -47,18 +47,19 @@ Make sure Go's bin directory is on your `PATH`:
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-Then initialize a project config and agent instructions:
+Then initialize a project config, agent instructions, and the server-side repo
+registration:
 
 ```bash
-gxfs init
+gxfs init --register --repo github.com/user/repo
 ```
 
 By default this creates `.gxfs/settings.toml` and `.gxfs/mounts.toml`, then
-injects GXFS usage instructions into `AGENTS.md`. To target Claude Code
-instead:
+injects GXFS usage instructions into `AGENTS.md`. Use `--server` if the server
+is not at `http://127.0.0.1:7635`. To target Claude Code instead:
 
 ```bash
-gxfs init --agent claude
+gxfs init --agent claude --register --repo github.com/user/repo
 ```
 
 To create only the configuration files without touching agent instruction
@@ -110,7 +111,7 @@ path = "docs"
 
 Fields:
 
-- `repo`: logical repository name. This must match a repo configured on the
+- `repo`: logical repository name. This must match a repo registered on the
   server.
 - `server.addr`: gxfs-server base URL.
 - `docs.path`: default documentation root used in generated agent instructions.
@@ -332,7 +333,7 @@ snippets. Unlike mounted browsing commands, search is repository discovery.
 Performs ranked lexical lookup and emits `repo://` references suitable for
 `gxfs cat` or mounting.
 
-- `--all-repos`: query every repository configured on the server.
+- `--all-repos`: query every repository registered on the server.
 - `--limit`: cap returned results.
 - `--json`: emit structured output.
 
@@ -340,7 +341,7 @@ Performs ranked lexical lookup and emits `repo://` references suitable for
 
 Discovers document paths by glob, including `**` recursive matching.
 
-- `--all-repos`: query every configured repository.
+- `--all-repos`: query every repository registered on the server.
 - `--limit`, `--offset`: paginate results.
 - `--long`: include size and modification time.
 
@@ -376,10 +377,12 @@ Creates `.gxfs/settings.toml` and `.gxfs/mounts.toml` and, unless disabled,
 injects GXFS instructions into an agent instruction file.
 
 - default: write `AGENTS.md`
+- `--repo <name>`: set the logical repository name
+- `--server <url>`: set the `gxfs-server` base URL
 - `--mode md|skill|md,skill`: choose Markdown instructions, local skill output,
   or both
 - `--agent claude`: write `CLAUDE.md`
-- `--claude`: alias for `--agent claude`
+- `--register`: register the repo with `gxfs-server`
 - `--no-instructions`: write config only
 - `--hook codex`: install user-level Codex hooks in `~/.codex/`
 - `--hook claude`: install user-level Claude Code hooks in `~/.claude/`

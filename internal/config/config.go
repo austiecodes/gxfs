@@ -56,9 +56,9 @@ type MountConfig struct {
 }
 
 type ServerConfig struct {
-	Addr  string                `toml:"addr"`
-	Repos []RepoConfig          `toml:"repos"`
-	Docs  []DocsNamespaceConfig `toml:"docs"`
+	Addr     string         `toml:"addr"`
+	Backend  BackendConfig  `toml:"backend"`
+	Registry RegistryConfig `toml:"registry"`
 }
 
 type RepoConfig struct {
@@ -71,6 +71,10 @@ type DocsNamespaceConfig struct {
 	Name     string        `toml:"name"`
 	Backend  BackendConfig `toml:"backend"`
 	Writable bool          `toml:"writable"` // reserved for future docs namespace write gates
+}
+
+type RegistryConfig struct {
+	RefreshInterval string `toml:"refresh_interval"`
 }
 
 type BackendConfig struct {
@@ -224,6 +228,17 @@ func LoadServer(path string) (ServerConfig, error) {
 		return ServerConfig{}, err
 	}
 
+	var top map[string]any
+	if err := toml.Unmarshal(data, &top); err != nil {
+		return ServerConfig{}, fmt.Errorf("parse server config: %w", err)
+	}
+	if _, ok := top["repos"]; ok {
+		return ServerConfig{}, fmt.Errorf("server config repos are no longer supported; register repos in the database registry")
+	}
+	if _, ok := top["docs"]; ok {
+		return ServerConfig{}, fmt.Errorf("server config docs namespaces are no longer supported; register namespaces in the database registry")
+	}
+
 	var cfg ServerConfig
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return ServerConfig{}, fmt.Errorf("parse server config: %w", err)
@@ -231,26 +246,14 @@ func LoadServer(path string) (ServerConfig, error) {
 	if cfg.Addr == "" {
 		return ServerConfig{}, fmt.Errorf("addr is required")
 	}
-	for i, repo := range cfg.Repos {
-		if repo.Name == "" {
-			return ServerConfig{}, fmt.Errorf("repos[%d].name is required", i)
-		}
-		if repo.Backend.Type == "" {
-			return ServerConfig{}, fmt.Errorf("repos[%d].backend.type is required", i)
-		}
+	if cfg.Backend.Type == "" {
+		return ServerConfig{}, fmt.Errorf("backend.type is required")
 	}
-	docsNames := make(map[string]struct{}, len(cfg.Docs))
-	for i, docs := range cfg.Docs {
-		if docs.Name == "" {
-			return ServerConfig{}, fmt.Errorf("docs[%d].name is required", i)
-		}
-		if docs.Backend.Type == "" {
-			return ServerConfig{}, fmt.Errorf("docs[%d].backend.type is required", i)
-		}
-		if _, exists := docsNames[docs.Name]; exists {
-			return ServerConfig{}, fmt.Errorf("duplicate docs namespace %q", docs.Name)
-		}
-		docsNames[docs.Name] = struct{}{}
+	if cfg.Backend.Postgres.DSN == "" {
+		return ServerConfig{}, fmt.Errorf("backend.postgres.dsn is required")
+	}
+	if cfg.Registry.RefreshInterval == "" {
+		cfg.Registry.RefreshInterval = "10s"
 	}
 	return cfg, nil
 }

@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/austiecodes/gxfs/internal/store"
 )
@@ -19,6 +21,7 @@ type fakeAdapter struct {
 	findReq   store.FindRequest
 	treeReq   store.TreeRequest
 	searchReq store.SearchRequest
+	putReq    store.PutRequest
 	searchErr error
 }
 
@@ -53,6 +56,7 @@ func (f *fakeAdapter) Stat(context.Context, store.StatRequest) (*store.StatRespo
 }
 
 func (f *fakeAdapter) Put(_ context.Context, req store.PutRequest) (*store.PutResponse, error) {
+	f.putReq = req
 	return &store.PutResponse{Node: store.Node{Path: req.Path, Name: req.Path, Kind: "file"}}, nil
 }
 
@@ -89,6 +93,80 @@ func (f *fakeAdapter) Locate(_ context.Context, req store.LocateRequest) (*store
 	return &store.LocateResponse{Results: []store.LocateResult{}, Total: 0}, nil
 }
 
+type fakeRegistryStore struct {
+	mu            sync.Mutex
+	repoSnapshots [][]store.RepoInfo
+	registerErr   error
+	listCalls     int
+	registerCalls int
+}
+
+func (f *fakeRegistryStore) ListRepos(context.Context) ([]store.RepoInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	idx := f.listCalls
+	f.listCalls++
+	if len(f.repoSnapshots) == 0 {
+		return []store.RepoInfo{}, nil
+	}
+	if idx >= len(f.repoSnapshots) {
+		idx = len(f.repoSnapshots) - 1
+	}
+	repos := append([]store.RepoInfo(nil), f.repoSnapshots[idx]...)
+	return repos, nil
+}
+
+func (f *fakeRegistryStore) RegisterRepo(_ context.Context, req store.RegisterRepoRequest) (*store.RegisterRepoResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.registerCalls++
+	if f.registerErr != nil {
+		return nil, f.registerErr
+	}
+	return &store.RegisterRepoResponse{Repo: store.RepoInfo{Name: req.Name, Writable: req.Writable}}, nil
+}
+
+func (f *fakeRegistryStore) setRepoSnapshots(snapshots [][]store.RepoInfo) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.repoSnapshots = snapshots
+}
+
+func (f *fakeRegistryStore) listCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listCalls
+}
+
+func (f *fakeRegistryStore) registerCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.registerCalls
+}
+
+func (f *fakeRegistryStore) ListDocNamespaces(context.Context) ([]store.DocNamespace, error) {
+	return []store.DocNamespace{}, nil
+}
+
+func (f *fakeRegistryStore) ListDocsets(context.Context) ([]store.Docset, error) {
+	return []store.Docset{}, nil
+}
+
+func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("condition was not met within %s", timeout)
+}
+
 func TestHandlerRoutesLS(t *testing.T) {
 	adapter := &fakeAdapter{}
 	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/ls?path=/docs", nil)
@@ -108,6 +186,214 @@ func TestHandlerRoutesLS(t *testing.T) {
 	}
 	if len(resp.Nodes) != 1 || resp.Nodes[0].Name != "docs" {
 		t.Fatalf("resp = %+v, want docs node", resp)
+	}
+}
+
+func TestHandlerRegisterRepoDuplicateMapsConflict(t *testing.T) {
+	catalog := &fakeRegistryStore{registerErr: store.ErrRepoExists}
+	registry, err := NewDynamicRegistry(context.Background(), catalog, catalog, func(context.Context, DynamicSource) (store.Adapter, error) {
+		return &fakeAdapter{}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/repos", strings.NewReader(`{"name":"austiecodes/xxxx"}`))
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if got := catalog.registerCallCount(); got != 1 {
+		t.Fatalf("RegisterRepo calls = %d, want 1", got)
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"REPO_EXISTS"`) {
+		t.Fatalf("body = %q, want REPO_EXISTS code", rec.Body.String())
+	}
+}
+
+func TestHandlerRegisterRepoCreatedRefreshesRegistry(t *testing.T) {
+	catalog := &fakeRegistryStore{
+		repoSnapshots: [][]store.RepoInfo{
+			{},
+			{{Name: "austiecodes/xxxx", Writable: true}},
+		},
+	}
+	registry, err := NewDynamicRegistry(context.Background(), catalog, catalog, func(context.Context, DynamicSource) (store.Adapter, error) {
+		return &fakeAdapter{}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/repos", strings.NewReader(`{"name":"austiecodes/xxxx","writable":true}`))
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if got := catalog.listCallCount(); got != 2 {
+		t.Fatalf("ListRepos calls = %d, want initial load plus post-register refresh", got)
+	}
+	if !registry.RepoWritable("austiecodes/xxxx") {
+		t.Fatal("registered repo was not refreshed into writable registry cache")
+	}
+}
+
+func TestDynamicRegistryRefreshesOnceForUnknownRepo(t *testing.T) {
+	catalog := &fakeRegistryStore{
+		repoSnapshots: [][]store.RepoInfo{
+			{},
+			{{Name: "austiecodes/xxxx"}},
+		},
+	}
+	adapters := map[string]*fakeAdapter{}
+	registry, err := NewDynamicRegistry(context.Background(), catalog, catalog, func(_ context.Context, source DynamicSource) (store.Adapter, error) {
+		adapter := &fakeAdapter{}
+		adapters[source.Name] = adapter
+		return adapter, nil
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/austiecodes%2Fxxxx/ls?path=/docs", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := catalog.listCallCount(); got != 2 {
+		t.Fatalf("ListRepos calls = %d, want initial load plus one unknown refresh", got)
+	}
+	adapter := adapters["austiecodes/xxxx"]
+	if adapter == nil {
+		t.Fatal("adapter for austiecodes/xxxx was not created")
+	}
+	if adapter.lsReq.Repo != "austiecodes/xxxx" || adapter.lsReq.Path != "/docs" {
+		t.Fatalf("ls req = %+v, want refreshed repo /docs", adapter.lsReq)
+	}
+}
+
+func TestDynamicRegistryRefreshesBeforeReturningUnknownRepo(t *testing.T) {
+	catalog := &fakeRegistryStore{
+		repoSnapshots: [][]store.RepoInfo{{}},
+	}
+	registry, err := NewDynamicRegistry(context.Background(), catalog, catalog, func(context.Context, DynamicSource) (store.Adapter, error) {
+		return &fakeAdapter{}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/missing/ls?path=/docs", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if got := catalog.listCallCount(); got != 2 {
+		t.Fatalf("ListRepos calls = %d, want initial load plus one unknown refresh", got)
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"UNKNOWN_REPO"`) {
+		t.Fatalf("body = %q, want UNKNOWN_REPO code", rec.Body.String())
+	}
+}
+
+func TestDynamicRegistryRoutesUnifiedRoot(t *testing.T) {
+	catalog := &fakeRegistryStore{
+		repoSnapshots: [][]store.RepoInfo{{{Name: "austiecodes/xxxx"}}},
+	}
+	adapters := map[string]*fakeAdapter{}
+	registry, err := NewDynamicRegistry(context.Background(), catalog, catalog, func(_ context.Context, source DynamicSource) (store.Adapter, error) {
+		adapter := &fakeAdapter{}
+		adapters[source.Name] = adapter
+		return adapter, nil
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicRegistry() error = %v", err)
+	}
+
+	resp, err := registry.LS(context.Background(), store.LSRequest{Path: "/repos/austiecodes/xxxx/docs"})
+	if err != nil {
+		t.Fatalf("LS(unified root) error = %v", err)
+	}
+	adapter := adapters["austiecodes/xxxx"]
+	if adapter == nil {
+		t.Fatal("adapter for austiecodes/xxxx was not created")
+	}
+	if adapter.lsReq.Repo != "austiecodes/xxxx" || adapter.lsReq.Path != "/docs" {
+		t.Fatalf("ls req = %+v, want austiecodes/xxxx /docs", adapter.lsReq)
+	}
+	if len(resp.Nodes) != 1 || resp.Nodes[0].Path != "/repos/austiecodes/xxxx/docs" {
+		t.Fatalf("LS response = %+v, want localized unified path", resp)
+	}
+}
+
+func TestCrossRepoWritableGateRefreshesDynamicRegistryMiss(t *testing.T) {
+	catalog := &fakeRegistryStore{
+		repoSnapshots: [][]store.RepoInfo{
+			{},
+			{{Name: "target", Writable: true}},
+		},
+	}
+	adapters := map[string]*fakeAdapter{}
+	registry, err := NewDynamicRegistry(context.Background(), catalog, catalog, func(_ context.Context, source DynamicSource) (store.Adapter, error) {
+		adapter := &fakeAdapter{}
+		adapters[source.Name] = adapter
+		return adapter, nil
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/target/write?path=/docs/new.md", strings.NewReader("hello"))
+	req.Header.Set("X-Client-Repo", "client")
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := catalog.listCallCount(); got != 2 {
+		t.Fatalf("ListRepos calls = %d, want initial load plus writable-gate refresh", got)
+	}
+	adapter := adapters["target"]
+	if adapter == nil {
+		t.Fatal("adapter for target was not created")
+	}
+	if adapter.putReq.Repo != "target" || adapter.putReq.Path != "/docs/new.md" || adapter.putReq.Content != "hello" {
+		t.Fatalf("put req = %+v, want refreshed writable target write", adapter.putReq)
+	}
+}
+
+func TestDynamicRegistryStartRefreshLoopUpdatesCache(t *testing.T) {
+	catalog := &fakeRegistryStore{
+		repoSnapshots: [][]store.RepoInfo{{}},
+	}
+	registry, err := NewDynamicRegistry(context.Background(), catalog, catalog, func(context.Context, DynamicSource) (store.Adapter, error) {
+		return &fakeAdapter{}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicRegistry() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := registry.StartRefreshLoop(ctx, time.Millisecond)
+	catalog.setRepoSnapshots([][]store.RepoInfo{{{Name: "periodic", Writable: true}}})
+
+	waitUntil(t, 250*time.Millisecond, func() bool {
+		return registry.RepoWritable("periodic")
+	})
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("refresh loop did not stop after context cancellation")
 	}
 }
 

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -223,13 +224,10 @@ func TestLoadServerConfigExpandsEnv(t *testing.T) {
 	path := writeConfig(t, "server.toml", `
 addr = ":7635"
 
-[[repos]]
-name = "gxfs"
-
-[repos.backend]
+[backend]
 type = "postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = "${GXFS_POSTGRES_DSN}"
 schema = "public"
 `)
@@ -238,15 +236,14 @@ schema = "public"
 	if err != nil {
 		t.Fatalf("LoadServer() error = %v", err)
 	}
-	if cfg.Addr != ":7635" || len(cfg.Repos) != 1 {
-		t.Fatalf("LoadServer() = %+v, want addr and one repo", cfg)
+	if cfg.Addr != ":7635" || cfg.Backend.Type != "postgres" {
+		t.Fatalf("LoadServer() = %+v, want addr and postgres backend", cfg)
 	}
-	repo := cfg.Repos[0]
-	if repo.Name != "gxfs" || repo.Backend.Type != "postgres" {
-		t.Fatalf("repo = %+v, want postgres gxfs repo", repo)
+	if cfg.Backend.Postgres.DSN != "postgres://user:pass@localhost/gxfs" {
+		t.Fatalf("dsn = %q, want expanded env", cfg.Backend.Postgres.DSN)
 	}
-	if repo.Backend.Postgres.DSN != "postgres://user:pass@localhost/gxfs" {
-		t.Fatalf("dsn = %q, want expanded env", repo.Backend.Postgres.DSN)
+	if cfg.Registry.RefreshInterval != "10s" {
+		t.Fatalf("registry refresh interval = %q, want default 10s", cfg.Registry.RefreshInterval)
 	}
 }
 
@@ -254,30 +251,30 @@ func TestLoadServerConfigParsesPostgresFileTable(t *testing.T) {
 	path := writeConfig(t, "server.toml", `
 addr = ":7635"
 
-[[repos]]
-name = "gxfs"
-
-[repos.backend]
+[backend]
 type = "postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = "postgres://localhost/gxfs"
 schema = "public"
 nodes_table = "my_nodes"
 content_table = "my_content"
 
-[repos.backend.postgres.files]
+[backend.postgres.files]
 path_column = "file_path"
 kind_column = "node_type"
 size_column = "byte_size"
 mtime_column = "changed_at"
+
+[registry]
+refresh_interval = "30s"
 `)
 
 	cfg, err := LoadServer(path)
 	if err != nil {
 		t.Fatalf("LoadServer() error = %v", err)
 	}
-	pg := cfg.Repos[0].Backend.Postgres
+	pg := cfg.Backend.Postgres
 	if pg.NodesTable != "my_nodes" || pg.ContentTable != "my_content" {
 		t.Fatalf("postgres tables = %q/%q, want my_nodes/my_content", pg.NodesTable, pg.ContentTable)
 	}
@@ -285,5 +282,62 @@ mtime_column = "changed_at"
 	if files.PathColumn != "file_path" || files.KindColumn != "node_type" ||
 		files.SizeColumn != "byte_size" || files.MTimeColumn != "changed_at" {
 		t.Fatalf("postgres files = %+v, want custom mapping", files)
+	}
+	if cfg.Registry.RefreshInterval != "30s" {
+		t.Fatalf("registry refresh interval = %q, want 30s", cfg.Registry.RefreshInterval)
+	}
+}
+
+func TestLoadServerRejectsLegacyRegistrySections(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name: "repos",
+			content: `
+addr = ":7635"
+
+[[repos]]
+name = "gxfs"
+
+[backend]
+type = "doc_postgres"
+
+[backend.postgres]
+dsn = "postgres://localhost/gxfs"
+`,
+			wantErr: "server config repos are no longer supported",
+		},
+		{
+			name: "docs",
+			content: `
+addr = ":7635"
+
+[[docs]]
+name = "shared"
+
+[backend]
+type = "doc_postgres"
+
+[backend.postgres]
+dsn = "postgres://localhost/gxfs"
+`,
+			wantErr: "server config docs namespaces are no longer supported",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, "server.toml", tt.content)
+			_, err := LoadServer(path)
+			if err == nil {
+				t.Fatal("LoadServer() error = nil, want legacy section rejection")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("LoadServer() error = %q, want containing %q", err.Error(), tt.wantErr)
+			}
+		})
 	}
 }

@@ -1,21 +1,22 @@
 package main
 
 import (
-	"context"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/austiecodes/gxfs/internal/config"
+	"github.com/zeromicro/go-zero/rest/router"
 )
 
 func writeServerConfig(t *testing.T, name, content string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write server config: %v", err)
 	}
 	return path
@@ -45,11 +46,10 @@ func TestSplitAddr(t *testing.T) {
 	}
 }
 
-func TestPostgresConfigFromRepoDefaultsFileTable(t *testing.T) {
-	cfg := postgresConfigFromRepo(config.RepoConfig{
-		Name: "gxfs",
+func TestPostgresConfigFromServerDefaultsFileTable(t *testing.T) {
+	cfg := postgresConfigFromServer(config.ServerConfig{
 		Backend: config.BackendConfig{
-			Type: "postgres",
+			Type: "doc_postgres",
 			Postgres: config.PostgresConfig{
 				DSN:    "postgres://localhost/gxfs",
 				Schema: "public",
@@ -68,6 +68,16 @@ func TestPostgresConfigFromRepoDefaultsFileTable(t *testing.T) {
 	}
 }
 
+func TestAPIRoutesRegistersRepoPost(t *testing.T) {
+	routes := apiRoutes(http.NotFoundHandler())
+	for _, route := range routes {
+		if route.Method == http.MethodPost && route.Path == "/v1/repos" {
+			return
+		}
+	}
+	t.Fatal("apiRoutes() missing POST /v1/repos")
+}
+
 func TestAPIRoutesRegistersMountSources(t *testing.T) {
 	routes := apiRoutes(http.NotFoundHandler())
 	for _, route := range routes {
@@ -76,6 +86,28 @@ func TestAPIRoutesRegistersMountSources(t *testing.T) {
 		}
 	}
 	t.Fatal("apiRoutes() missing GET /v1/mount-sources")
+}
+
+func TestAPIRoutesDispatchEscapedSlashRepoNames(t *testing.T) {
+	called := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+	rt := router.NewRouter()
+	for _, route := range apiRoutes(handler) {
+		if err := rt.Handle(route.Method, route.Path, route.Handler); err != nil {
+			t.Fatalf("register route %s %s: %v", route.Method, route.Path, err)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/austiecodes%2Fxxxx/ls", nil)
+	rec := httptest.NewRecorder()
+
+	rt.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent || !called {
+		t.Fatalf("route status = %d called = %v, want dispatch to handler", rec.Code, called)
+	}
 }
 
 func TestAPIRoutesRegistersDocsNamespaceRoutes(t *testing.T) {
@@ -98,139 +130,48 @@ func TestAPIRoutesRegistersDocsNamespaceRoutes(t *testing.T) {
 	}
 }
 
-func TestLoadServerConfigParsesDocsNamespaces(t *testing.T) {
+func TestLoadServerConfigUsesInfraOnlyBackend(t *testing.T) {
 	path := writeServerConfig(t, "server.toml", `
 addr = ":7635"
 
-[[repos]]
-name = "shared"
-
-[repos.backend]
+[backend]
 type = "doc_postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = "postgres://localhost/gxfs"
 schema = "public"
-
-[[docs]]
-name = "shared"
-writable = true
-
-[docs.backend]
-type = "doc_namespace_postgres"
-
-[docs.backend.postgres]
-dsn = "postgres://localhost/gxfs"
-schema = "docs"
 cache_ttl = "5m"
+
+[registry]
+refresh_interval = "15s"
 `)
 
 	cfg, err := config.LoadServer(path)
 	if err != nil {
 		t.Fatalf("LoadServer() error = %v", err)
 	}
-	if len(cfg.Docs) != 1 {
-		t.Fatalf("LoadServer().Docs len = %d, want 1", len(cfg.Docs))
+	if cfg.Addr != ":7635" || cfg.Backend.Type != "doc_postgres" {
+		t.Fatalf("LoadServer() = %+v, want addr and doc_postgres backend", cfg)
 	}
-	docs := cfg.Docs[0]
-	if docs.Name != "shared" || docs.Backend.Type != "doc_namespace_postgres" || !docs.Writable {
-		t.Fatalf("docs namespace = %+v, want writable shared doc_namespace_postgres", docs)
+	if cfg.Backend.Postgres.DSN != "postgres://localhost/gxfs" ||
+		cfg.Backend.Postgres.Schema != "public" ||
+		cfg.Backend.Postgres.CacheTTL != "5m" {
+		t.Fatalf("postgres backend = %+v, want parsed DSN/schema/cache", cfg.Backend.Postgres)
 	}
-	if cfg.Repos[0].Name != docs.Name {
-		t.Fatalf("repo/docs names = %q/%q, want same-name namespaces allowed", cfg.Repos[0].Name, docs.Name)
-	}
-	if docs.Backend.Postgres.Schema != "docs" || docs.Backend.Postgres.CacheTTL != "5m" {
-		t.Fatalf("docs postgres = %+v, want parsed schema/cache TTL", docs.Backend.Postgres)
+	if cfg.Registry.RefreshInterval != "15s" {
+		t.Fatalf("registry refresh interval = %q, want 15s", cfg.Registry.RefreshInterval)
 	}
 }
 
-func TestLoadServerConfigValidatesDocsNamespaces(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		wantErr string
-	}{
-		{
-			name: "missing name",
-			content: `
-addr = ":7635"
+func TestLoadServerConfigRejectsMissingBackend(t *testing.T) {
+	path := writeServerConfig(t, "server.toml", `addr = ":7635"`)
 
-[[docs]]
-[docs.backend]
-type = "doc_postgres"
-`,
-			wantErr: "docs[0].name is required",
-		},
-		{
-			name: "missing backend type",
-			content: `
-addr = ":7635"
-
-[[docs]]
-name = "shared"
-`,
-			wantErr: "docs[0].backend.type is required",
-		},
-		{
-			name: "duplicate name",
-			content: `
-addr = ":7635"
-
-[[docs]]
-name = "shared"
-[docs.backend]
-type = "doc_postgres"
-
-[[docs]]
-name = "shared"
-[docs.backend]
-type = "doc_namespace_postgres"
-`,
-			wantErr: `duplicate docs namespace "shared"`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := writeServerConfig(t, "server.toml", tt.content)
-			_, err := config.LoadServer(path)
-			if err == nil {
-				t.Fatal("LoadServer() error = nil, want docs namespace validation error")
-			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("LoadServer() error = %q, want containing %q", err.Error(), tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestAdapterFromServerConfigRejectsDuplicateRepos(t *testing.T) {
-	_, err := adapterFromServerConfig(context.Background(), config.ServerConfig{
-		Repos: []config.RepoConfig{
-			{Name: "gxfs", Backend: config.BackendConfig{Type: "postgres"}},
-			{Name: "gxfs", Backend: config.BackendConfig{Type: "postgres"}},
-		},
-	})
+	_, err := config.LoadServer(path)
 	if err == nil {
-		t.Fatal("adapterFromServerConfig() error = nil, want duplicate repo error")
+		t.Fatal("LoadServer() error = nil, want backend validation error")
 	}
-}
-
-func TestAdapterFromServerConfigRejectsUnsupportedDocsNamespaceBackend(t *testing.T) {
-	_, err := adapterFromServerConfig(context.Background(), config.ServerConfig{
-		Repos: []config.RepoConfig{
-			{Name: "gxfs", Backend: config.BackendConfig{Type: "postgres"}},
-		},
-		Docs: []config.DocsNamespaceConfig{
-			{Name: "shared", Backend: config.BackendConfig{Type: "postgres"}},
-		},
-	})
-	if err == nil {
-		t.Fatal("adapterFromServerConfig() error = nil, want unsupported docs namespace backend error")
-	}
-	if !strings.Contains(err.Error(), "docs namespace shared") ||
-		!strings.Contains(err.Error(), "path-centric postgres is repo-only") {
-		t.Fatalf("adapterFromServerConfig() error = %q, want docs namespace name and unsupported backend detail", err.Error())
+	if !strings.Contains(err.Error(), "backend.type is required") {
+		t.Fatalf("LoadServer() error = %q, want backend.type validation", err.Error())
 	}
 }
 
@@ -272,266 +213,40 @@ func TestRedactDSN(t *testing.T) {
 	}
 }
 
-func TestCollectGCTargets(t *testing.T) {
-	tests := []struct {
-		name           string
-		repos          []config.RepoConfig
-		expectedCount  int
-		expectedLabels []string // in sorted order
-	}{
-		{
-			name: "single doc_postgres repo",
-			repos: []config.RepoConfig{
-				{
-					Name: "repo1",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://user:pass@host1:5432/db1",
-							Schema: "public",
-						},
-					},
-				},
-			},
-			expectedCount: 1,
-			expectedLabels: []string{
-				"postgres://host1:5432/db1/public",
-			},
-		},
-		{
-			name: "multiple doc_postgres repos same target (dedupe)",
-			repos: []config.RepoConfig{
-				{
-					Name: "repo1",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://user:pass@host1:5432/db1",
-							Schema: "public",
-						},
-					},
-				},
-				{
-					Name: "repo2",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://user:pass@host1:5432/db1", // Same DSN
-							Schema: "public",                              // Same schema
-						},
-					},
-				},
-			},
-			expectedCount: 1,
-			expectedLabels: []string{
-				"postgres://host1:5432/db1/public",
-			},
-		},
-		{
-			name: "multiple doc_postgres repos different schemas",
-			repos: []config.RepoConfig{
-				{
-					Name: "repo1",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://user:pass@host1:5432/db1",
-							Schema: "public",
-						},
-					},
-				},
-				{
-					Name: "repo2",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://user:pass@host1:5432/db1",
-							Schema: "tenant1",
-						},
-					},
-				},
-			},
-			expectedCount: 2,
-			expectedLabels: []string{
-				"postgres://host1:5432/db1/public",
-				"postgres://host1:5432/db1/tenant1",
-			},
-		},
-		{
-			name: "skip non-doc_postgres repos",
-			repos: []config.RepoConfig{
-				{
-					Name: "repo1",
-					Backend: config.BackendConfig{
-						Type: "postgres", // Legacy postgres, not doc_postgres
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://user:pass@host1:5432/db1",
-							Schema: "public",
-						},
-					},
-				},
-				{
-					Name: "repo2",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://user:pass@host2:5432/db2",
-							Schema: "public",
-						},
-					},
-				},
-			},
-			expectedCount: 1,
-			expectedLabels: []string{
-				"postgres://host2:5432/db2/public",
-			},
-		},
-		{
-			name: "skip repos with empty DSN",
-			repos: []config.RepoConfig{
-				{
-					Name: "repo1",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "", // Empty DSN
-							Schema: "public",
-						},
-					},
-				},
-				{
-					Name: "repo2",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://user:pass@host1:5432/db1",
-							Schema: "public",
-						},
-					},
-				},
-			},
-			expectedCount: 1,
-			expectedLabels: []string{
-				"postgres://host1:5432/db1/public",
-			},
-		},
-		{
-			name:          "no doc_postgres repos",
-			repos:         []config.RepoConfig{},
-			expectedCount: 0,
-		},
-		{
-			name: "sorted output",
-			repos: []config.RepoConfig{
-				{
-					Name: "repo_b",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://host_b:5432/db",
-							Schema: "schema_b",
-						},
-					},
-				},
-				{
-					Name: "repo_a",
-					Backend: config.BackendConfig{
-						Type: "doc_postgres",
-						Postgres: config.PostgresConfig{
-							DSN:    "postgres://host_a:5432/db",
-							Schema: "schema_a",
-						},
-					},
-				},
-			},
-			expectedCount: 2,
-			expectedLabels: []string{
-				"postgres://host_a:5432/db/schema_a",
-				"postgres://host_b:5432/db/schema_b",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := config.ServerConfig{Repos: tt.repos}
-			targets := collectGCTargets(cfg)
-
-			if len(targets) != tt.expectedCount {
-				t.Errorf("collectGCTargets() returned %d targets, want %d", len(targets), tt.expectedCount)
-			}
-
-			if tt.expectedLabels != nil {
-				var gotLabels []string
-				for _, target := range targets {
-					gotLabels = append(gotLabels, target.label())
-				}
-				for i, got := range gotLabels {
-					if i >= len(tt.expectedLabels) {
-						t.Errorf("unexpected extra target: %s", got)
-						break
-					}
-					if got != tt.expectedLabels[i] {
-						t.Errorf("target[%d] = %q, want %q", i, got, tt.expectedLabels[i])
-					}
-				}
-			}
-		})
-	}
-}
-
-func TestCollectGCTargetsIncludesDocsNamespaces(t *testing.T) {
+func TestCollectGCTargetsUsesInfraBackendOnly(t *testing.T) {
 	cfg := config.ServerConfig{
-		Repos: []config.RepoConfig{
-			{
-				Name: "repo1",
-				Backend: config.BackendConfig{
-					Type: "doc_postgres",
-					Postgres: config.PostgresConfig{
-						DSN:    "postgres://user:pass@host1:5432/db1",
-						Schema: "public",
-					},
-				},
-			},
-		},
-		Docs: []config.DocsNamespaceConfig{
-			{
-				Name: "shared",
-				Backend: config.BackendConfig{
-					Type: "doc_namespace_postgres",
-					Postgres: config.PostgresConfig{
-						DSN:    "postgres://user:pass@host2:5432/db2",
-						Schema: "docs",
-					},
-				},
-			},
-			{
-				Name: "legacy",
-				Backend: config.BackendConfig{
-					Type: "postgres",
-					Postgres: config.PostgresConfig{
-						DSN:    "postgres://user:pass@host3:5432/db3",
-						Schema: "ignored",
-					},
-				},
+		Backend: config.BackendConfig{
+			Type: "doc_postgres",
+			Postgres: config.PostgresConfig{
+				DSN:    "postgres://user:pass@host1:5432/db1",
+				Schema: "public",
 			},
 		},
 	}
 
 	targets := collectGCTargets(cfg)
-	if len(targets) != 2 {
-		t.Fatalf("collectGCTargets() returned %d targets, want 2", len(targets))
+	if len(targets) != 1 {
+		t.Fatalf("collectGCTargets() returned %d targets, want 1", len(targets))
+	}
+	if got := targets[0].label(); got != "postgres://host1:5432/db1/public" {
+		t.Fatalf("target label = %q, want redacted target", got)
+	}
+}
+
+func TestCollectGCTargetsSkipsPathCentricBackend(t *testing.T) {
+	cfg := config.ServerConfig{
+		Backend: config.BackendConfig{
+			Type: "postgres",
+			Postgres: config.PostgresConfig{
+				DSN:    "postgres://user:pass@host1:5432/db1",
+				Schema: "public",
+			},
+		},
 	}
 
-	gotLabels := []string{targets[0].label(), targets[1].label()}
-	wantLabels := []string{
-		"postgres://host1:5432/db1/public",
-		"postgres://host2:5432/db2/docs",
-	}
-	for i := range wantLabels {
-		if gotLabels[i] != wantLabels[i] {
-			t.Fatalf("target[%d] = %q, want %q", i, gotLabels[i], wantLabels[i])
-		}
+	targets := collectGCTargets(cfg)
+	if len(targets) != 0 {
+		t.Fatalf("collectGCTargets() returned %+v, want none for path-centric postgres", targets)
 	}
 }
 
@@ -543,12 +258,9 @@ func TestStorageTargetLabel(t *testing.T) {
 
 	label := target.label()
 
-	// Should not contain credentials
 	if strings.Contains(label, "secret") || strings.Contains(label, "password") {
 		t.Errorf("label %q contains credentials", label)
 	}
-
-	// Should contain schema
 	if !strings.Contains(label, "tenant1") {
 		t.Errorf("label %q missing schema", label)
 	}

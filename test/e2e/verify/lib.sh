@@ -142,28 +142,33 @@ write_server_config() {
     cat > "$SERVER_CONFIG" <<TOML
 addr = ":${VERIFY_PORT}"
 
-[[repos]]
-name = "${REPO1}"
-writable = true
-
-[repos.backend]
+[backend]
 type = "doc_postgres"
 
-[repos.backend.postgres]
+[backend.postgres]
 dsn = "postgresql://${VERIFY_USER}@localhost:5432/${VERIFY_DB}"
 schema = "public"
 
-[[repos]]
-name = "${REPO2}"
-writable = true
-
-[repos.backend]
-type = "doc_postgres"
-
-[repos.backend.postgres]
-dsn = "postgresql://${VERIFY_USER}@localhost:5432/${VERIFY_DB}"
-schema = "public"
+[registry]
+refresh_interval = "1s"
 TOML
+}
+
+register_repo() {
+    local repo="$1"
+    local tmpfile="${VERIFY_DIR}/.register_repo.$$"
+    local status
+    status=$(curl -s -o "$tmpfile" -w "%{http_code}" \
+        -X POST -H "Content-Type: application/json" \
+        -d "{\"name\":\"${repo}\",\"writable\":true}" \
+        "${SERVER_ADDR}/v1/repos") || status="000"
+    if [ "$status" != "201" ] && [ "$status" != "409" ]; then
+        echo "ERROR: failed to register repo ${repo} (HTTP ${status})"
+        cat "$tmpfile" 2>/dev/null || true
+        rm -f "$tmpfile"
+        exit 1
+    fi
+    rm -f "$tmpfile"
 }
 
 start_server() {
@@ -182,6 +187,8 @@ start_server() {
         fi
         sleep 0.1
     done
+    register_repo "$REPO1"
+    register_repo "$REPO2"
     echo "Server started (PID $SERVER_PID) on port $VERIFY_PORT"
 }
 

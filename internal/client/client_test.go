@@ -59,6 +59,59 @@ func TestClientMountSourcesBuildsURLAndDecodesResponse(t *testing.T) {
 	}
 }
 
+func TestClientRegisterRepoPostsJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %q, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/repos" {
+			t.Fatalf("path = %q, want /v1/repos", r.URL.Path)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("Content-Type = %q, want application/json", got)
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body.Name != "austiecodes/xxxx" {
+			t.Fatalf("body name = %q, want austiecodes/xxxx", body.Name)
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintln(w, `{"repo":{"name":"austiecodes/xxxx"}}`)
+	}))
+	defer server.Close()
+
+	if err := New(server.URL).RegisterRepo(context.Background(), "austiecodes/xxxx"); err != nil {
+		t.Fatalf("RegisterRepo() error = %v", err)
+	}
+}
+
+func TestClientRegisterRepoDuplicateReturnsJSONMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		fmt.Fprintln(w, `{"error":{"code":"REPO_EXISTS","message":"repo already registered: austiecodes/xxxx"}}`)
+	}))
+	defer server.Close()
+
+	err := New(server.URL).RegisterRepo(context.Background(), "austiecodes/xxxx")
+	if err == nil {
+		t.Fatal("expected duplicate error, got nil")
+	}
+	if !errors.Is(err, store.ErrRepoExists) {
+		t.Fatalf("error = %v, want ErrRepoExists", err)
+	}
+	if !strings.Contains(err.Error(), "repo already registered: austiecodes/xxxx") {
+		t.Fatalf("error = %q, want duplicate message", err.Error())
+	}
+	if strings.Contains(err.Error(), `{"error"`) {
+		t.Fatalf("error = %q, should not contain raw JSON", err.Error())
+	}
+}
+
 func TestClientAdapterForSourceDocsBuildsURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/docs/openai-go-sdk/cat" {

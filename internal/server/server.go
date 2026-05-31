@@ -36,6 +36,14 @@ type handler struct {
 	collectionMgr store.CollectionManager // optional: collection management
 }
 
+type repoWritableChecker interface {
+	RepoWritable(repo string) bool
+}
+
+type repoWritableRefreshChecker interface {
+	RepoWritableWithRefresh(ctx context.Context, repo string) (bool, error)
+}
+
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" {
 		w.WriteHeader(http.StatusOK)
@@ -51,18 +59,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// GET /v1/repos — list all repositories.
-	if r.URL.Path == "/v1/repos" && r.Method == http.MethodGet {
-		if reposer, ok := h.adapter.(store.Reposer); ok {
-			names := reposer.Repos()
-			repos := make([]map[string]string, len(names))
-			for i, name := range names {
-				repos[i] = map[string]string{"name": name}
-			}
-			writeJSON(w, map[string]any{"repos": repos})
-			return
+	if r.URL.Path == "/v1/repos" {
+		switch r.Method {
+		case http.MethodGet:
+			h.handleListRepos(w, r)
+		case http.MethodPost:
+			h.handleRegisterRepo(w, r)
+		default:
+			writeJSONErrorCode(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		}
-		writeJSON(w, map[string]any{"repos": []any{}})
 		return
 	}
 
@@ -87,7 +92,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	source, op, ok := parseSourcePath(r.URL.Path)
+	source, op, ok := parseSourcePath(requestPath(r.URL))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -101,7 +106,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	clientRepo := r.Header.Get("X-Client-Repo")
 	if source.Kind == store.SourceKindRepo && clientRepo != "" && clientRepo != source.Name {
 		if r.Method == http.MethodPut || r.Method == http.MethodDelete {
-			if !h.writableRepos[source.Name] {
+			writable, err := h.repoWritable(r.Context(), source.Name)
+			if err != nil {
+				writeJSONError(w, err)
+				return
+			}
+			if !writable {
 				writeJSONErrorCode(w, http.StatusForbidden, "FORBIDDEN", "target repo does not allow cross-repo writes")
 				return
 			}
@@ -146,6 +156,69 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, resp)
+}
+
+func (h *handler) handleListRepos(w http.ResponseWriter, r *http.Request) {
+	if catalog, ok := h.adapter.(interface {
+		ListRepos(context.Context) ([]store.RepoInfo, error)
+	}); ok {
+		repos, err := catalog.ListRepos(r.Context())
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"repos": repos})
+		return
+	}
+
+	if reposer, ok := h.adapter.(store.Reposer); ok {
+		names := reposer.Repos()
+		repos := make([]map[string]string, len(names))
+		for i, name := range names {
+			repos[i] = map[string]string{"name": name}
+		}
+		writeJSON(w, map[string]any{"repos": repos})
+		return
+	}
+	writeJSON(w, map[string]any{"repos": []any{}})
+}
+
+func (h *handler) handleRegisterRepo(w http.ResponseWriter, r *http.Request) {
+	registrar, ok := h.adapter.(interface {
+		RegisterRepo(context.Context, store.RegisterRepoRequest) (*store.RegisterRepoResponse, error)
+	})
+	if !ok {
+		writeJSONErrorCode(w, http.StatusNotImplemented, "NOT_SUPPORTED", "repo registration is not supported by this backend")
+		return
+	}
+
+	var req store.RegisterRepoRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeJSONErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "name is required")
+		return
+	}
+
+	resp, err := registrar.RegisterRepo(r.Context(), req)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	writeJSONStatus(w, http.StatusCreated, resp)
+}
+
+func (h *handler) repoWritable(ctx context.Context, repo string) (bool, error) {
+	if checker, ok := h.adapter.(repoWritableRefreshChecker); ok {
+		return checker.RepoWritableWithRefresh(ctx, repo)
+	}
+	if checker, ok := h.adapter.(repoWritableChecker); ok {
+		return checker.RepoWritable(repo), nil
+	}
+	return h.writableRepos[repo], nil
 }
 
 func (h *handler) adapterForSource(ctx context.Context, source store.SourceRef) (store.Adapter, error) {
@@ -593,6 +666,12 @@ func writeJSON(w http.ResponseWriter, resp any) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+func writeJSONStatus(w http.ResponseWriter, status int, resp any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 func writeJSONError(w http.ResponseWriter, err error) {
 	status, code := mapError(err)
 	writeJSONErrorCode(w, status, code, err.Error())
@@ -640,6 +719,8 @@ func mapError(err error) (int, string) {
 		return http.StatusNotFound, "NOT_FOUND"
 	case errors.Is(err, store.ErrUnknownRepo):
 		return http.StatusNotFound, "UNKNOWN_REPO"
+	case errors.Is(err, store.ErrRepoExists):
+		return http.StatusConflict, "REPO_EXISTS"
 	case errors.Is(err, store.ErrUnknownSource):
 		return http.StatusNotFound, "UNKNOWN_SOURCE"
 	case errors.Is(err, store.ErrCollectionNotFound):
@@ -696,7 +777,7 @@ func (lm *loggingMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"client_repo", clientRepo,
 			"mount_path", r.Header.Get("X-Mount-Path"),
 		)
-		source, op, _ := parseSourcePath(r.URL.Path)
+		source, op, _ := parseSourcePath(requestPath(r.URL))
 		if op != "" {
 			if source.Kind == store.SourceKindRepo {
 				attrs = append(attrs, "target_repo", source.Name)
@@ -719,6 +800,13 @@ func (lm *loggingMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("request", attrs...)
+}
+
+func requestPath(u *url.URL) string {
+	if p := u.EscapedPath(); p != "" {
+		return p
+	}
+	return u.Path
 }
 
 // responseWriter wraps http.ResponseWriter to capture the status code.

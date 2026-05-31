@@ -236,6 +236,21 @@ create table if not exists "public"."gxfs_collection_docs" (
     primary key (collection_id, path),
     unique (collection_id, doc_id)
 );`,
+		`-- DB-backed repository registry.
+create table if not exists "public"."gxfs_repos" (
+    name text primary key,
+    writable bool not null default false,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    check (name <> '')
+);
+
+-- Preserve existing repo namespaces discovered from document path bindings.
+insert into "public"."gxfs_repos" (name)
+select distinct repo
+from "public"."gxfs_repo_paths"
+where repo <> ''
+on conflict (name) do nothing;`,
 	}
 	if len(statements) != len(want) {
 		t.Fatalf("SchemaSQL() len = %d, want %d: %v", len(statements), len(want), statements)
@@ -264,8 +279,17 @@ func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T)
 		t.Fatalf("SchemaSQL() error = %v", err)
 	}
 
-	// Find the doc tables migration (last statement).
-	docStmt := statements[len(statements)-1]
+	// Find the doc tables migration.
+	var docStmt string
+	for _, statement := range statements {
+		if strings.Contains(statement, `"gxfs_docs"`) {
+			docStmt = statement
+			break
+		}
+	}
+	if docStmt == "" {
+		t.Fatalf("SchemaSQL() missing doc tables migration: %v", statements)
+	}
 
 	// Must NOT contain ".gxfs_docs" (which would happen with empty SchemaName).
 	if strings.Contains(docStmt, ".gxfs_docs") && !strings.Contains(docStmt, `".gxfs_docs"`) {
@@ -293,6 +317,20 @@ func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T)
 	if strings.Contains(docStmt, ".\"gxfs_docs\"") {
 		// Double-check it's not schema-qualified (which is wrong for empty schema).
 		t.Fatalf("empty schema migration has schema-qualified table ref: contains .\"gxfs_docs\"")
+	}
+
+	var repoRegistryStmt string
+	for _, statement := range statements {
+		if strings.Contains(statement, `"gxfs_repos"`) {
+			repoRegistryStmt = statement
+			break
+		}
+	}
+	if repoRegistryStmt == "" {
+		t.Fatalf("SchemaSQL() missing repo registry migration: %v", statements)
+	}
+	if strings.Contains(repoRegistryStmt, ".\"gxfs_repos\"") {
+		t.Fatalf("empty schema migration has schema-qualified repo registry table ref: contains .\"gxfs_repos\"")
 	}
 }
 
