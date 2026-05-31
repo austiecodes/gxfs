@@ -100,7 +100,7 @@ func NewWriteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *m
 					// No baseline — stat remote to decide create vs error.
 					_, statErr := adapter.Stat(cmd.Context(), store.StatRequest{Repo: repo, Path: path})
 					if statErr == nil {
-						return fmt.Errorf("path %s exists remotely but has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+						return fmt.Errorf("path %s exists remotely but has no local baseline; run 'gxfs sync refresh' or 'gxfs sync pull' first", path)
 					}
 					if !errors.Is(statErr, store.ErrNotFound) {
 						return fmt.Errorf("stat %s: %w", path, statErr)
@@ -118,7 +118,7 @@ func NewWriteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *m
 			})
 			if err != nil {
 				if errors.Is(err, store.ErrConflict) {
-					return fmt.Errorf("%w\nhint: run 'gxfs sync pull' or 'gxfs refresh' to update local state, then retry", err)
+					return fmt.Errorf("%w\nhint: run 'gxfs sync pull' or 'gxfs sync refresh' to update local state, then retry", err)
 				}
 				return err
 			}
@@ -131,7 +131,7 @@ func NewWriteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *m
 
 func NewDeleteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete <path>",
+		Use:   "rm <path>",
 		Short: "Delete a VFS file or directory",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -140,7 +140,7 @@ func NewDeleteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *
 			if isCrossRepoMount(path, repo, resolver) {
 				hash, hasBaseline := manifestHashForPath(path)
 				if !hasBaseline {
-					return fmt.Errorf("path %s has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+					return fmt.Errorf("path %s has no local baseline; run 'gxfs sync refresh' or 'gxfs sync pull' first", path)
 				}
 				expectedHash = hash
 			}
@@ -152,7 +152,7 @@ func NewDeleteCommand(adapter, rawAdapter store.Adapter, repo string, resolver *
 			})
 			if err != nil {
 				if errors.Is(err, store.ErrConflict) {
-					return fmt.Errorf("%w\nhint: run 'gxfs sync pull' or 'gxfs refresh' to update local state, then retry", err)
+					return fmt.Errorf("%w\nhint: run 'gxfs sync pull' or 'gxfs sync refresh' to update local state, then retry", err)
 				}
 				return err
 			}
@@ -178,7 +178,7 @@ func NewEditCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 			if isCrossRepoMount(path, repo, resolver) {
 				hash, hasBaseline := manifestHashForPath(path)
 				if !hasBaseline {
-					return fmt.Errorf("path %s has no local baseline; run 'gxfs refresh' or 'gxfs sync pull' first", path)
+					return fmt.Errorf("path %s has no local baseline; run 'gxfs sync refresh' or 'gxfs sync pull' first", path)
 				}
 				expectedHash = hash
 			}
@@ -193,7 +193,7 @@ func NewEditCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 			})
 			if err != nil {
 				if errors.Is(err, store.ErrConflict) {
-					return fmt.Errorf("%w\nhint: run 'gxfs sync pull' or 'gxfs refresh' to update local state, then retry", err)
+					return fmt.Errorf("%w\nhint: run 'gxfs sync pull' or 'gxfs sync refresh' to update local state, then retry", err)
 				}
 				return err
 			}

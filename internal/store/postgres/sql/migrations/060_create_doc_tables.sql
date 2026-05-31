@@ -42,6 +42,31 @@ create index if not exists idx_repo_paths_prefix on {{.RepoPathsTable}} (repo, p
 -- Index for finding all paths pointing to a doc (for orphan detection)
 create index if not exists idx_repo_paths_doc_id on {{.RepoPathsTable}} (doc_id);
 
+-- First-class docs namespaces: independent writable views over shared docs.
+create table if not exists {{.DocNamespacesTable}} (
+    name text primary key,
+    description text not null default '',
+    writable bool not null default false,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+-- Namespace → Doc mapping: directories are implicit from path prefix.
+create table if not exists {{.DocNamespacePathsTable}} (
+    namespace text not null references {{.DocNamespacesTable}}(name) on delete cascade,
+    path text not null,
+    doc_id uuid not null references {{.DocsTable}}(id),
+    size bigint not null default 0,
+    mtime timestamptz not null default now(),
+    primary key (namespace, path)
+);
+
+-- Index for namespace prefix queries.
+create index if not exists idx_doc_namespace_paths_prefix on {{.DocNamespacePathsTable}} (namespace, path text_pattern_ops);
+
+-- Index for finding namespace paths pointing to a doc (for orphan detection).
+create index if not exists idx_doc_namespace_paths_doc_id on {{.DocNamespacePathsTable}} (doc_id);
+
 -- Collections: empty tables, no API in Phase 1A
 create table if not exists {{.CollectionsTable}} (
     id uuid primary key default gen_random_uuid(),

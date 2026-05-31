@@ -56,14 +56,21 @@ type MountConfig struct {
 }
 
 type ServerConfig struct {
-	Addr  string       `toml:"addr"`
-	Repos []RepoConfig `toml:"repos"`
+	Addr  string                `toml:"addr"`
+	Repos []RepoConfig          `toml:"repos"`
+	Docs  []DocsNamespaceConfig `toml:"docs"`
 }
 
 type RepoConfig struct {
 	Name     string        `toml:"name"`
 	Backend  BackendConfig `toml:"backend"`
 	Writable bool          `toml:"writable"` // allow cross-repo write-through to this repo
+}
+
+type DocsNamespaceConfig struct {
+	Name     string        `toml:"name"`
+	Backend  BackendConfig `toml:"backend"`
+	Writable bool          `toml:"writable"` // reserved for future docs namespace write gates
 }
 
 type BackendConfig struct {
@@ -231,6 +238,19 @@ func LoadServer(path string) (ServerConfig, error) {
 		if repo.Backend.Type == "" {
 			return ServerConfig{}, fmt.Errorf("repos[%d].backend.type is required", i)
 		}
+	}
+	docsNames := make(map[string]struct{}, len(cfg.Docs))
+	for i, docs := range cfg.Docs {
+		if docs.Name == "" {
+			return ServerConfig{}, fmt.Errorf("docs[%d].name is required", i)
+		}
+		if docs.Backend.Type == "" {
+			return ServerConfig{}, fmt.Errorf("docs[%d].backend.type is required", i)
+		}
+		if _, exists := docsNames[docs.Name]; exists {
+			return ServerConfig{}, fmt.Errorf("duplicate docs namespace %q", docs.Name)
+		}
+		docsNames[docs.Name] = struct{}{}
 	}
 	return cfg, nil
 }

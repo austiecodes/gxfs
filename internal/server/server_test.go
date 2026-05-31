@@ -14,6 +14,7 @@ import (
 
 type fakeAdapter struct {
 	lsReq     store.LSRequest
+	catReq    store.CatRequest
 	grepReq   store.GrepRequest
 	findReq   store.FindRequest
 	treeReq   store.TreeRequest
@@ -31,7 +32,8 @@ func (f *fakeAdapter) Tree(_ context.Context, req store.TreeRequest) (*store.Tre
 	return &store.TreeResponse{Text: "/\n"}, nil
 }
 
-func (f *fakeAdapter) Cat(context.Context, store.CatRequest) (*store.CatResponse, error) {
+func (f *fakeAdapter) Cat(_ context.Context, req store.CatRequest) (*store.CatResponse, error) {
+	f.catReq = req
 	content := "# Readme\n"
 	return &store.CatResponse{Path: "/docs/readme.md", Content: content, Hash: store.HashContent(content)}, nil
 }
@@ -106,6 +108,126 @@ func TestHandlerRoutesLS(t *testing.T) {
 	}
 	if len(resp.Nodes) != 1 || resp.Nodes[0].Name != "docs" {
 		t.Fatalf("resp = %+v, want docs node", resp)
+	}
+}
+
+func TestHandlerRoutesDocsNamespaceToDocsAdapter(t *testing.T) {
+	repoAdapter := &fakeAdapter{}
+	docsAdapter := &fakeAdapter{}
+	registry, err := store.NewNamespaceRegistry(
+		map[string]store.Adapter{"gxfs": repoAdapter},
+		map[string]store.Adapter{"openai-go-sdk": docsAdapter},
+	)
+	if err != nil {
+		t.Fatalf("NewNamespaceRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/docs/openai-go-sdk/cat?path=/usage.md", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if docsAdapter.catReq.Repo != "openai-go-sdk" || docsAdapter.catReq.Path != "/usage.md" {
+		t.Fatalf("docs cat req = %+v, want openai-go-sdk /usage.md", docsAdapter.catReq)
+	}
+	if repoAdapter.catReq != (store.CatRequest{}) {
+		t.Fatalf("repo adapter cat req = %+v, want untouched", repoAdapter.catReq)
+	}
+}
+
+func TestHandlerRoutesRepoNamespaceToRepoAdapter(t *testing.T) {
+	repoAdapter := &fakeAdapter{}
+	docsAdapter := &fakeAdapter{}
+	registry, err := store.NewNamespaceRegistry(
+		map[string]store.Adapter{"gxfs": repoAdapter},
+		map[string]store.Adapter{"openai-go-sdk": docsAdapter},
+	)
+	if err != nil {
+		t.Fatalf("NewNamespaceRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/readme.md", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if repoAdapter.catReq.Repo != "gxfs" || repoAdapter.catReq.Path != "/readme.md" {
+		t.Fatalf("repo cat req = %+v, want gxfs /readme.md", repoAdapter.catReq)
+	}
+	if docsAdapter.catReq != (store.CatRequest{}) {
+		t.Fatalf("docs adapter cat req = %+v, want untouched", docsAdapter.catReq)
+	}
+}
+
+func TestHandlerDocsNamespaceRequiresSourceRouter(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1/docs/openai-go-sdk/cat?path=/usage.md", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(&fakeAdapter{}, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotImplemented, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"NOT_SUPPORTED"`) {
+		t.Fatalf("body = %q, want NOT_SUPPORTED code", rec.Body.String())
+	}
+}
+
+func TestHandlerUnknownDocsNamespaceMapsUnknownSource(t *testing.T) {
+	registry, err := store.NewNamespaceRegistry(
+		map[string]store.Adapter{"gxfs": &fakeAdapter{}},
+		map[string]store.Adapter{"openai-go-sdk": &fakeAdapter{}},
+	)
+	if err != nil {
+		t.Fatalf("NewNamespaceRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/docs/missing/cat?path=/usage.md", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"UNKNOWN_SOURCE"`) {
+		t.Fatalf("body = %q, want UNKNOWN_SOURCE code", rec.Body.String())
+	}
+}
+
+func TestHandlerMountSourcesListsRepoSources(t *testing.T) {
+	registry, err := store.NewRegistry(map[string]store.Adapter{
+		"gxfs":             &fakeAdapter{},
+		"github/openai-go": &fakeAdapter{},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/mount-sources", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Sources []store.MountSource `json:"sources"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Sources) != 2 {
+		t.Fatalf("sources len = %d, want 2: %+v", len(resp.Sources), resp.Sources)
+	}
+	if resp.Sources[0].Ref != "repo://github%2Fopenai-go" || resp.Sources[0].Kind != store.SourceKindRepo || resp.Sources[0].Name != "github/openai-go" {
+		t.Fatalf("source[0] = %+v, want escaped repo source", resp.Sources[0])
+	}
+	if resp.Sources[1].Ref != "repo://gxfs" || resp.Sources[1].Kind != store.SourceKindRepo || resp.Sources[1].Name != "gxfs" {
+		t.Fatalf("source[1] = %+v, want gxfs repo source", resp.Sources[1])
 	}
 }
 

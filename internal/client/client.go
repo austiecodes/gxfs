@@ -20,9 +20,13 @@ type Client struct {
 	clientRepo string // sent as X-Client-Repo header for cross-repo write gate
 	mountPath  string // sent as X-Mount-Path header for observability
 	logID      string // sent as X-Gxfs-Log-Id header for audit correlation
+	sourceKind store.SourceKind
+	sourceName string
 }
 
 var _ store.Adapter = (*Client)(nil)
+var _ store.MountSourceLister = (*Client)(nil)
+var _ store.SourceRouter = (*Client)(nil)
 
 func New(baseURL string) *Client {
 	return &Client{
@@ -71,6 +75,35 @@ func (c *Client) RepoList(ctx context.Context) ([]string, error) {
 		names[i] = r.Name
 	}
 	return names, nil
+}
+
+func (c *Client) MountSources(ctx context.Context) ([]store.MountSource, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/mount-sources"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build mount_sources request: %w", err)
+	}
+	var resp struct {
+		Sources []store.MountSource `json:"sources"`
+	}
+	if err := c.do(req, "mount_sources", &resp); err != nil {
+		return nil, err
+	}
+	return resp.Sources, nil
+}
+
+func (c *Client) AdapterForSource(_ context.Context, source store.SourceRef) (store.Adapter, error) {
+	switch source.Kind {
+	case store.SourceKindRepo, store.SourceKindDocs:
+		cp := *c
+		cp.sourceKind = source.Kind
+		cp.sourceName = source.Name
+		return &cp, nil
+	case store.SourceKindDocset:
+		return nil, fmt.Errorf("%w: %s", store.ErrNotSupported, source.String())
+	default:
+		return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
+	}
 }
 
 func (c *Client) LS(ctx context.Context, req store.LSRequest) (*store.LSResponse, error) {
@@ -355,7 +388,11 @@ func (c *Client) get(ctx context.Context, repo, op string, q url.Values, out any
 
 // putWithHeaders is like put but sets CAS and cross-repo headers.
 func (c *Client) putWithHeaders(ctx context.Context, repo, op string, q url.Values, body string, out any, expectedHash string) error {
-	endpoint, err := c.url(repo, op, q)
+	source, err := c.sourceForRepo(repo)
+	if err != nil {
+		return err
+	}
+	endpoint, err := c.urlForSource(source, op, q)
 	if err != nil {
 		return err
 	}
@@ -364,13 +401,17 @@ func (c *Client) putWithHeaders(ctx context.Context, repo, op string, q url.Valu
 		return fmt.Errorf("build %s request: %w", op, err)
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	c.setWriteHeaders(req, repo, expectedHash)
+	c.setWriteHeaders(req, source, expectedHash)
 	return c.do(req, op, out)
 }
 
 // putJSONWithHeaders is like putJSON but sets CAS and cross-repo headers.
 func (c *Client) putJSONWithHeaders(ctx context.Context, repo, op string, q url.Values, body []byte, out any, hasExpectedHash bool) error {
-	endpoint, err := c.url(repo, op, q)
+	source, err := c.sourceForRepo(repo)
+	if err != nil {
+		return err
+	}
+	endpoint, err := c.urlForSource(source, op, q)
 	if err != nil {
 		return err
 	}
@@ -379,13 +420,17 @@ func (c *Client) putJSONWithHeaders(ctx context.Context, repo, op string, q url.
 		return fmt.Errorf("build %s request: %w", op, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	c.setWriteHeaders(req, repo, q.Get("expected_hash"))
+	c.setWriteHeaders(req, source, q.Get("expected_hash"))
 	return c.do(req, op, out)
 }
 
 // deleteWithHeaders is like delete but sets CAS and cross-repo headers.
 func (c *Client) deleteWithHeaders(ctx context.Context, repo string, q url.Values, hasExpectedHash bool) error {
-	endpoint, err := c.url(repo, "delete", q)
+	source, err := c.sourceForRepo(repo)
+	if err != nil {
+		return err
+	}
+	endpoint, err := c.urlForSource(source, "delete", q)
 	if err != nil {
 		return err
 	}
@@ -393,13 +438,13 @@ func (c *Client) deleteWithHeaders(ctx context.Context, repo string, q url.Value
 	if err != nil {
 		return fmt.Errorf("build delete request: %w", err)
 	}
-	c.setWriteHeaders(req, repo, q.Get("expected_hash"))
+	c.setWriteHeaders(req, source, q.Get("expected_hash"))
 	return c.do(req, "delete", nil)
 }
 
 // setWriteHeaders adds X-Client-Repo, X-Mount-Path and If-Match/If-None-Match headers.
-func (c *Client) setWriteHeaders(req *http.Request, targetRepo, expectedHash string) {
-	if c.clientRepo != "" && c.clientRepo != targetRepo {
+func (c *Client) setWriteHeaders(req *http.Request, source store.SourceRef, expectedHash string) {
+	if source.Kind == store.SourceKindRepo && c.clientRepo != "" && c.clientRepo != source.Name {
 		req.Header.Set("X-Client-Repo", c.clientRepo)
 	}
 	if c.mountPath != "" {
@@ -446,8 +491,15 @@ func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []
 		}
 		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
 			err := fmt.Errorf("%s failed: status %d: %s", op, resp.StatusCode, errResp.Error.Message)
-			if errResp.Error.Code == "NOT_FOUND" {
+			switch errResp.Error.Code {
+			case "NOT_FOUND":
 				return fmt.Errorf("%w: %w", store.ErrNotFound, err)
+			case "UNKNOWN_REPO":
+				return fmt.Errorf("%w: %w", store.ErrUnknownRepo, err)
+			case "UNKNOWN_SOURCE":
+				return fmt.Errorf("%w: %w", store.ErrUnknownSource, err)
+			case "NOT_SUPPORTED":
+				return fmt.Errorf("%w: %w", store.ErrNotSupported, err)
 			}
 			return err
 		}
@@ -462,11 +514,42 @@ func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []
 }
 
 func (c *Client) url(repo, op string, q url.Values) (string, error) {
+	source, err := c.sourceForRepo(repo)
+	if err != nil {
+		return "", err
+	}
+	return c.urlForSource(source, op, q)
+}
+
+func (c *Client) sourceForRepo(repo string) (store.SourceRef, error) {
+	if c.sourceKind != "" {
+		switch c.sourceKind {
+		case store.SourceKindRepo, store.SourceKindDocs:
+			return store.SourceRef{Kind: c.sourceKind, Name: c.sourceName}, nil
+		case store.SourceKindDocset:
+			return store.SourceRef{}, fmt.Errorf("%w: %s", store.ErrNotSupported, c.sourceKind)
+		default:
+			return store.SourceRef{}, fmt.Errorf("%w: %s", store.ErrUnknownSource, c.sourceKind)
+		}
+	}
+	return store.SourceRef{Kind: store.SourceKindRepo, Name: repo}, nil
+}
+
+func (c *Client) urlForSource(source store.SourceRef, op string, q url.Values) (string, error) {
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
 		return "", fmt.Errorf("parse base url: %w", err)
 	}
-	base.Path = strings.TrimRight(base.Path, "/") + "/v1/repos/" + url.PathEscape(repo) + "/" + op
+	switch source.Kind {
+	case store.SourceKindRepo:
+		base.Path = strings.TrimRight(base.Path, "/") + "/v1/repos/" + url.PathEscape(source.Name) + "/" + op
+	case store.SourceKindDocs:
+		base.Path = strings.TrimRight(base.Path, "/") + "/v1/docs/" + url.PathEscape(source.Name) + "/" + op
+	case store.SourceKindDocset:
+		return "", fmt.Errorf("%w: %s", store.ErrNotSupported, source.String())
+	default:
+		return "", fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
+	}
 	base.RawQuery = q.Encode()
 	return base.String(), nil
 }

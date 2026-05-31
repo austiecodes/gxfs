@@ -23,13 +23,14 @@ type GCCandidate struct {
 
 // GCResult is the output of garbage collection.
 type GCResult struct {
-	Count      int           `json:"count"`       // total orphan count (dry-run) or deleted count (force)
-	Candidates []GCCandidate `json:"candidates"`  // sample candidates (dry-run only)
+	Count      int           `json:"count"`      // total orphan count (dry-run) or deleted count (force)
+	Candidates []GCCandidate `json:"candidates"` // sample candidates (dry-run only)
 }
 
 // GC performs orphan document garbage collection.
 // An orphan document is one that:
 //   - has no references in gxfs_repo_paths
+//   - has no references in gxfs_doc_namespace_paths
 //   - has no references in gxfs_collection_docs
 //   - was last updated more than GraceHours ago (to protect fresh creates in progress)
 //
@@ -47,25 +48,38 @@ func GC(ctx context.Context, pool *pgxpool.Pool, schema string, req GCRequest) (
 	if err != nil {
 		return nil, err
 	}
-	pathsTable, err := quoteTable(schema, "gxfs_repo_paths")
-	if err != nil {
-		return nil, err
-	}
-	collectionDocsTable, err := quoteTable(schema, "gxfs_collection_docs")
-	if err != nil {
-		return nil, err
-	}
 
-	orphanCondition := fmt.Sprintf(`
-		updated_at < NOW() - INTERVAL '%d hours'
-		AND NOT EXISTS (SELECT 1 FROM %s p WHERE p.doc_id = d.id)
-		AND NOT EXISTS (SELECT 1 FROM %s c WHERE c.doc_id = d.id)`,
-		req.GraceHours, pathsTable, collectionDocsTable)
+	orphanCondition, err := gcOrphanCondition(schema, req.GraceHours)
+	if err != nil {
+		return nil, err
+	}
 
 	if req.DryRun {
 		return gcDryRun(ctx, pool, docsTable, orphanCondition, req.Limit)
 	}
 	return gcForce(ctx, pool, docsTable, orphanCondition)
+}
+
+func gcOrphanCondition(schema string, graceHours int) (string, error) {
+	pathsTable, err := quoteTable(schema, "gxfs_repo_paths")
+	if err != nil {
+		return "", err
+	}
+	namespacePathsTable, err := quoteTable(schema, "gxfs_doc_namespace_paths")
+	if err != nil {
+		return "", err
+	}
+	collectionDocsTable, err := quoteTable(schema, "gxfs_collection_docs")
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf(`
+		updated_at < NOW() - INTERVAL '%d hours'
+		AND NOT EXISTS (SELECT 1 FROM %s p WHERE p.doc_id = d.id)
+		AND NOT EXISTS (SELECT 1 FROM %s np WHERE np.doc_id = d.id)
+		AND NOT EXISTS (SELECT 1 FROM %s c WHERE c.doc_id = d.id)`,
+		graceHours, pathsTable, namespacePathsTable, collectionDocsTable), nil
 }
 
 func gcDryRun(ctx context.Context, pool *pgxpool.Pool, docsTable, orphanCondition string, limit int) (*GCResult, error) {

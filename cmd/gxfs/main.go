@@ -24,6 +24,10 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 		Use:   "gxfs",
 		Short: "Inspect GXFS virtual filesystems",
 		Long:  "GXFS gives agents Unix-like commands for virtual filesystem content served by gxfs-server.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
 	}
 
 	// Try to get collection client from rawAdapter
@@ -43,16 +47,12 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 	cmd.AddCommand(command.NewDeleteCommand(adapter, rawAdapter, repo, resolver))
 	cmd.AddCommand(command.NewSearchCommand(adapter, repo))
 	cmd.AddCommand(command.NewLocateCommand(rawAdapter, repo))
-	cmd.AddCommand(command.NewRefreshCommand(adapter, rawAdapter, repo, resolver))
-	cmd.AddCommand(command.NewMaterializeCommand(adapter, rawAdapter, repo, resolver))
-	cmd.AddCommand(command.NewDematerializeCommand())
 	cmd.AddCommand(command.NewInitCommand())
 	cmd.AddCommand(command.NewConfigCommand(repo))
 	cmd.AddCommand(command.NewSyncCommand(adapter, rawAdapter, repo, resolver))
 	cmd.AddCommand(command.NewMountCommand(adapter, rawAdapter, repo))
 	cmd.AddCommand(command.NewRepoCommand(rawAdapter))
 	cmd.AddCommand(command.NewGlobCommand(rawAdapter, repo))
-	cmd.AddCommand(command.NewAttachCommand(rawAdapter, repo))
 	cmd.AddCommand(command.NewHookCommand(adapter, rawAdapter, repo, resolver))
 	if collectionClient != nil {
 		cmd.AddCommand(command.NewCollectionCommand(collectionClient))

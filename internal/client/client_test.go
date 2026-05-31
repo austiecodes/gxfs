@@ -36,6 +36,99 @@ func TestClientLSBuildsURLAndDecodesResponse(t *testing.T) {
 	}
 }
 
+func TestClientMountSourcesBuildsURLAndDecodesResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/mount-sources" {
+			t.Fatalf("path = %q, want /v1/mount-sources", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string][]store.MountSource{
+			"sources": {
+				{Ref: "repo://gxfs", Kind: store.SourceKindRepo, Name: "gxfs"},
+				{Ref: "repo://github%2Fopenai-go", Kind: store.SourceKindRepo, Name: "github/openai-go"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	sources, err := New(server.URL).MountSources(context.Background())
+	if err != nil {
+		t.Fatalf("MountSources() error = %v", err)
+	}
+	if len(sources) != 2 || sources[0].Ref != "repo://gxfs" || sources[1].Name != "github/openai-go" {
+		t.Fatalf("MountSources() = %+v, want decoded sources", sources)
+	}
+}
+
+func TestClientAdapterForSourceDocsBuildsURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/docs/openai-go-sdk/cat" {
+			t.Fatalf("path = %q, want /v1/docs/openai-go-sdk/cat", r.URL.Path)
+		}
+		if r.URL.Query().Get("path") != "/usage.md" {
+			t.Fatalf("query path = %q, want /usage.md", r.URL.Query().Get("path"))
+		}
+		_ = json.NewEncoder(w).Encode(store.CatResponse{Path: "/usage.md", Content: "usage"})
+	}))
+	defer server.Close()
+
+	adapter, err := New(server.URL).AdapterForSource(context.Background(), store.SourceRef{
+		Kind: store.SourceKindDocs,
+		Name: "openai-go-sdk",
+	})
+	if err != nil {
+		t.Fatalf("AdapterForSource(docs) error = %v", err)
+	}
+
+	resp, err := adapter.Cat(context.Background(), store.CatRequest{Path: "/usage.md"})
+	if err != nil {
+		t.Fatalf("Cat() error = %v", err)
+	}
+	if resp.Content != "usage" {
+		t.Fatalf("Cat() content = %q, want usage", resp.Content)
+	}
+}
+
+func TestClientAdapterForSourceRepoBuildsURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/repos/gxfs/stat" {
+			t.Fatalf("path = %q, want /v1/repos/gxfs/stat", r.URL.Path)
+		}
+		if r.URL.Query().Get("path") != "/docs" {
+			t.Fatalf("query path = %q, want /docs", r.URL.Query().Get("path"))
+		}
+		_ = json.NewEncoder(w).Encode(store.StatResponse{
+			Node: store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		})
+	}))
+	defer server.Close()
+
+	adapter, err := New(server.URL).AdapterForSource(context.Background(), store.SourceRef{
+		Kind: store.SourceKindRepo,
+		Name: "gxfs",
+	})
+	if err != nil {
+		t.Fatalf("AdapterForSource(repo) error = %v", err)
+	}
+
+	resp, err := adapter.Stat(context.Background(), store.StatRequest{Path: "/docs"})
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if resp.Node.Path != "/docs" {
+		t.Fatalf("Stat() path = %q, want /docs", resp.Node.Path)
+	}
+}
+
+func TestClientAdapterForSourceDocsetNotSupported(t *testing.T) {
+	_, err := New("http://example.test").AdapterForSource(context.Background(), store.SourceRef{
+		Kind: store.SourceKindDocset,
+		Name: "best-practices",
+	})
+	if !errors.Is(err, store.ErrNotSupported) {
+		t.Fatalf("AdapterForSource(docset) error = %v, want ErrNotSupported", err)
+	}
+}
+
 func TestClientLSParams(t *testing.T) {
 	tests := []struct {
 		name      string

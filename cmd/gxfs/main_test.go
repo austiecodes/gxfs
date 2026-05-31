@@ -33,6 +33,7 @@ type fakeClient struct {
 	grepMatches      []store.Match
 	lsNodes          []store.Node
 	statNode         *store.Node
+	statReq          store.StatRequest
 	statErr          error
 	catContent       string
 	lsReq            store.LSRequest
@@ -44,6 +45,7 @@ type fakeClient struct {
 	catMu            sync.Mutex
 	catContents      map[string]string
 	putReqs          []store.PutRequest
+	deleteReqs       []store.DeleteRequest
 	searchReq        store.SearchRequest
 	searchResp       *store.SearchResponse
 	batchHashesResp  *store.HashResponse
@@ -52,6 +54,8 @@ type fakeClient struct {
 	locateErr        error
 	locateErrByRepo  map[string]error
 	locateRespByRepo map[string]*store.LocateResponse
+	mountSources     []store.MountSource
+	mountSourcesErr  error
 	repoList         []string
 	repoListErr      error
 }
@@ -139,7 +143,8 @@ func (f *fakeClient) Find(_ context.Context, req store.FindRequest) (*store.Find
 	return &store.FindResponse{Nodes: nodes, Total: len(nodes)}, nil
 }
 
-func (f *fakeClient) Stat(_ context.Context, _ store.StatRequest) (*store.StatResponse, error) {
+func (f *fakeClient) Stat(_ context.Context, req store.StatRequest) (*store.StatResponse, error) {
+	f.statReq = req
 	if f.statErr != nil {
 		return nil, f.statErr
 	}
@@ -156,6 +161,7 @@ func (f *fakeClient) Put(_ context.Context, req store.PutRequest) (*store.PutRes
 }
 
 func (f *fakeClient) Delete(_ context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
+	f.deleteReqs = append(f.deleteReqs, req)
 	return &store.DeleteResponse{}, nil
 }
 
@@ -235,6 +241,44 @@ func (f *fakeClient) RepoList(_ context.Context) ([]string, error) {
 		return f.repoList, nil
 	}
 	return []string{"my-project", "github/openai-go"}, nil
+}
+
+func (f *fakeClient) MountSources(_ context.Context) ([]store.MountSource, error) {
+	if f.mountSourcesErr != nil {
+		return nil, f.mountSourcesErr
+	}
+	if f.mountSources != nil {
+		return f.mountSources, nil
+	}
+	return []store.MountSource{
+		{Ref: "repo://gxfs", Kind: store.SourceKindRepo, Name: "gxfs"},
+		{Ref: "repo://github%2Fopenai-go", Kind: store.SourceKindRepo, Name: "github/openai-go"},
+	}, nil
+}
+
+type sourceRoutingFakeClient struct {
+	*fakeClient
+	sources map[string]store.Adapter
+}
+
+func (f *sourceRoutingFakeClient) AdapterForSource(_ context.Context, source store.SourceRef) (store.Adapter, error) {
+	switch source.Kind {
+	case store.SourceKindRepo:
+		if source.Name == "gxfs" || source.Name == "self" {
+			return f.fakeClient, nil
+		}
+	case store.SourceKindDocs:
+		if adapter, ok := f.sources[sourceKey(source)]; ok {
+			return adapter, nil
+		}
+	case store.SourceKindDocset:
+		return nil, store.ErrNotSupported
+	}
+	return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
+}
+
+func sourceKey(source store.SourceRef) string {
+	return string(source.Kind) + "://" + source.Name
 }
 
 func execute(t *testing.T, args ...string) (string, *fakeClient) {
@@ -1409,7 +1453,7 @@ func TestTreeSortByTimeDirsFirstSize(t *testing.T) {
 	}
 }
 
-// --- Validation and backward-compat tests ---
+// --- Validation tests ---
 
 func executeErr(t *testing.T, args ...string) error {
 	t.Helper()
@@ -1420,6 +1464,24 @@ func executeErr(t *testing.T, args ...string) error {
 	cmd.SetErr(&out)
 	cmd.SetArgs(args)
 	return cmd.Execute()
+}
+
+func TestCompatibilityEntrypointsRemoved(t *testing.T) {
+	tests := [][]string{
+		{"delete", "/docs/old.md"},
+		{"repo", "list"},
+		{"mount", "list"},
+		{"mount", "remove", "docs"},
+		{"attach", "openai-go", "--into", "docs/lib/openai-go"},
+		{"refresh", "docs"},
+		{"materialize", "docs"},
+		{"dematerialize", "docs"},
+	}
+	for _, args := range tests {
+		if err := executeErr(t, args...); err == nil {
+			t.Fatalf("Execute(%v) succeeded, want command removal error", args)
+		}
+	}
 }
 
 func TestFindInvalidType(t *testing.T) {
@@ -1645,12 +1707,34 @@ func TestRefreshUpdatesManifestWithoutWritingFiles(t *testing.T) {
 		catContents: map[string]string{"/docs/a.md": "alpha"},
 	}
 
-	got := executeWithClient(t, client, "refresh", "docs", "--manifest", manifestPath)
+	got := executeWithClient(t, client, "sync", "refresh", "docs", "--manifest", manifestPath)
 	if !strings.Contains(got, "refreshed 1 file") || !strings.Contains(got, "updated "+manifestPath) {
-		t.Fatalf("refresh output = %q, want refreshed count and manifest path", got)
+		t.Fatalf("sync refresh output = %q, want refreshed count and manifest path", got)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "docs", "a.md")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("materialized file stat error = %v, want not exist", err)
+	}
+	manifest := readTextFile(t, manifestPath)
+	if !strings.Contains(manifest, `local = 'docs/a.md'`) || !strings.Contains(manifest, `materialized = false`) {
+		t.Fatalf("manifest missing refreshed non-materialized entry: %s", manifest)
+	}
+}
+
+func TestSyncRefreshEntrypointUpdatesManifest(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/docs/a.md", Name: "a.md", Kind: "file", Size: 5, ModTime: "2026-05-12T00:00:00Z"},
+		},
+		catContents: map[string]string{"/docs/a.md": "alpha"},
+	}
+
+	got := executeWithClient(t, client, "sync", "refresh", "docs", "--manifest", manifestPath)
+	if !strings.Contains(got, "refreshed 1 file") || !strings.Contains(got, "updated "+manifestPath) {
+		t.Fatalf("sync refresh output = %q, want refreshed count and manifest path", got)
 	}
 	manifest := readTextFile(t, manifestPath)
 	if !strings.Contains(manifest, `local = 'docs/a.md'`) || !strings.Contains(manifest, `materialized = false`) {
@@ -1670,9 +1754,9 @@ func TestMaterializeWritesFilesAndManifest(t *testing.T) {
 		catContents: map[string]string{"/docs/nested/a.md": "alpha"},
 	}
 
-	got := executeWithClient(t, client, "materialize", "docs", "--manifest", manifestPath)
+	got := executeWithClient(t, client, "sync", "materialize", "docs", "--manifest", manifestPath)
 	if !strings.Contains(got, "materialized 1 file") {
-		t.Fatalf("materialize output = %q, want materialized count", got)
+		t.Fatalf("sync materialize output = %q, want materialized count", got)
 	}
 	if got := readTextFile(t, filepath.Join(dir, "docs", "nested", "a.md")); got != "alpha" {
 		t.Fatalf("materialized content = %q, want alpha", got)
@@ -1680,6 +1764,27 @@ func TestMaterializeWritesFilesAndManifest(t *testing.T) {
 	manifest := readTextFile(t, manifestPath)
 	if !strings.Contains(manifest, `local = 'docs/nested/a.md'`) || !strings.Contains(manifest, `materialized = true`) {
 		t.Fatalf("manifest missing materialized entry: %s", manifest)
+	}
+}
+
+func TestSyncMaterializeEntrypointWritesFilesAndManifest(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	client := &fakeClient{
+		statNode: &store.Node{Path: "/docs", Name: "docs", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/docs/a.md", Name: "a.md", Kind: "file", Size: 5, ModTime: "2026-05-12T00:00:00Z"},
+		},
+		catContents: map[string]string{"/docs/a.md": "alpha"},
+	}
+
+	got := executeWithClient(t, client, "sync", "materialize", "docs", "--manifest", manifestPath)
+	if !strings.Contains(got, "materialized 1 file") {
+		t.Fatalf("sync materialize output = %q, want materialized count", got)
+	}
+	if got := readTextFile(t, filepath.Join(dir, "docs", "a.md")); got != "alpha" {
+		t.Fatalf("materialized content = %q, want alpha", got)
 	}
 }
 
@@ -1700,9 +1805,9 @@ mtime = '2026-05-12T00:00:00Z'
 materialized = true
 `)
 
-	got := executeWithClient(t, &fakeClient{}, "dematerialize", "docs", "--manifest", manifestPath)
+	got := executeWithClient(t, &fakeClient{}, "sync", "dematerialize", "docs", "--manifest", manifestPath)
 	if !strings.Contains(got, "dematerialized 1 file") {
-		t.Fatalf("dematerialize output = %q, want dematerialized count", got)
+		t.Fatalf("sync dematerialize output = %q, want dematerialized count", got)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "docs", "nested", "a.md")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("dematerialized file stat error = %v, want not exist", err)
@@ -1713,6 +1818,32 @@ materialized = true
 	manifest := readTextFile(t, manifestPath)
 	if !strings.Contains(manifest, `local = 'docs/nested/a.md'`) || !strings.Contains(manifest, `materialized = false`) {
 		t.Fatalf("manifest missing dematerialized entry: %s", manifest)
+	}
+}
+
+func TestSyncDematerializeEntrypointRemovesFilesAndUpdatesManifest(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
+	writeTestFile(t, filepath.Join(dir, "docs", "a.md"), "alpha")
+	writeTestFile(t, manifestPath, `version = 1
+
+[[entries]]
+local = 'docs/a.md'
+remote_doc = 'repo://self/docs/a.md'
+mount = 'docs'
+content_hash = 'sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8'
+size = 5
+mtime = '2026-05-12T00:00:00Z'
+materialized = true
+`)
+
+	got := executeWithClient(t, &fakeClient{}, "sync", "dematerialize", "docs", "--manifest", manifestPath)
+	if !strings.Contains(got, "dematerialized 1 file") {
+		t.Fatalf("sync dematerialize output = %q, want dematerialized count", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "docs", "a.md")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("dematerialized file stat error = %v, want not exist", err)
 	}
 }
 
@@ -1733,7 +1864,7 @@ mtime = '2026-05-12T00:00:00Z'
 materialized = true
 `)
 
-	executeWithClient(t, &fakeClient{}, "dematerialize", "docs", "--keep-files", "--manifest", manifestPath)
+	executeWithClient(t, &fakeClient{}, "sync", "dematerialize", "docs", "--keep-files", "--manifest", manifestPath)
 	if got := readTextFile(t, filepath.Join(dir, "docs", "a.md")); got != "alpha" {
 		t.Fatalf("kept file content = %q, want alpha", got)
 	}
@@ -1796,6 +1927,81 @@ func TestInitWritesSettingsAndAgentsInstructions(t *testing.T) {
 	if !strings.Contains(got, "updated GXFS instructions in") {
 		t.Fatalf("init output = %q, want instruction update", got)
 	}
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("SKILL.md exists for default init mode, err=%v", err)
+	}
+}
+
+func TestInitModeSkillWritesSkillOnly(t *testing.T) {
+	dir := t.TempDir()
+	got := executeInit(t, "--mode", "skill", "--docs", "knowledge", dir)
+
+	skillPath := filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")
+	skill := readTextFile(t, skillPath)
+	for _, want := range []string{
+		`gxfs ls knowledge`,
+		`gxfs cat knowledge/foo.md`,
+		`gxfs grep "pattern" knowledge`,
+		`gxfs find knowledge --name "*.md"`,
+		`gxfs stat knowledge/foo.md`,
+		`gxfs rm knowledge/foo.md`,
+		`gxfs mount sources`,
+		`docs://openai-go-sdk/reference`,
+		`gxfs sync refresh knowledge`,
+		`gxfs sync materialize knowledge`,
+		`gxfs sync dematerialize knowledge --keep-files`,
+	} {
+		if !strings.Contains(skill, want) {
+			t.Fatalf("SKILL.md = %q, missing %q", skill, want)
+		}
+	}
+	for _, notWant := range []string{
+		`gxfs delete`,
+		`gxfs refresh `,
+		`gxfs materialize `,
+		`gxfs dematerialize `,
+		`gxfs attach `,
+	} {
+		if strings.Contains(skill, notWant) {
+			t.Fatalf("SKILL.md = %q, contains removed alias %q", skill, notWant)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("AGENTS.md exists after --mode skill, err=%v", err)
+	}
+	if !strings.Contains(got, "updated GXFS skill in") {
+		t.Fatalf("init output = %q, want skill update", got)
+	}
+}
+
+func TestInitModeMdSkillWritesMarkdownAndSkill(t *testing.T) {
+	dir := t.TempDir()
+	got := executeInit(t, "--mode", "md, skill", dir)
+
+	agents := readTextFile(t, filepath.Join(dir, "AGENTS.md"))
+	if !strings.Contains(agents, command.GXFSInstructionsStart) {
+		t.Fatalf("AGENTS.md missing GXFS instructions: %q", agents)
+	}
+	skill := readTextFile(t, filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md"))
+	if !strings.Contains(skill, `gxfs mount sources`) || !strings.Contains(skill, `docs://openai-go-sdk/reference`) {
+		t.Fatalf("SKILL.md missing GXFS content: %q", skill)
+	}
+	if !strings.Contains(got, "updated GXFS instructions in") || !strings.Contains(got, "updated GXFS skill in") {
+		t.Fatalf("init output = %q, want both instruction and skill updates", got)
+	}
+}
+
+func TestInitRejectsUnsupportedMode(t *testing.T) {
+	dir := t.TempDir()
+	cmd := command.NewInitCommand()
+	cmd.SetArgs([]string{"--mode", "md,json", dir})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unsupported init mode") {
+		t.Fatalf("init --mode md,json error = %v, want unsupported init mode", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "settings.toml")); !os.IsNotExist(err) {
+		t.Fatalf("settings.toml exists after unsupported mode, err=%v", err)
+	}
 }
 
 func TestInitReplacesExistingInstructions(t *testing.T) {
@@ -1847,6 +2053,21 @@ func TestInitNoInstructionsOnlyWritesSettings(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
 		t.Fatalf("AGENTS.md exists after --no-instructions, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("SKILL.md exists after --no-instructions, err=%v", err)
+	}
+}
+
+func TestInitNoInstructionsSkipsSkillMode(t *testing.T) {
+	dir := t.TempDir()
+	executeInit(t, "--no-instructions", "--mode", "skill", dir)
+
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "settings.toml")); err != nil {
+		t.Fatalf("settings.toml stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("SKILL.md exists after --no-instructions --mode skill, err=%v", err)
 	}
 }
 
@@ -2055,6 +2276,54 @@ func TestMountAddWritesMountsToml(t *testing.T) {
 	}
 }
 
+func TestMountAddWritesDocsSourceMount(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	docsClient := &fakeClient{
+		statNode: &store.Node{Path: "/reference", Name: "reference", Kind: "dir"},
+	}
+	router := &sourceRoutingFakeClient{
+		fakeClient: &fakeClient{},
+		sources: map[string]store.Adapter{
+			"docs://openai-go-sdk": docsClient,
+		},
+	}
+	cmd := newRootCommand(router, router, "gxfs", nil)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"mount", "add", "docs://openai-go-sdk/reference", "docs/openai-go-sdk", "--no-refresh"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("mount add docs source error = %v", err)
+	}
+	if docsClient.statReq.Repo != "openai-go-sdk" || docsClient.statReq.Path != "/reference" {
+		t.Fatalf("docs stat req = %+v, want openai-go-sdk /reference", docsClient.statReq)
+	}
+	mounts := readTextFile(t, filepath.Join(dir, ".gxfs", "mounts.toml"))
+	if !strings.Contains(mounts, "local = 'docs/openai-go-sdk'") {
+		t.Fatalf("mounts.toml missing docs local path: %s", mounts)
+	}
+	if !strings.Contains(mounts, "remote = 'docs://openai-go-sdk/reference'") {
+		t.Fatalf("mounts.toml missing original docs source URI: %s", mounts)
+	}
+}
+
+func TestMountAddDocsSourceRequiresSourceRouter(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	_, err := executeWithClientErr(client, "mount", "add", "docs://openai-go-sdk/reference", "docs/openai-go-sdk", "--no-refresh")
+	if err == nil {
+		t.Fatal("expected error for docs source without SourceRouter")
+	}
+	if !errors.Is(err, store.ErrNotSupported) {
+		t.Fatalf("error = %v, want ErrNotSupported", err)
+	}
+}
+
 func TestMountAddRejectsDuplicate(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -2106,7 +2375,27 @@ func TestMountRemoveDeletesEntry(t *testing.T) {
 
 	// Add then remove
 	executeWithClient(t, client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
-	got := executeWithClient(t, client, "mount", "remove", "docs")
+	got := executeWithClient(t, client, "mount", "rm", "docs")
+	if !strings.Contains(got, "removed mount docs") {
+		t.Fatalf("output = %q, want remove confirmation", got)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gxfs", "mounts.toml"))
+	if err != nil {
+		t.Fatalf("read mounts.toml: %v", err)
+	}
+	if strings.Contains(string(data), "local = 'docs'") {
+		t.Fatalf("mounts.toml still has removed mount: %s", string(data))
+	}
+}
+
+func TestMountRmDeletesEntry(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	executeWithClient(t, client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
+	got := executeWithClient(t, client, "mount", "rm", "docs")
 	if !strings.Contains(got, "removed mount docs") {
 		t.Fatalf("output = %q, want remove confirmation", got)
 	}
@@ -2124,7 +2413,7 @@ func TestMountRemoveRejectsMissing(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	// No mounts.toml at all
-	_, err := executeWithClientErr(&fakeClient{}, "mount", "remove", "nonexistent")
+	_, err := executeWithClientErr(&fakeClient{}, "mount", "rm", "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for removing nonexistent mount")
 	}
@@ -2153,7 +2442,7 @@ materialized = true
 	}
 
 	// Remove should fail
-	_, err := executeWithClientErr(client, "mount", "remove", "docs")
+	_, err := executeWithClientErr(client, "mount", "rm", "docs")
 	if err == nil {
 		t.Fatal("expected error when materialized files exist")
 	}
@@ -2168,7 +2457,7 @@ func TestMountListShowsMounts(t *testing.T) {
 	client := &fakeClient{}
 
 	// No mounts yet → "no mounts configured"
-	got := executeWithClient(t, client, "mount", "list")
+	got := executeWithClient(t, client, "mount", "ls")
 	if !strings.Contains(got, "no mounts configured") {
 		t.Fatalf("empty list = %q, want 'no mounts configured'", got)
 	}
@@ -2177,12 +2466,58 @@ func TestMountListShowsMounts(t *testing.T) {
 	executeWithClient(t, client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
 	executeWithClient(t, client, "mount", "add", "repo://self/api", "api", "--mode", "writable", "--no-refresh")
 
-	got = executeWithClient(t, client, "mount", "list")
+	got = executeWithClient(t, client, "mount", "ls")
 	if !strings.Contains(got, "docs\trepo://self/docs\treadonly") {
 		t.Fatalf("list output missing docs mount: %q", got)
 	}
 	if !strings.Contains(got, "api\trepo://self/api\twritable") {
 		t.Fatalf("list output missing api mount: %q", got)
+	}
+}
+
+func TestMountLsShowsMounts(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	client := &fakeClient{}
+
+	executeWithClient(t, client, "mount", "add", "repo://self/docs", "docs", "--no-refresh")
+	got := executeWithClient(t, client, "mount", "ls")
+	if !strings.Contains(got, "docs\trepo://self/docs\treadonly") {
+		t.Fatalf("ls output missing docs mount: %q", got)
+	}
+}
+
+func TestMountSourcesOutput(t *testing.T) {
+	client := &fakeClient{
+		mountSources: []store.MountSource{
+			{Ref: "repo://gxfs", Kind: store.SourceKindRepo, Name: "gxfs"},
+			{Ref: "repo://github%2Fopenai-go", Kind: store.SourceKindRepo, Name: "github/openai-go"},
+		},
+	}
+
+	got := executeWithClient(t, client, "mount", "sources")
+	want := "repo://gxfs\trepo\tgxfs\nrepo://github%2Fopenai-go\trepo\tgithub/openai-go\n"
+	if got != want {
+		t.Fatalf("mount sources output = %q, want %q", got, want)
+	}
+}
+
+func TestMountSourcesJSONOutput(t *testing.T) {
+	client := &fakeClient{
+		mountSources: []store.MountSource{
+			{Ref: "repo://gxfs", Kind: store.SourceKindRepo, Name: "gxfs", Description: "repository namespace"},
+		},
+	}
+
+	got := executeWithClient(t, client, "mount", "sources", "--json")
+	var resp struct {
+		Sources []store.MountSource `json:"sources"`
+	}
+	if err := json.Unmarshal([]byte(got), &resp); err != nil {
+		t.Fatalf("decode mount sources JSON: %v\n%s", err, got)
+	}
+	if len(resp.Sources) != 1 || resp.Sources[0].Ref != "repo://gxfs" || resp.Sources[0].Kind != store.SourceKindRepo {
+		t.Fatalf("mount sources JSON = %+v, want gxfs repo source", resp)
 	}
 }
 
@@ -2292,7 +2627,7 @@ func TestRefreshMountedRemoteDocCorrect(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"refresh", "docs/api"})
+	cmd.SetArgs([]string{"sync", "refresh", "docs/api"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("refresh error: %v", err)
@@ -2368,6 +2703,58 @@ func TestSyncPullMountedRemoteDocCorrect(t *testing.T) {
 	}
 }
 
+func TestRefreshDocsMountedRemoteDocPreservesDocsSource(t *testing.T) {
+	resolver, err := mount.NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/openai-go-sdk", Remote: "docs://openai-go-sdk/reference", Mode: "readonly", Source: "manual"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	docsClient := &fakeClient{
+		statNode: &store.Node{Path: "/reference", Name: "reference", Kind: "dir"},
+		lsNodes: []store.Node{
+			{Path: "/reference/usage.md", Name: "usage.md", Kind: "file"},
+		},
+		catContent: "# Usage\n",
+	}
+	router := &sourceRoutingFakeClient{
+		fakeClient: &fakeClient{},
+		sources: map[string]store.Adapter{
+			"docs://openai-go-sdk": docsClient,
+		},
+	}
+	adapter := mount.NewAdapter(router, resolver)
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	cmd := newRootCommand(adapter, router, "gxfs", resolver)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"sync", "refresh", "docs/openai-go-sdk"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("refresh docs source error: %v", err)
+	}
+
+	manifest, err := syncmanifest.Load(filepath.Join(".gxfs", "manifest.toml"))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if len(manifest.Entries) != 1 {
+		t.Fatalf("manifest entries = %d, want 1", len(manifest.Entries))
+	}
+	entry := manifest.Entries[0]
+	if entry.Local != "docs/openai-go-sdk/usage.md" {
+		t.Errorf("local = %q, want docs/openai-go-sdk/usage.md", entry.Local)
+	}
+	if entry.RemoteDoc != "docs://openai-go-sdk/reference/usage.md" {
+		t.Errorf("remote_doc = %q, want docs://openai-go-sdk/reference/usage.md", entry.RemoteDoc)
+	}
+}
+
 // TestRefreshMountedDirtyPathNormalizesLocal verifies that non-canonical
 // input paths like "./docs/api/" or "docs/api/" produce a clean manifest
 // local path "docs/api/endpoint.md" (not "./docs/api/..." or "docs/api//...").
@@ -2398,7 +2785,7 @@ func TestRefreshMountedDirtyPathNormalizesLocal(t *testing.T) {
 			var out bytes.Buffer
 			cmd.SetOut(&out)
 			cmd.SetErr(&out)
-			cmd.SetArgs([]string{"refresh", input})
+			cmd.SetArgs([]string{"sync", "refresh", input})
 
 			if err := cmd.Execute(); err != nil {
 				t.Fatalf("refresh %q error: %v", input, err)
@@ -2615,7 +3002,7 @@ materialized = false
 	manifestPath := filepath.Join(dir, ".gxfs", "manifest.toml")
 	writeTestFile(t, manifestPath, "version = 1\n\n"+strings.Join(manifestEntries, "\n"))
 
-	got := executeWithClient(t, client, "refresh", "docs", "--manifest", manifestPath)
+	got := executeWithClient(t, client, "sync", "refresh", "docs", "--manifest", manifestPath)
 
 	// Verify only nChanged files were Cat'd
 	if len(client.catReqs) != nChanged {
@@ -2675,7 +3062,7 @@ func TestRefreshMountBatchHashesPathMapping(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"refresh", "docs/api"})
+	cmd.SetArgs([]string{"sync", "refresh", "docs/api"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("refresh error: %v", err)
@@ -2752,7 +3139,7 @@ materialized = false
 	writeTestFile(t, manifestPath, "version = 1\n\n"+strings.Join(manifestEntries, "\n"))
 
 	// Step 1: refresh — should skip Cat (all hashes match)
-	refreshOut := executeWithClient(t, client, "refresh", "docs", "--manifest", manifestPath)
+	refreshOut := executeWithClient(t, client, "sync", "refresh", "docs", "--manifest", manifestPath)
 	if !strings.Contains(refreshOut, "refreshed") {
 		t.Fatalf("refresh output = %q, want refreshed", refreshOut)
 	}
@@ -2763,7 +3150,7 @@ materialized = false
 	}
 
 	// Step 2: materialize same root — must write real content, not empty
-	matOut := executeWithClient(t, client, "materialize", "docs", "--manifest", manifestPath)
+	matOut := executeWithClient(t, client, "sync", "materialize", "docs", "--manifest", manifestPath)
 	if !strings.Contains(matOut, "materialized") {
 		t.Fatalf("materialize output = %q, want materialized", matOut)
 	}
@@ -2783,17 +3170,17 @@ materialized = false
 	}
 }
 
-func TestRepoListOutput(t *testing.T) {
-	out, _ := execute(t, "repo", "list")
+func TestRepoLsOutput(t *testing.T) {
+	out, _ := execute(t, "repo", "ls")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("repo list: got %d lines, want 2: %q", len(lines), out)
+		t.Fatalf("repo ls: got %d lines, want 2: %q", len(lines), out)
 	}
 	if lines[0] != "my-project" {
-		t.Errorf("repo list[0] = %q, want my-project", lines[0])
+		t.Errorf("repo ls[0] = %q, want my-project", lines[0])
 	}
 	if lines[1] != "github/openai-go" {
-		t.Errorf("repo list[1] = %q, want github/openai-go", lines[1])
+		t.Errorf("repo ls[1] = %q, want github/openai-go", lines[1])
 	}
 }
 
@@ -2821,37 +3208,44 @@ func TestGlobAllReposOutput(t *testing.T) {
 	}
 }
 
-func TestAttachNotFound(t *testing.T) {
-	err := executeErr(t, "attach", "not-found-repo", "--into", "docs/lib")
+func TestMountAttachNotFound(t *testing.T) {
+	err := executeErr(t, "mount", "attach", "not-found-repo", "--into", "docs/lib")
 	if err == nil {
-		t.Fatal("attach not-found-repo: expected error, got nil")
+		t.Fatal("mount attach not-found-repo: expected error, got nil")
 	}
 	if !strings.Contains(err.Error(), "no repos matched") {
-		t.Errorf("attach error = %q, want 'no repos matched'", err.Error())
+		t.Errorf("mount attach error = %q, want 'no repos matched'", err.Error())
 	}
 }
 
-func TestAttachMultipleMatches(t *testing.T) {
+func TestMountAttachMultipleMatches(t *testing.T) {
 	// "project" matches nothing because suffix match is on last segment only
 	// Let's test ambiguous match by adding another repo ending in "openai-go"
 	// Actually our fakeClient returns ["my-project", "github/openai-go"]
 	// "openai-go" should uniquely match "github/openai-go" (suffix on last segment)
 }
 
-func TestAttachUniqueMatch(t *testing.T) {
+func TestMountAttachUniqueMatch(t *testing.T) {
 	// "openai-go" matches "github/openai-go" uniquely via suffix match
 	// But this requires a real mounts.toml file, so we just test the matching logic
 	// The attach command writes to mounts.toml and calls Stat, which our fakeClient handles
-	out, _ := execute(t, "attach", "openai-go", "--into", "docs/lib/openai-go", "--force")
+	out, _ := execute(t, "mount", "attach", "openai-go", "--into", "docs/lib/openai-go", "--force")
 	if !strings.Contains(out, "attached") && !strings.Contains(out, "replaced mount") {
-		t.Errorf("attach output = %q, want 'attached' or 'replaced mount'", out)
+		t.Errorf("mount attach output = %q, want 'attached' or 'replaced mount'", out)
 	}
 }
 
-func TestAttachDryRun(t *testing.T) {
-	out, _ := execute(t, "attach", "openai-go", "--into", "docs/lib/openai-go", "--dry-run")
+func TestMountAttachDryRunOutput(t *testing.T) {
+	out, _ := execute(t, "mount", "attach", "openai-go", "--into", "docs/lib/openai-go", "--dry-run")
 	if !strings.Contains(out, "[dry-run]") {
-		t.Errorf("attach --dry-run output = %q, want '[dry-run]'", out)
+		t.Errorf("mount attach --dry-run output = %q, want '[dry-run]'", out)
+	}
+}
+
+func TestMountAttachDryRun(t *testing.T) {
+	out, _ := execute(t, "mount", "attach", "openai-go", "--into", "docs/lib/openai-go", "--dry-run")
+	if !strings.Contains(out, "[dry-run]") {
+		t.Errorf("mount attach --dry-run output = %q, want '[dry-run]'", out)
 	}
 }
 
@@ -3691,12 +4085,30 @@ func TestWriteSelfRepoDeleteNoBaselineStillWorks(t *testing.T) {
 
 	fake := &fakeClient{}
 	cmd := newRootCommand(fake, fake, "my-repo", nil)
-	cmd.SetArgs([]string{"delete", "/docs/old.md"})
+	cmd.SetArgs([]string{"rm", "/docs/old.md"})
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("self-repo delete without baseline should succeed, got: %v", err)
+	}
+}
+
+func TestRmUsesDeleteOperation(t *testing.T) {
+	fake := &fakeClient{}
+	cmd := newRootCommand(fake, fake, "my-repo", nil)
+	cmd.SetArgs([]string{"rm", "/docs/old.md"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("rm should delete without error, got: %v", err)
+	}
+	if len(fake.deleteReqs) != 1 {
+		t.Fatalf("rm Delete requests = %d, want 1", len(fake.deleteReqs))
+	}
+	if fake.deleteReqs[0].Path != "/docs/old.md" {
+		t.Fatalf("rm Delete path = %q, want /docs/old.md", fake.deleteReqs[0].Path)
 	}
 }
 

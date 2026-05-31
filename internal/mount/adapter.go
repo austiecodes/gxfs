@@ -43,13 +43,17 @@ func (a *Adapter) LS(ctx context.Context, req store.LSRequest) (*store.LSRespons
 	if err != nil {
 		return nil, err
 	}
-	req.Repo = resolved.RemoteRepo
-	req.Path = resolved.RemotePath
-	resp, err := a.base.LS(ctx, req)
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
 	if err != nil {
 		return nil, err
 	}
-	a.localizeNodes(req.Repo, resp.Nodes)
+	req.Repo = resolved.Source.Name
+	req.Path = resolved.Source.Path
+	resp, err := sourceAdapter.LS(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	a.localizeNodesSource(resolved.Source, resp.Nodes)
 	return resp, nil
 }
 
@@ -81,13 +85,17 @@ func (a *Adapter) Tree(ctx context.Context, req store.TreeRequest) (*store.TreeR
 	if err != nil {
 		return nil, err
 	}
-	req.Repo = resolved.RemoteRepo
-	req.Path = resolved.RemotePath
-	resp, err := a.base.Tree(ctx, req)
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
 	if err != nil {
 		return nil, err
 	}
-	if local, ok := a.resolver.ToLocal(req.Repo, resp.Root.Path); ok {
+	req.Repo = resolved.Source.Name
+	req.Path = resolved.Source.Path
+	resp, err := sourceAdapter.Tree(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if local, ok := a.resolver.ToLocalSource(sourceWithPath(resolved.Source, resp.Root.Path)); ok {
 		resp.Root.Path = displayLocal(local)
 		resp.Root.Name = pathBase(resp.Root.Path)
 	}
@@ -100,13 +108,17 @@ func (a *Adapter) Cat(ctx context.Context, req store.CatRequest) (*store.CatResp
 	if err != nil {
 		return nil, err
 	}
-	req.Repo = resolved.RemoteRepo
-	req.Path = resolved.RemotePath
-	resp, err := a.base.Cat(ctx, req)
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
 	if err != nil {
 		return nil, err
 	}
-	if local, ok := a.resolver.ToLocal(req.Repo, resp.Path); ok {
+	req.Repo = resolved.Source.Name
+	req.Path = resolved.Source.Path
+	resp, err := sourceAdapter.Cat(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if local, ok := a.resolver.ToLocalSource(sourceWithPath(resolved.Source, resp.Path)); ok {
 		resp.Path = displayLocal(local)
 	}
 	return resp, nil
@@ -121,14 +133,18 @@ func (a *Adapter) Grep(ctx context.Context, req store.GrepRequest) (*store.GrepR
 	if err != nil {
 		return nil, err
 	}
-	req.Repo = resolved.RemoteRepo
-	req.Path = resolved.RemotePath
-	resp, err := a.base.Grep(ctx, req)
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
+	if err != nil {
+		return nil, err
+	}
+	req.Repo = resolved.Source.Name
+	req.Path = resolved.Source.Path
+	resp, err := sourceAdapter.Grep(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	for i := range resp.Matches {
-		if local, ok := a.resolver.ToLocal(req.Repo, resp.Matches[i].Path); ok {
+		if local, ok := a.resolver.ToLocalSource(sourceWithPath(resolved.Source, resp.Matches[i].Path)); ok {
 			resp.Matches[i].Path = displayLocal(local)
 		}
 	}
@@ -156,13 +172,17 @@ func (a *Adapter) Find(ctx context.Context, req store.FindRequest) (*store.FindR
 	if err != nil {
 		return nil, err
 	}
-	req.Repo = resolved.RemoteRepo
-	req.Path = resolved.RemotePath
-	resp, err := a.base.Find(ctx, req)
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
 	if err != nil {
 		return nil, err
 	}
-	a.localizeNodes(req.Repo, resp.Nodes)
+	req.Repo = resolved.Source.Name
+	req.Path = resolved.Source.Path
+	resp, err := sourceAdapter.Find(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	a.localizeNodesSource(resolved.Source, resp.Nodes)
 	return resp, nil
 }
 
@@ -183,13 +203,17 @@ func (a *Adapter) Stat(ctx context.Context, req store.StatRequest) (*store.StatR
 	if err != nil {
 		return nil, err
 	}
-	req.Repo = resolved.RemoteRepo
-	req.Path = resolved.RemotePath
-	resp, err := a.base.Stat(ctx, req)
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
 	if err != nil {
 		return nil, err
 	}
-	if local, ok := a.resolver.ToLocal(req.Repo, resp.Node.Path); ok {
+	req.Repo = resolved.Source.Name
+	req.Path = resolved.Source.Path
+	resp, err := sourceAdapter.Stat(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if local, ok := a.resolver.ToLocalSource(sourceWithPath(resolved.Source, resp.Node.Path)); ok {
 		resp.Node.Path = displayLocal(local)
 		resp.Node.Name = pathBase(resp.Node.Path)
 	}
@@ -201,13 +225,17 @@ func (a *Adapter) Put(ctx context.Context, req store.PutRequest) (*store.PutResp
 	if err != nil {
 		return nil, err
 	}
-	req.Repo = resolved.RemoteRepo
-	req.Path = resolved.RemotePath
-	resp, err := a.base.Put(ctx, req)
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
 	if err != nil {
 		return nil, err
 	}
-	if local, ok := a.resolver.ToLocal(req.Repo, resp.Node.Path); ok {
+	req.Repo = resolved.Source.Name
+	req.Path = resolved.Source.Path
+	resp, err := sourceAdapter.Put(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if local, ok := a.resolver.ToLocalSource(sourceWithPath(resolved.Source, resp.Node.Path)); ok {
 		resp.Node.Path = displayLocal(local)
 		resp.Node.Name = pathBase(resp.Node.Path)
 	}
@@ -219,9 +247,13 @@ func (a *Adapter) Delete(ctx context.Context, req store.DeleteRequest) (*store.D
 	if err != nil {
 		return nil, err
 	}
-	req.Repo = resolved.RemoteRepo
-	req.Path = resolved.RemotePath
-	return a.base.Delete(ctx, req)
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
+	if err != nil {
+		return nil, err
+	}
+	req.Repo = resolved.Source.Name
+	req.Path = resolved.Source.Path
+	return sourceAdapter.Delete(ctx, req)
 }
 
 func (a *Adapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditResponse, error) {
@@ -229,13 +261,17 @@ func (a *Adapter) Edit(ctx context.Context, req store.EditRequest) (*store.EditR
 	if err != nil {
 		return nil, err
 	}
-	req.Repo = resolved.RemoteRepo
-	req.Path = resolved.RemotePath
-	resp, err := a.base.Edit(ctx, req)
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
 	if err != nil {
 		return nil, err
 	}
-	if local, ok := a.resolver.ToLocal(req.Repo, resp.Path); ok {
+	req.Repo = resolved.Source.Name
+	req.Path = resolved.Source.Path
+	resp, err := sourceAdapter.Edit(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if local, ok := a.resolver.ToLocalSource(sourceWithPath(resolved.Source, resp.Path)); ok {
 		resp.Path = displayLocal(local)
 	}
 	return resp, nil
@@ -259,13 +295,39 @@ func (a *Adapter) Glob(ctx context.Context, req store.GlobRequest) (*store.GlobR
 	return a.base.Glob(ctx, req)
 }
 
-func (a *Adapter) localizeNodes(repo string, nodes []store.Node) {
+func (a *Adapter) localizeNodesSource(source store.SourceRef, nodes []store.Node) {
 	for i := range nodes {
-		if local, ok := a.resolver.ToLocal(repo, nodes[i].Path); ok {
+		if local, ok := a.resolver.ToLocalSource(sourceWithPath(source, nodes[i].Path)); ok {
 			nodes[i].Path = displayLocal(local)
 			nodes[i].Name = pathBase(nodes[i].Path)
 		}
 	}
+}
+
+func (a *Adapter) adapterForSource(ctx context.Context, source store.SourceRef) (store.Adapter, error) {
+	switch source.Kind {
+	case store.SourceKindRepo:
+		return a.base, nil
+	case store.SourceKindDocs:
+		router, ok := a.base.(store.SourceRouter)
+		if !ok {
+			return nil, unsupportedSourceError(source)
+		}
+		return router.AdapterForSource(ctx, source)
+	case store.SourceKindDocset:
+		return nil, unsupportedSourceError(source)
+	default:
+		return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
+	}
+}
+
+func sourceWithPath(source store.SourceRef, p string) store.SourceRef {
+	source.Path = p
+	return source
+}
+
+func unsupportedSourceError(source store.SourceRef) error {
+	return fmt.Errorf("%w: mount source %s is not supported yet", store.ErrNotSupported, source.Kind)
 }
 
 func pathBase(p string) string {
@@ -340,13 +402,13 @@ func (a *Adapter) buildCompositeTree(ctx context.Context, localPath string, all 
 		if err != nil {
 			return nil, err
 		}
-		if err := a.collectMountNodes(ctx, nodes, resolved.RemoteRepo, resolved.RemotePath, moreSpecificMounts(base.local, a.resolver.mounts), all); err != nil {
+		if err := a.collectMountNodes(ctx, nodes, resolved.Source, moreSpecificMounts(base.local, a.resolver.mounts), all); err != nil {
 			return nil, err
 		}
 	}
 
 	for _, mount := range descendants {
-		if err := a.collectMountNodes(ctx, nodes, mount.remoteRepo, mount.remoteRoot, moreSpecificMounts(mount.local, a.resolver.mounts), all); err != nil {
+		if err := a.collectMountNodes(ctx, nodes, mount.source, moreSpecificMounts(mount.local, a.resolver.mounts), all); err != nil {
 			return nil, err
 		}
 	}
@@ -361,10 +423,14 @@ func (a *Adapter) buildCompositeTree(ctx context.Context, localPath string, all 
 	return vfs.NewFromNodes(list)
 }
 
-func (a *Adapter) collectMountNodes(ctx context.Context, nodes map[string]store.Node, repo, remotePath string, shadows []resolvedMount, all bool) error {
-	resp, err := a.base.LS(ctx, store.LSRequest{
-		Repo:      repo,
-		Path:      remotePath,
+func (a *Adapter) collectMountNodes(ctx context.Context, nodes map[string]store.Node, source store.SourceRef, shadows []resolvedMount, all bool) error {
+	sourceAdapter, err := a.adapterForSource(ctx, source)
+	if err != nil {
+		return err
+	}
+	resp, err := sourceAdapter.LS(ctx, store.LSRequest{
+		Repo:      source.Name,
+		Path:      source.Path,
 		Recursive: true,
 		All:       all,
 	})
@@ -372,7 +438,8 @@ func (a *Adapter) collectMountNodes(ctx context.Context, nodes map[string]store.
 		return err
 	}
 	for _, node := range resp.Nodes {
-		local, ok := a.resolver.ToLocal(repo, node.Path)
+		nodeSource := sourceWithPath(source, node.Path)
+		local, ok := a.resolver.ToLocalSource(nodeSource)
 		if !ok {
 			continue
 		}
@@ -394,8 +461,7 @@ func (a *Adapter) grepComposite(ctx context.Context, req store.GrepRequest) (*st
 	}
 
 	type fetch struct {
-		repo      string
-		path      string
+		source    store.SourceRef
 		mountRoot string
 	}
 
@@ -406,15 +472,13 @@ func (a *Adapter) grepComposite(ctx context.Context, req store.GrepRequest) (*st
 			return nil, err
 		}
 		fetches = append(fetches, fetch{
-			repo:      resolved.RemoteRepo,
-			path:      resolved.RemotePath,
+			source:    resolved.Source,
 			mountRoot: base.local,
 		})
 	}
 	for _, mount := range descendants {
 		fetches = append(fetches, fetch{
-			repo:      mount.remoteRepo,
-			path:      mount.remoteRoot,
+			source:    mount.source,
 			mountRoot: mount.local,
 		})
 	}
@@ -422,10 +486,14 @@ func (a *Adapter) grepComposite(ctx context.Context, req store.GrepRequest) (*st
 	matches := make([]store.Match, 0)
 	seen := make(map[string]struct{})
 	for _, fetch := range fetches {
+		sourceAdapter, err := a.adapterForSource(ctx, fetch.source)
+		if err != nil {
+			return nil, err
+		}
 		shadows := moreSpecificMounts(fetch.mountRoot, a.resolver.mounts)
-		resp, err := a.base.Grep(ctx, store.GrepRequest{
-			Repo:            fetch.repo,
-			Path:            fetch.path,
+		resp, err := sourceAdapter.Grep(ctx, store.GrepRequest{
+			Repo:            fetch.source.Name,
+			Path:            fetch.source.Path,
 			Pattern:         req.Pattern,
 			Regex:           req.Regex,
 			CaseInsensitive: req.CaseInsensitive,
@@ -442,7 +510,8 @@ func (a *Adapter) grepComposite(ctx context.Context, req store.GrepRequest) (*st
 			return nil, err
 		}
 		for _, match := range resp.Matches {
-			localPath, ok := a.resolver.ToLocal(fetch.repo, match.Path)
+			matchSource := sourceWithPath(fetch.source, match.Path)
+			localPath, ok := a.resolver.ToLocalSource(matchSource)
 			if !ok || shadowedByMount(localPath, "file", shadows) {
 				continue
 			}
@@ -514,16 +583,20 @@ func (a *Adapter) BatchHashes(ctx context.Context, req store.HashRequest) (*stor
 	if err != nil {
 		return nil, err
 	}
-	resp, err := a.base.BatchHashes(ctx, store.HashRequest{
-		Repo: resolved.RemoteRepo,
-		Path: resolved.RemotePath,
+	sourceAdapter, err := a.adapterForSource(ctx, resolved.Source)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := sourceAdapter.BatchHashes(ctx, store.HashRequest{
+		Repo: resolved.Source.Name,
+		Path: resolved.Source.Path,
 	})
 	if err != nil {
 		return nil, err
 	}
 	// Map remote paths to local display paths
 	for i, ch := range resp.Hashes {
-		if local, ok := a.resolver.ToLocal(req.Repo, ch.Path); ok {
+		if local, ok := a.resolver.ToLocalSource(sourceWithPath(resolved.Source, ch.Path)); ok {
 			resp.Hashes[i].Path = displayLocal(local)
 		}
 	}

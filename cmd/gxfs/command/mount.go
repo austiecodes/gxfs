@@ -1,6 +1,8 @@
 package command
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,14 +18,24 @@ import (
 	"github.com/austiecodes/gxfs/internal/syncmanifest"
 )
 
+type mountSourceLister interface {
+	MountSources(ctx context.Context) ([]store.MountSource, error)
+}
+
 func NewMountCommand(adapter, rawAdapter store.Adapter, repo string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mount",
 		Short: "Manage mount points",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
 	}
 	cmd.AddCommand(newMountAddCommand(rawAdapter, repo))
 	cmd.AddCommand(newMountRemoveCommand())
 	cmd.AddCommand(newMountListCommand())
+	cmd.AddCommand(newMountSourcesCommand(rawAdapter))
+	cmd.AddCommand(NewAttachCommand(rawAdapter, repo))
 	return cmd
 }
 
@@ -35,7 +47,7 @@ func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <remote-ref> <local-path>",
 		Short: "Add a mount point",
-		Long:  "Add a mount point mapping a remote path to a local path.\nSupports repo://self/<path> and repo://<other-repo>/<path> references.",
+		Long:  "Add a mount point mapping a source path to a local path.\nSupports repo://self/<path>, repo://<other-repo>/<path>, and docs://<name>/<path> references.",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			remoteRef := args[0]
@@ -45,8 +57,7 @@ func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 				return fmt.Errorf("local path must be a non-empty relative path")
 			}
 
-			// Parse the remote ref to extract target repo and path.
-			targetRepo, remotePath, err := mountadapter.ParseRemoteRef(repo, remoteRef)
+			source, err := mountadapter.ParseSourceRef(repo, remoteRef)
 			if err != nil {
 				return err
 			}
@@ -55,17 +66,8 @@ func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 				return fmt.Errorf("mode must be readonly or writable, got %q", mode)
 			}
 
-			// Use raw adapter (direct client, no mount resolver) to validate
-			// the remote path exists on the server, using the target repo.
-			if remotePath == "/" {
-				// Root mount: validate the target repo exists by statting its root.
-				if _, err := rawAdapter.Stat(cmd.Context(), store.StatRequest{Repo: targetRepo, Path: "/"}); err != nil {
-					return fmt.Errorf("remote repo %s does not exist: %w", targetRepo, err)
-				}
-			} else {
-				if _, err := rawAdapter.Stat(cmd.Context(), store.StatRequest{Repo: targetRepo, Path: remotePath}); err != nil {
-					return fmt.Errorf("remote path %s does not exist: %w", remoteRef, err)
-				}
+			if err := validateMountSource(cmd.Context(), rawAdapter, source, remoteRef); err != nil {
+				return err
 			}
 
 			mountsPath := defaultMountsPath()
@@ -122,9 +124,35 @@ func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 	return cmd
 }
 
+func validateMountSource(ctx context.Context, rawAdapter store.Adapter, source store.SourceRef, rawRef string) error {
+	sourceAdapter, err := adapterForCommandSource(ctx, rawAdapter, source)
+	if err != nil {
+		return fmt.Errorf("remote source %s is not supported: %w", rawRef, err)
+	}
+	if _, err := sourceAdapter.Stat(ctx, store.StatRequest{Repo: source.Name, Path: source.Path}); err != nil {
+		return fmt.Errorf("remote path %s does not exist: %w", rawRef, err)
+	}
+	return nil
+}
+
+func adapterForCommandSource(ctx context.Context, rawAdapter store.Adapter, source store.SourceRef) (store.Adapter, error) {
+	switch source.Kind {
+	case store.SourceKindRepo:
+		return rawAdapter, nil
+	case store.SourceKindDocs, store.SourceKindDocset:
+		router, ok := rawAdapter.(store.SourceRouter)
+		if !ok {
+			return nil, store.ErrNotSupported
+		}
+		return router.AdapterForSource(ctx, source)
+	default:
+		return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
+	}
+}
+
 func newMountRemoveCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "remove <local-path>",
+		Use:   "rm <local-path>",
 		Short: "Remove a mount point",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -155,7 +183,7 @@ func newMountRemoveCommand() *cobra.Command {
 				entries := syncmanifest.EntriesUnder(manifest, localPath)
 				for _, e := range entries {
 					if e.Materialized {
-						return fmt.Errorf("cannot remove mount %s: materialized files exist under this path (run `gxfs dematerialize %s` first)", localPath, localPath)
+						return fmt.Errorf("cannot remove mount %s: materialized files exist under this path (run `gxfs sync dematerialize %s` first)", localPath, localPath)
 					}
 				}
 			}
@@ -176,7 +204,7 @@ func newMountRemoveCommand() *cobra.Command {
 
 func newMountListCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   "ls",
 		Short: "List current mount points",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -199,6 +227,37 @@ func newMountListCommand() *cobra.Command {
 			return nil
 		},
 	}
+	return cmd
+}
+
+func newMountSourcesCommand(rawAdapter store.Adapter) *cobra.Command {
+	var asJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "sources",
+		Short: "List available mount sources",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			lister, ok := rawAdapter.(mountSourceLister)
+			if !ok {
+				return fmt.Errorf("mount source listing is not supported by the current adapter")
+			}
+			sources, err := lister.MountSources(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				enc := json.NewEncoder(cmd.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(map[string][]store.MountSource{"sources": sources})
+			}
+			for _, source := range sources {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\n", source.Ref, source.Kind, source.Name)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print mount sources as JSON")
 	return cmd
 }
 

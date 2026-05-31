@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/austiecodes/gxfs/internal/store"
 )
 
 func TestGXFSPostgresServerCLI(t *testing.T) {
@@ -145,7 +147,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 
 	t.Run("delete removes file", func(t *testing.T) {
 		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/test-del.md", "to be deleted")
-		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/docs/test-del.md")
+		runCLI(t, repoRoot, cliPath, cliConfig, "rm", "/docs/test-del.md")
 		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/docs")
 		if strings.Contains(got, "test-del.md") {
 			t.Fatalf("file still visible after delete: %q", got)
@@ -154,7 +156,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 
 	t.Run("delete removes directory recursively", func(t *testing.T) {
 		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/test-dir/child.txt", "child")
-		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/docs/test-dir")
+		runCLI(t, repoRoot, cliPath, cliConfig, "rm", "/docs/test-dir")
 		got := runCLI(t, repoRoot, cliPath, cliConfig, "ls", "/docs")
 		if strings.Contains(got, "test-dir") {
 			t.Fatalf("dir still visible after recursive delete: %q", got)
@@ -233,7 +235,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		writeFile(t, matConfig, cliConfigText(serverPort))
 		writeFile(t, matMounts, cliMountsText())
 
-		got := runCLIInDir(t, projectDir, cliPath, matConfig, "refresh", "docs/materialize")
+		got := runCLIInDir(t, projectDir, cliPath, matConfig, "sync", "refresh", "docs/materialize")
 		if !strings.Contains(got, "refreshed 1 file") || strings.Contains(got, "materialized") {
 			t.Fatalf("refresh output = %q, want refreshed only", got)
 		}
@@ -241,7 +243,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 			t.Fatalf("file after refresh stat error = %v, want not exist", err)
 		}
 
-		got = runCLIInDir(t, projectDir, cliPath, matConfig, "materialize", "docs/materialize")
+		got = runCLIInDir(t, projectDir, cliPath, matConfig, "sync", "materialize", "docs/materialize")
 		if !strings.Contains(got, "materialized 1 file") {
 			t.Fatalf("materialize output = %q, want materialized count", got)
 		}
@@ -250,7 +252,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 			t.Fatalf("materialized file = %q, want materialize alpha", materialized)
 		}
 
-		got = runCLIInDir(t, projectDir, cliPath, matConfig, "dematerialize", "docs/materialize")
+		got = runCLIInDir(t, projectDir, cliPath, matConfig, "sync", "dematerialize", "docs/materialize")
 		if !strings.Contains(got, "dematerialized 1 file") {
 			t.Fatalf("dematerialize output = %q, want dematerialized count", got)
 		}
@@ -361,6 +363,82 @@ func TestGXFSPostgresServerRoutesMultipleRepos(t *testing.T) {
 	}
 }
 
+func TestGXFSPostgresDocsNamespaceMountE2E(t *testing.T) {
+	requireDocker(t)
+
+	repoRoot := repositoryRoot(t)
+	tmp := t.TempDir()
+
+	pgPort := freePort(t)
+	containerName := fmt.Sprintf("gxfs-docs-namespace-e2e-%d-%d", os.Getpid(), time.Now().UnixNano())
+	startPostgres(t, containerName, pgPort)
+
+	cliPath := filepath.Join(tmp, "gxfs")
+	serverPath := filepath.Join(tmp, "gxfs-server")
+	buildBinary(t, repoRoot, cliPath, "./cmd/gxfs")
+	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
+
+	serverPort := freePort(t)
+	serverConfig := filepath.Join(tmp, "conf", "docs-namespace.toml")
+	os.MkdirAll(filepath.Join(tmp, "conf"), 0o755)
+	writeFile(t, serverConfig, docsNamespaceServerConfigText(serverPort, pgPort))
+
+	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
+	seedDocsNamespace(t, containerName, "shared", "/reference/guide.md", "Shared namespace guide\n")
+
+	projectDir := filepath.Join(tmp, "docs-namespace-project")
+	if err := os.MkdirAll(filepath.Join(projectDir, ".gxfs"), 0o755); err != nil {
+		t.Fatalf("mkdir project config: %v", err)
+	}
+	cliConfig := filepath.Join(projectDir, ".gxfs", "settings.toml")
+	cliMounts := filepath.Join(projectDir, ".gxfs", "mounts.toml")
+	writeFile(t, cliConfig, cliConfigText(serverPort))
+	writeFile(t, cliMounts, cliMountsText())
+
+	sources := runCLIInDir(t, projectDir, cliPath, cliConfig, "mount", "sources", "--json")
+	if !strings.Contains(sources, `"ref": "docs://shared"`) {
+		t.Fatalf("mount sources = %s, want docs://shared", sources)
+	}
+	if !strings.Contains(sources, `"ref": "repo://e2e-test"`) {
+		t.Fatalf("mount sources = %s, want repo://e2e-test", sources)
+	}
+
+	runCLIInDir(t, projectDir, cliPath, cliConfig, "mount", "add", "docs://shared/reference", "docs/shared", "--mode", "writable", "--no-refresh")
+	mounts := readFile(t, cliMounts)
+	if !strings.Contains(mounts, "remote = 'docs://shared/reference'") {
+		t.Fatalf("mounts.toml = %s, want docs://shared/reference", mounts)
+	}
+
+	cat := runCLIInDir(t, projectDir, cliPath, cliConfig, "cat", "docs/shared/guide.md")
+	if cat != "Shared namespace guide\n" {
+		t.Fatalf("cat docs namespace mount = %q, want seeded content", cat)
+	}
+
+	refresh := runCLIInDir(t, projectDir, cliPath, cliConfig, "sync", "refresh", "docs/shared")
+	if !strings.Contains(refresh, "refreshed 1 file") {
+		t.Fatalf("sync refresh output = %q, want refreshed count", refresh)
+	}
+	manifest := readFile(t, filepath.Join(projectDir, ".gxfs", "manifest.toml"))
+	if !strings.Contains(manifest, "remote_doc = 'docs://shared/reference/guide.md'") {
+		t.Fatalf("manifest = %s, want docs:// remote_doc", manifest)
+	}
+
+	materialize := runCLIInDir(t, projectDir, cliPath, cliConfig, "sync", "materialize", "docs/shared")
+	if !strings.Contains(materialize, "materialized 1 file") {
+		t.Fatalf("sync materialize output = %q, want materialized count", materialize)
+	}
+	materialized := readFile(t, filepath.Join(projectDir, "docs", "shared", "guide.md"))
+	if materialized != "Shared namespace guide\n" {
+		t.Fatalf("materialized docs namespace file = %q, want seeded content", materialized)
+	}
+
+	runCLIInDir(t, projectDir, cliPath, cliConfig, "write", "docs/shared/guide.md", "Updated namespace guide")
+	updated := runCLIInDir(t, projectDir, cliPath, cliConfig, "cat", "docs/shared/guide.md")
+	if updated != "Updated namespace guide" {
+		t.Fatalf("cat after docs namespace write = %q, want updated content", updated)
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 
@@ -368,7 +446,7 @@ func repositoryRoot(t *testing.T) string {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	return filepath.Dir(filepath.Dir(file))
+	return filepath.Dir(filepath.Dir(filepath.Dir(file)))
 }
 
 func requireDocker(t *testing.T) {
@@ -501,6 +579,40 @@ insert into vfs_repo_nodes(repo, path) values
 	if err != nil {
 		t.Fatalf("seed postgres: %v: %s", err, output)
 	}
+}
+
+func seedDocsNamespace(t *testing.T, containerName, namespace, docPath, content string) {
+	t.Helper()
+
+	hash := store.HashContent(content)
+	sql := fmt.Sprintf(`
+insert into gxfs_doc_namespaces(name, description, writable)
+values (%s, 'Shared e2e docs namespace', true)
+on conflict (name) do update set writable = excluded.writable;
+
+with doc as (
+	insert into gxfs_docs(title, content, content_hash, updated_at)
+	values (%s, %s, %s, '2026-01-06T00:00:00Z')
+	returning id
+)
+insert into gxfs_doc_namespace_paths(namespace, path, doc_id, size, mtime)
+select %s, %s, id, %d, '2026-01-06T00:00:00Z' from doc;
+`, sqlLiteral(namespace), sqlLiteral(filepath.Base(docPath)), sqlLiteral(content), sqlLiteral(hash), sqlLiteral(namespace), sqlLiteral(docPath), len(content))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	output, err := run(ctx, "", strings.NewReader(sql),
+		"docker", "exec", "-i", containerName,
+		"psql", "-U", "gxfs", "-d", "gxfs", "-v", "ON_ERROR_STOP=1",
+	)
+	if err != nil {
+		t.Fatalf("seed docs namespace: %v: %s", err, output)
+	}
+}
+
+func sqlLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func buildBinary(t *testing.T, repoRoot, outPath, pkg string) {
@@ -690,6 +802,51 @@ mtime_column = "updated_at"
 `, serverPort, dsn, dsn)
 }
 
+func docsNamespaceServerConfigText(serverPort, pgPort int) string {
+	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	return fmt.Sprintf(`addr = "127.0.0.1:%d"
+
+[[repos]]
+name = "e2e-test"
+
+[repos.backend]
+type = "doc_postgres"
+
+[repos.backend.postgres]
+dsn = %q
+schema = "public"
+nodes_table = "vfs_nodes"
+content_table = "vfs_content"
+repo_nodes_table = "vfs_repo_nodes"
+
+[repos.backend.postgres.files]
+path_column = "path"
+kind_column = "kind"
+size_column = "size"
+mtime_column = "updated_at"
+
+[[docs]]
+name = "shared"
+writable = true
+
+[docs.backend]
+type = "doc_namespace_postgres"
+
+[docs.backend.postgres]
+dsn = %q
+schema = "public"
+nodes_table = "vfs_nodes"
+content_table = "vfs_content"
+repo_nodes_table = "vfs_repo_nodes"
+
+[docs.backend.postgres.files]
+path_column = "path"
+kind_column = "kind"
+size_column = "size"
+mtime_column = "updated_at"
+`, serverPort, dsn, dsn)
+}
+
 func cliConfigText(serverPort int) string {
 	return cliConfigTextForRepo(serverPort, "e2e-test")
 }
@@ -835,7 +992,7 @@ func TestDocPostgresServerE2E(t *testing.T) {
 		}
 
 		// Delete.
-		runCLI(t, repoRoot, cliPath, cliConfig, "delete", "/docs/new-file.txt")
+		runCLI(t, repoRoot, cliPath, cliConfig, "rm", "/docs/new-file.txt")
 	})
 
 	// Search should work (doc_postgres uses content_search tsvector).

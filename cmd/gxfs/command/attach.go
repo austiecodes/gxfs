@@ -25,9 +25,9 @@ path segment. On unique match, automatically runs the equivalent of
 mount add.
 
 Examples:
-  gxfs attach openai-go --into docs/lib/openai-go
-  gxfs attach github/openai-go --into docs/lib/openai-go
-  gxfs attach openai --into docs/lib/openai-go --dry-run`,
+  gxfs mount attach openai-go --into docs/lib/openai-go
+  gxfs mount attach github/openai-go --into docs/lib/openai-go
+  gxfs mount attach openai --into docs/lib/openai-go --dry-run`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			keyword := args[0]
@@ -63,7 +63,7 @@ Examples:
 
 			switch len(matches) {
 			case 0:
-				return fmt.Errorf("no repos matched %q. Use 'gxfs repo list' to see available repos", keyword)
+				return fmt.Errorf("no repos matched %q. Use 'gxfs repo ls' to see available repos", keyword)
 			case 1:
 				// Unique match — proceed
 			default:
@@ -71,7 +71,7 @@ Examples:
 				for i, m := range matches {
 					fmt.Fprintf(cmd.OutOrStdout(), "  %d. %s\n", i+1, m)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Use: gxfs attach <exact-repo-name> --into %s\n", localPath)
+				fmt.Fprintf(cmd.OutOrStdout(), "Use: gxfs mount attach <exact-repo-name> --into %s\n", localPath)
 				return fmt.Errorf("ambiguous match: %d repos", len(matches))
 			}
 

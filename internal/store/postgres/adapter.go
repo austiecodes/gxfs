@@ -27,6 +27,7 @@ type Config struct {
 	ContentTable   string
 	RepoNodesTable string
 	Files          FileTableConfig
+	DocBinding     DocBindingConfig
 	CacheTTL       time.Duration
 }
 
@@ -35,6 +36,11 @@ type FileTableConfig struct {
 	KindColumn  string
 	SizeColumn  string
 	MTimeColumn string
+}
+
+type DocBindingConfig struct {
+	PathsTable  string
+	ScopeColumn string
 }
 
 type Adapter struct {

@@ -2,7 +2,6 @@ package mount
 
 import (
 	"fmt"
-	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -24,14 +23,14 @@ type Resolver struct {
 }
 
 type resolvedMount struct {
-	local      string
-	remoteRepo string
-	remoteRoot string
-	mode       string
+	local  string
+	source store.SourceRef
+	mode   string
 }
 
 type ResolvedPath struct {
 	LocalPath  string
+	Source     store.SourceRef
 	RemoteRepo string
 	RemotePath string
 	Mode       string
@@ -48,7 +47,7 @@ func NewResolver(repo string, mounts []config.MountConfig) (*Resolver, error) {
 		if local == "" {
 			return nil, fmt.Errorf("mounts[%d].local is required", i)
 		}
-		remoteRepo, remoteRoot, err := parseRemote(repo, m.Remote)
+		source, err := parseRemote(repo, m.Remote)
 		if err != nil {
 			return nil, fmt.Errorf("mounts[%d].remote: %w", i, err)
 		}
@@ -60,10 +59,9 @@ func NewResolver(repo string, mounts []config.MountConfig) (*Resolver, error) {
 			return nil, fmt.Errorf("mounts[%d].mode must be readonly or writable", i)
 		}
 		resolved = append(resolved, resolvedMount{
-			local:      local,
-			remoteRepo: remoteRepo,
-			remoteRoot: remoteRoot,
-			mode:       mode,
+			local:  local,
+			source: source,
+			mode:   mode,
 		})
 	}
 
@@ -87,17 +85,20 @@ func (r *Resolver) Resolve(localPath string, op Operation) (ResolvedPath, error)
 		rel := strings.TrimPrefix(local, m.local)
 		rel = strings.TrimPrefix(rel, "/")
 
-		remotePath := m.remoteRoot
+		source := m.source
+		remotePath := source.Path
 		if rel != "" {
 			remotePath = path.Join(remotePath, rel)
 		}
 		if !strings.HasPrefix(remotePath, "/") {
 			remotePath = "/" + remotePath
 		}
+		source.Path = remotePath
 
 		return ResolvedPath{
 			LocalPath:  local,
-			RemoteRepo: m.remoteRepo,
+			Source:     source,
+			RemoteRepo: remoteRepoCompat(source),
 			RemotePath: remotePath,
 			Mode:       m.mode,
 		}, nil
@@ -146,15 +147,19 @@ func (r *Resolver) MountLocals() []string {
 }
 
 func (r *Resolver) ToLocal(remoteRepo, remotePath string) (string, bool) {
-	remotePath = cleanRemote(remotePath)
+	return r.ToLocalSource(store.SourceRef{Kind: store.SourceKindRepo, Name: remoteRepo, Path: remotePath})
+}
+
+func (r *Resolver) ToLocalSource(source store.SourceRef) (string, bool) {
+	source.Path = cleanRemote(source.Path)
 	for _, m := range r.mounts {
-		if remoteRepo != m.remoteRepo {
+		if source.Kind != m.source.Kind || source.Name != m.source.Name {
 			continue
 		}
-		if !underRemote(m.remoteRoot, remotePath) {
+		if !underRemote(m.source.Path, source.Path) {
 			continue
 		}
-		rel := strings.TrimPrefix(remotePath, m.remoteRoot)
+		rel := strings.TrimPrefix(source.Path, m.source.Path)
 		rel = strings.TrimPrefix(rel, "/")
 		if rel == "" {
 			return m.local, true
@@ -164,51 +169,57 @@ func (r *Resolver) ToLocal(remoteRepo, remotePath string) (string, bool) {
 	return "", false
 }
 
-func parseRemote(currentRepo, raw string) (string, string, error) {
-	const selfPrefix = "repo://self/"
-	switch {
-	case raw == "repo://self":
-		return "", "", fmt.Errorf("remote %q needs a path after self/ (e.g. repo://self/docs)", raw)
-	case strings.HasPrefix(raw, selfPrefix):
-		remoteRoot := cleanRemote(strings.TrimPrefix(raw, selfPrefix))
-		if remoteRoot == "/" {
-			return "", "", fmt.Errorf("self root mount is not allowed")
-		}
-		return currentRepo, remoteRoot, nil
-	case strings.HasPrefix(raw, "collection://"):
-		return "", "", fmt.Errorf("collection mounts are not supported in phase 1")
-	case strings.HasPrefix(raw, "repo://"):
-		rest := strings.TrimPrefix(raw, "repo://")
-		// Split at the first unencoded '/' to separate repo name from path.
-		// Repo names containing '/' (e.g. "github/openai-go") must be URL-encoded
-		// in the ref: repo://github%2Fopenai-go/docs
-		parts := strings.SplitN(rest, "/", 2)
-		if parts[0] == "" {
-			return "", "", fmt.Errorf("remote %q needs a repo name after repo://", raw)
-		}
-		remoteRepo, err := url.PathUnescape(parts[0])
-		if err != nil {
-			return "", "", fmt.Errorf("remote %q has invalid repo name: %w", raw, err)
-		}
-		remotePath := "/"
-		if len(parts) == 2 && parts[1] != "" {
-			remotePath = cleanRemote(parts[1])
-		}
-		// Reject self root mount (same as the selfPrefix branch above)
-		if remoteRepo == currentRepo && remotePath == "/" {
-			return "", "", fmt.Errorf("self root mount is not allowed")
-		}
-		return remoteRepo, remotePath, nil
-	default:
-		return "", "", fmt.Errorf("unsupported remote %q", raw)
+func parseRemote(currentRepo, raw string) (store.SourceRef, error) {
+	if raw == "repo://self" {
+		return store.SourceRef{}, fmt.Errorf("remote %q needs a path after self/ (e.g. repo://self/docs)", raw)
 	}
+	switch {
+	case strings.HasPrefix(raw, "repo://"), strings.HasPrefix(raw, "docs://"), strings.HasPrefix(raw, "docset://"), strings.HasPrefix(raw, "collection://"):
+	default:
+		return store.SourceRef{}, fmt.Errorf("unsupported remote %q", raw)
+	}
+
+	source, err := store.ParseSourceRef(raw)
+	if err != nil {
+		return store.SourceRef{}, err
+	}
+	if source.Kind == store.SourceKindRepo && source.Name == "self" {
+		source.Name = currentRepo
+		if source.Path == "/" {
+			return store.SourceRef{}, fmt.Errorf("self root mount is not allowed")
+		}
+	}
+	if source.Kind == store.SourceKindRepo && source.Name == currentRepo && source.Path == "/" {
+		return store.SourceRef{}, fmt.Errorf("self root mount is not allowed")
+	}
+	return source, nil
+}
+
+// ParseSourceRef parses a mount source reference using the same self-repo rules
+// as resolver configuration.
+func ParseSourceRef(currentRepo, raw string) (store.SourceRef, error) {
+	return parseRemote(currentRepo, raw)
 }
 
 // ParseRemoteRef parses a remote reference string (e.g. "repo://self/docs"
 // or "repo://other-repo/") into the target repo name and remote path.
 // It is the public entry point for parsing remote refs in CLI commands.
 func ParseRemoteRef(currentRepo, raw string) (repo, remotePath string, err error) {
-	return parseRemote(currentRepo, raw)
+	source, err := parseRemote(currentRepo, raw)
+	if err != nil {
+		return "", "", err
+	}
+	if source.Kind != store.SourceKindRepo {
+		return "", "", fmt.Errorf("unsupported remote %q", raw)
+	}
+	return source.Name, source.Path, nil
+}
+
+func remoteRepoCompat(source store.SourceRef) string {
+	if source.Kind != store.SourceKindRepo {
+		return ""
+	}
+	return source.Name
 }
 
 func cleanLocal(p string) string {

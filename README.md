@@ -17,10 +17,10 @@ talks to `gxfs-server`, and prints file-system-like output.
 | Area | What GXFS provides | Primary commands |
 | --- | --- | --- |
 | Virtual filesystem browsing | Unix-like listing, tree rendering, reads, metadata inspection, substring or regex grep, and path finding over mounted documentation. | `ls`, `tree`, `cat`, `stat`, `grep`, `find` |
-| Document discovery | Ranked full-text search, lexical lookup returning `repo://` references, glob discovery, and repository enumeration. Discovery can operate outside the mounted local view. | `search`, `locate`, `glob`, `repo list` |
-| Cross-repo mounts | A project can compose documentation from multiple repositories into local paths, with read-only or writable mount policy and direct remote preview. | `mount`, `attach`, `cat repo://...` |
-| Writing and synchronization | Create, replace, or delete remote docs; push local docs; pull remote metadata or files; track hashes and detect conflicting local/remote changes. | `write`, `edit`, `delete`, `sync`, `refresh`, `materialize`, `dematerialize` |
-| Collections | Group documents from multiple repositories under stable `collection://` paths and read the grouped content when the server enables collections. | `collection`, `cat collection://...` |
+| Document discovery | Ranked full-text search, lexical lookup returning `repo://` references, glob discovery, and repository enumeration. Discovery can operate outside the mounted local view. | `search`, `locate`, `glob`, `repo ls` |
+| Shared docs mounts | A project can compose documentation from repository namespaces or reusable docs namespaces into local paths, with read-only or writable mount policy and direct remote preview. | `mount`, `mount sources`, `mount attach`, `cat repo://...` |
+| Writing and synchronization | Create, replace, or delete remote docs; push local docs; pull remote metadata or files; track hashes and detect conflicting local/remote changes. | `write`, `edit`, `rm`, `sync refresh`, `sync materialize`, `sync dematerialize` |
+| Curated docsets | Optional advanced workflow for curated cross-repository document sets when the server enables collections. Shared docs should usually use `docs://` namespaces and mounts instead. | `collection` |
 | Agent integration and observability | Generate agent instructions, install Codex or Claude hooks, refresh docs at session start, and record CLI audit JSONL with optional correlation IDs. | `init`, `hook session-start` |
 
 ## Install the CLI
@@ -131,9 +131,10 @@ mode = "writable"
 source = "default"
 ```
 
-Each mount maps a local CLI path to a remote repository path. Cross-repository
-mounts use `repo://<repo>/<path>` references and default to `readonly` when
-created with `gxfs mount add`.
+Each mount maps a local CLI path to a source path. Repositories use
+`repo://<repo>/<path>` references. Reusable documentation trees use
+`docs://<name>/<path>` references. Mounts default to `readonly` when created
+with `gxfs mount add`.
 
 ## Common CLI Commands
 
@@ -161,7 +162,7 @@ Discover content, including unmounted repositories:
 gxfs search "migration rollback" --path /docs
 gxfs locate "openai client" --all-repos
 gxfs glob "**/*.md" --all-repos
-gxfs repo list
+gxfs repo ls
 gxfs cat repo://shared-docs/docs/guide.md
 ```
 
@@ -193,18 +194,20 @@ gxfs write /docs/new.md "# New Doc"
 cat local.md | gxfs write /docs/local.md
 gxfs edit /docs/new.md --old "New" --new "Updated"
 gxfs edit /docs/new.md --old "foo" --new "bar" --all
-gxfs delete /docs/new.md
-gxfs delete /docs/old-section
+gxfs rm /docs/new.md
+gxfs rm /docs/old-section
 ```
 
-Compose a local view from other repositories:
+Compose a local view from repositories or reusable docs namespaces:
 
 ```bash
+gxfs mount sources
 gxfs mount add repo://shared-docs/docs docs/shared
+gxfs mount add docs://openai-go-sdk/reference docs/openai-go-sdk
 gxfs mount add repo://shared-docs/docs docs/shared --mode writable
-gxfs mount list
-gxfs attach openai-go --into docs/libs/openai-go
-gxfs mount remove docs/shared
+gxfs mount ls
+gxfs mount attach openai-go --into docs/libs/openai-go
+gxfs mount rm docs/shared
 ```
 
 Sync local docs into GXFS:
@@ -213,13 +216,15 @@ Sync local docs into GXFS:
 gxfs sync push docs
 gxfs sync pull docs
 gxfs sync pull docs --materialize
-gxfs refresh docs
-gxfs materialize docs
-gxfs dematerialize docs
+gxfs sync refresh docs
+gxfs sync materialize docs
+gxfs sync dematerialize docs
 gxfs sync push docs --manifest .gxfs/manifest.toml
 ```
 
-Manage shared document collections when enabled by the server:
+Curated document collections are optional and advanced. Prefer `docs://`
+namespaces for reusable documentation trees. Use collections only when the
+server explicitly enables curated document sets:
 
 ```bash
 gxfs collection create best-practices --description "Reusable guidance"
@@ -309,7 +314,7 @@ Creates or overwrites a file. Parent directories are created as needed. If
 Replaces text in a file. By default only the first occurrence is replaced.
 Use `--all` to replace every occurrence.
 
-`gxfs delete <path>`
+`gxfs rm <path>`
 
 Deletes a file or directory. Directory deletes are recursive.
 
@@ -339,7 +344,7 @@ Discovers document paths by glob, including `**` recursive matching.
 - `--limit`, `--offset`: paginate results.
 - `--long`: include size and modification time.
 
-`gxfs repo list`
+`gxfs repo ls`
 
 Lists repositories available from the configured server.
 
@@ -354,11 +359,11 @@ manifest unless disabled.
 - `--force`: replace a mount at the same local path.
 - `--no-refresh`: skip the post-add manifest refresh.
 
-Use `gxfs mount list` to inspect mappings and `gxfs mount remove <local-path>`
+Use `gxfs mount ls` to inspect mappings and `gxfs mount rm <local-path>`
 to remove a mapping after any materialized files beneath it have been
 dematerialized.
 
-`gxfs attach <keyword-or-repo> --into <local-path>`
+`gxfs mount attach <keyword-or-repo> --into <local-path>`
 
 Finds a uniquely matching repository name and adds a read-only root mount.
 
@@ -371,6 +376,8 @@ Creates `.gxfs/settings.toml` and `.gxfs/mounts.toml` and, unless disabled,
 injects GXFS instructions into an agent instruction file.
 
 - default: write `AGENTS.md`
+- `--mode md|skill|md,skill`: choose Markdown instructions, local skill output,
+  or both
 - `--agent claude`: write `CLAUDE.md`
 - `--claude`: alias for `--agent claude`
 - `--no-instructions`: write config only
@@ -414,21 +421,21 @@ By default it only refreshes the manifest; it does not write local files.
 Conflict detection compares the manifest's last synced hash with current local
 and remote hashes. If both changed, pull fails unless one force flag is used.
 
-`gxfs refresh <path>`
+`gxfs sync refresh <path>`
 
 Refreshes `.gxfs/manifest.toml` for remote docs under a path without writing
 local files.
 
 - `--manifest`: custom manifest path. Defaults to `.gxfs/manifest.toml`.
 
-`gxfs materialize <path>`
+`gxfs sync materialize <path>`
 
 Refreshes the manifest and writes remote docs under the path to local markdown
 files.
 
 - `--manifest`: custom manifest path. Defaults to `.gxfs/manifest.toml`.
 
-`gxfs dematerialize <path>`
+`gxfs sync dematerialize <path>`
 
 Marks manifest entries under the path as remote-only and removes local
 materialized files.
@@ -438,8 +445,10 @@ materialized files.
 
 `gxfs collection <subcommand>`
 
-Manages named cross-repository document sets when enabled by the configured
-server. Collection names accept lowercase letters, digits, `-`, and `_`.
+Manages optional curated cross-repository document sets when enabled by the
+configured server. Prefer `docs://` namespaces plus `gxfs mount add` for
+reusable documentation trees. Collection names accept lowercase letters,
+digits, `-`, and `_`.
 
 - `create <name> [--description <text>]`: create a collection.
 - `list [--json]`: list collections.

@@ -14,18 +14,20 @@ import (
 var migrationFS embed.FS
 
 type migrationData struct {
-	SchemaName          string
-	NodesTable          string
-	ContentTable        string
-	RepoNodesTable      string
-	DocsTable           string
-	RepoPathsTable      string
-	CollectionsTable    string
-	CollectionDocsTable string
-	PathColumn          string
-	KindColumn          string
-	SizeColumn          string
-	MTimeColumn         string
+	SchemaName             string
+	NodesTable             string
+	ContentTable           string
+	RepoNodesTable         string
+	DocsTable              string
+	RepoPathsTable         string
+	DocNamespacesTable     string
+	DocNamespacePathsTable string
+	CollectionsTable       string
+	CollectionDocsTable    string
+	PathColumn             string
+	KindColumn             string
+	SizeColumn             string
+	MTimeColumn            string
 }
 
 func SchemaSQL(cfg Config) ([]string, error) {
@@ -112,6 +114,14 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 	if err != nil {
 		return migrationData{}, err
 	}
+	docNamespacesTable, err := quoteTable(cfg.Schema, "gxfs_doc_namespaces")
+	if err != nil {
+		return migrationData{}, err
+	}
+	docNamespacePathsTable, err := quoteTable(cfg.Schema, "gxfs_doc_namespace_paths")
+	if err != nil {
+		return migrationData{}, err
+	}
 	collectionsTable, err := quoteTable(cfg.Schema, "gxfs_collections")
 	if err != nil {
 		return migrationData{}, err
@@ -122,18 +132,20 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 	}
 
 	return migrationData{
-		SchemaName:          schemaName,
-		NodesTable:          nodesTable,
-		ContentTable:        contentTable,
-		RepoNodesTable:      repoNodesTable,
-		DocsTable:           docsTable,
-		RepoPathsTable:      repoPathsTable,
-		CollectionsTable:    collectionsTable,
-		CollectionDocsTable: collectionDocsTable,
-		PathColumn:          pathCol,
-		KindColumn:          kindCol,
-		SizeColumn:          sizeCol,
-		MTimeColumn:         mtimeCol,
+		SchemaName:             schemaName,
+		NodesTable:             nodesTable,
+		ContentTable:           contentTable,
+		RepoNodesTable:         repoNodesTable,
+		DocsTable:              docsTable,
+		RepoPathsTable:         repoPathsTable,
+		DocNamespacesTable:     docNamespacesTable,
+		DocNamespacePathsTable: docNamespacePathsTable,
+		CollectionsTable:       collectionsTable,
+		CollectionDocsTable:    collectionDocsTable,
+		PathColumn:             pathCol,
+		KindColumn:             kindCol,
+		SizeColumn:             sizeCol,
+		MTimeColumn:            mtimeCol,
 	}, nil
 }
 

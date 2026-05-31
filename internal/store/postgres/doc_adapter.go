@@ -20,19 +20,18 @@ import (
 	"github.com/austiecodes/gxfs/internal/vfs"
 )
 
-// DocAdapter implements store.Adapter over the document-centric tables
-// (gxfs_docs, gxfs_repo_paths).
+// DocAdapter implements store.Adapter over the document-centric tables.
 //
 // Read methods fall into two categories:
 //  1. Structure queries (LS, Find, Stat, Tree): build a vfs.Tree from
-//     gxfs_repo_paths file entries, then delegate to vfs.Tree methods.
+//     the configured doc binding table, then delegate to vfs.Tree methods.
 //     This guarantees exact behavioral compatibility with the old adapter.
 //  2. Content queries (Cat, Search, BatchHashes, Grep): query gxfs_docs
 //     directly for content, hashes, and full-text search.
 //
-// Write methods (Put, Delete, Edit) operate on gxfs_docs + gxfs_repo_paths
-// within transactions. Delete removes repo_path only (doc preserved for
-// potential cross-repo references). Put/Edit increment revision.
+// Write methods (Put, Delete, Edit) operate on gxfs_docs plus the configured
+// binding table within transactions. Delete removes the binding only (doc
+// preserved for potential cross-scope references). Put/Edit increment revision.
 type DocAdapter struct {
 	pool        *pgxpool.Pool
 	cfg         Config
@@ -49,6 +48,20 @@ var _ store.Adapter = (*DocAdapter)(nil)
 
 // NewDocAdapter creates a DocAdapter backed by document-centric tables.
 func NewDocAdapter(pool *pgxpool.Pool, cfg Config) *DocAdapter {
+	return newDocAdapter(pool, withDocRepoBinding(cfg))
+}
+
+// NewDocsNamespaceAdapter creates a DocAdapter scoped by docs namespace paths.
+func NewDocsNamespaceAdapter(pool *pgxpool.Pool, cfg Config) *DocAdapter {
+	return newDocAdapter(pool, withDocNamespaceBinding(cfg))
+}
+
+// NewDocNamespaceAdapter is an alias for NewDocsNamespaceAdapter.
+func NewDocNamespaceAdapter(pool *pgxpool.Pool, cfg Config) *DocAdapter {
+	return NewDocsNamespaceAdapter(pool, cfg)
+}
+
+func newDocAdapter(pool *pgxpool.Pool, cfg Config) *DocAdapter {
 	return &DocAdapter{pool: pool, cfg: cfg, cachedTrees: make(map[string]*docCachedTree)}
 }
 
@@ -90,6 +103,40 @@ func ConnectDoc(ctx context.Context, cfg Config) (*DocAdapter, error) {
 	return NewDocAdapter(pool, cfg), nil
 }
 
+// ConnectDocNamespace creates a docs namespace adapter by connecting to
+// Postgres and running schema migrations. It does not backfill legacy repo
+// paths into namespace paths.
+func ConnectDocNamespace(ctx context.Context, cfg Config) (*DocAdapter, error) {
+	pool, err := pgxpool.New(ctx, cfg.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("connect doc namespace postgres: %w", err)
+	}
+
+	statements, err := SchemaSQL(cfg)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("doc namespace schema sql: %w", err)
+	}
+	for _, stmt := range statements {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("doc namespace schema exec: %w", err)
+		}
+	}
+
+	return NewDocsNamespaceAdapter(pool, cfg), nil
+}
+
+func withDocRepoBinding(cfg Config) Config {
+	cfg.DocBinding = DocBindingConfig{PathsTable: docRepoPathsTable, ScopeColumn: docRepoScopeColumn}
+	return cfg
+}
+
+func withDocNamespaceBinding(cfg Config) Config {
+	cfg.DocBinding = DocBindingConfig{PathsTable: docNamespacePathsTable, ScopeColumn: docNamespaceScopeColumn}
+	return cfg
+}
+
 func (d *DocAdapter) repo(reqRepo string) string {
 	if reqRepo != "" {
 		return reqRepo
@@ -108,9 +155,9 @@ func cleanDocPath(p string) string {
 	return path.Clean(p)
 }
 
-// buildTree loads all file paths for a repo from gxfs_repo_paths and builds
-// a vfs.Tree. This mirrors the old adapter's loadTree pattern, but reads from
-// the new document-centric tables instead of vfs_nodes.
+// buildTree loads all file paths for a scope from the configured doc binding
+// table and builds a vfs.Tree. This mirrors the old adapter's loadTree pattern,
+// but reads from the new document-centric tables instead of vfs_nodes.
 func (d *DocAdapter) buildTree(ctx context.Context, repo string) (*vfs.Tree, error) {
 	query, err := DocListPathsSQL(d.cfg)
 	if err != nil {
@@ -404,7 +451,7 @@ func (d *DocAdapter) Locate(ctx context.Context, req store.LocateRequest) (*stor
 			return nil, fmt.Errorf("doc locate scan: %w", err)
 		}
 		results = append(results, store.LocateResult{
-			Ref:     "repo://" + url.PathEscape(req.Repo) + filePath,
+			Ref:     "repo://" + url.PathEscape(repo) + filePath,
 			Path:    filePath,
 			Score:   rank,
 			Snippet: snippet,
@@ -704,7 +751,7 @@ func (d *DocAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutR
 		if _, err := tx.Exec(ctx, updateSQL, repo, req.Path, req.Content, hash, title); err != nil {
 			return nil, fmt.Errorf("doc put update: %w", err)
 		}
-		// Update repo_path size/mtime.
+		// Update bound path size/mtime.
 		upsertPathSQL, err := DocUpsertPathSQL(d.cfg)
 		if err != nil {
 			return nil, err
@@ -713,7 +760,7 @@ func (d *DocAdapter) Put(ctx context.Context, req store.PutRequest) (*store.PutR
 			return nil, fmt.Errorf("doc put path update: %w", err)
 		}
 	} else if errors.Is(err, pgx.ErrNoRows) {
-		// New file — insert doc + repo_path.
+		// New file — insert doc + bound path.
 		insertSQL, err := DocInsertSQL(d.cfg)
 		if err != nil {
 			return nil, err
@@ -903,7 +950,7 @@ func (d *DocAdapter) Edit(ctx context.Context, req store.EditRequest) (*store.Ed
 		return nil, fmt.Errorf("doc edit update: %w", err)
 	}
 
-	// Update repo_path size/mtime.
+	// Update bound path size/mtime.
 	upsertPathSQL, err := DocUpsertPathSQL(d.cfg)
 	if err != nil {
 		return nil, err

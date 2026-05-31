@@ -7,40 +7,102 @@ import (
 )
 
 type Registry struct {
-	adapters map[string]Adapter
+	repos map[string]Adapter
+	docs  map[string]Adapter
 }
 
 var _ Adapter = (*Registry)(nil)
 var _ CacheInvalidator = (*Registry)(nil)
+var _ MountSourceLister = (*Registry)(nil)
+var _ SourceRouter = (*Registry)(nil)
 
 func NewRegistry(adapters map[string]Adapter) (*Registry, error) {
-	if len(adapters) == 0 {
+	return NewNamespaceRegistry(adapters, nil)
+}
+
+func NewNamespaceRegistry(repos map[string]Adapter, docs map[string]Adapter) (*Registry, error) {
+	if len(repos) == 0 {
 		return nil, fmt.Errorf("at least one repo is required")
 	}
+	repoAdapters, err := copyAdapters("repo", repos)
+	if err != nil {
+		return nil, err
+	}
+	docAdapters, err := copyAdapters("docs namespace", docs)
+	if err != nil {
+		return nil, err
+	}
+	return &Registry{repos: repoAdapters, docs: docAdapters}, nil
+}
+
+func copyAdapters(kind string, adapters map[string]Adapter) (map[string]Adapter, error) {
 	cp := make(map[string]Adapter, len(adapters))
-	for repo, adapter := range adapters {
-		if repo == "" {
-			return nil, fmt.Errorf("repo name is required")
+	for name, adapter := range adapters {
+		if name == "" {
+			return nil, fmt.Errorf("%s name is required", kind)
 		}
 		if adapter == nil {
-			return nil, fmt.Errorf("adapter for repo %q is nil", repo)
+			return nil, fmt.Errorf("adapter for %s %q is nil", kind, name)
 		}
-		cp[repo] = adapter
+		cp[name] = adapter
 	}
-	return &Registry{adapters: cp}, nil
+	return cp, nil
 }
 
 func (r *Registry) Repos() []string {
-	repos := make([]string, 0, len(r.adapters))
-	for repo := range r.adapters {
+	repos := make([]string, 0, len(r.repos))
+	for repo := range r.repos {
 		repos = append(repos, repo)
 	}
 	sort.Strings(repos)
 	return repos
 }
 
+func (r *Registry) MountSources(context.Context) ([]MountSource, error) {
+	sources := make([]MountSource, 0, len(r.repos)+len(r.docs))
+	for repo := range r.repos {
+		ref := SourceRef{Kind: SourceKindRepo, Name: repo}.String()
+		sources = append(sources, MountSource{
+			Ref:         ref,
+			Kind:        SourceKindRepo,
+			Name:        repo,
+			Description: "repository namespace",
+		})
+	}
+	for name := range r.docs {
+		ref := SourceRef{Kind: SourceKindDocs, Name: name}.String()
+		sources = append(sources, MountSource{
+			Ref:         ref,
+			Kind:        SourceKindDocs,
+			Name:        name,
+			Description: "shared docs namespace",
+		})
+	}
+	sort.SliceStable(sources, func(i, j int) bool {
+		return sources[i].Ref < sources[j].Ref
+	})
+	return sources, nil
+}
+
+func (r *Registry) AdapterForSource(_ context.Context, source SourceRef) (Adapter, error) {
+	switch source.Kind {
+	case SourceKindRepo:
+		return r.adapter(source.Name)
+	case SourceKindDocs:
+		adapter, ok := r.docs[source.Name]
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownSource, source.String())
+		}
+		return adapter, nil
+	case SourceKindDocset:
+		return nil, fmt.Errorf("%w: %s", ErrNotSupported, source.Kind)
+	default:
+		return nil, fmt.Errorf("%w: %s", ErrUnknownSource, source.String())
+	}
+}
+
 func (r *Registry) adapter(repo string) (Adapter, error) {
-	adapter, ok := r.adapters[repo]
+	adapter, ok := r.repos[repo]
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrUnknownRepo, repo)
 	}
@@ -152,9 +214,11 @@ func (r *Registry) Glob(ctx context.Context, req GlobRequest) (*GlobResponse, er
 }
 
 func (r *Registry) Invalidate() {
-	for _, adapter := range r.adapters {
-		if invalidator, ok := adapter.(CacheInvalidator); ok {
-			invalidator.Invalidate()
+	for _, adapters := range []map[string]Adapter{r.repos, r.docs} {
+		for _, adapter := range adapters {
+			if invalidator, ok := adapter.(CacheInvalidator); ok {
+				invalidator.Invalidate()
+			}
 		}
 	}
 }

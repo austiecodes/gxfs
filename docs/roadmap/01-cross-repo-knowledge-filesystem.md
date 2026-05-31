@@ -222,8 +222,8 @@ Design notes:
 - The manifest is the local file tree cache the user described.
 - `settings.toml` stays small and hand-editable.
 - `mounts.toml` records intended mounts.
-- `manifest.toml` can be rewritten by `gxfs refresh`, `gxfs materialize`, and
-  mount resolution after `gxfs mount`.
+- `manifest.toml` can be rewritten by `gxfs sync refresh`,
+  `gxfs sync materialize`, and mount resolution after `gxfs mount`.
 - The CLI can use the manifest for fast local `tree/find/stat` output, then
   fetch content on demand.
 
@@ -263,16 +263,16 @@ Design notes:
 - Output should support both human text and machine-readable JSON:
   - `gxfs search "openai-go function call" --json`
   - `gxfs search "openai-go function call" | gxfs mount --interactive`
-  - `gxfs mount collection://openai-go/v3/gotchas docs/gotchas/openai-go`
+  - `gxfs mount add docs://openai-go-sdk/gotchas docs/gotchas/openai-go`
 - Search should return document, collection, and suggested mount results.
 - Mounting updates `mounts.toml` and refreshes `manifest.toml`.
 
 ### Phase 4: Materialization
 
 - Add explicit commands:
-  - `gxfs materialize docs/gotchas/openai-go`
-  - `gxfs dematerialize docs/gotchas/openai-go`
-  - `gxfs refresh docs/gotchas/openai-go`
+  - `gxfs sync materialize docs/gotchas/openai-go`
+  - `gxfs sync dematerialize docs/gotchas/openai-go`
+  - `gxfs sync refresh docs/gotchas/openai-go`
 - Materialized files are real markdown files under the local repo.
 - Each materialized file should include or be paired with revision metadata.
 - Decide whether materialized docs are committed, ignored, or controlled by a
@@ -429,7 +429,7 @@ Suggested capabilities:
 Mount mode should constrain operations:
 
 - `readonly`: `ls/tree/find/stat/cat/grep/search`
-- `writable`: read plus `write/edit/delete/sync push`
+- `writable`: read plus `write/edit/rm/sync push`
 - `materialized`: local materialization allowed, but remote writes still depend
   on server permission
 

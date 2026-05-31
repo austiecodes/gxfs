@@ -24,13 +24,7 @@ func TestGCDryRunForce(t *testing.T) {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	ctx := context.Background()
 
-	cfg := postgres.Config{
-		DSN:        dsn,
-		Schema:     "public",
-		Repo:       "test-repo",
-		RepoTable:  "vfs_repo_nodes",
-		NodesTable: "vfs_nodes",
-	}
+	cfg := e2ePostgresConfig(dsn, "test-repo")
 
 	// Setup: create schema
 	pool := connectPool(t, ctx, dsn)
@@ -101,13 +95,7 @@ func TestGCGracePeriod(t *testing.T) {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	ctx := context.Background()
 
-	cfg := postgres.Config{
-		DSN:        dsn,
-		Schema:     "public",
-		Repo:       "test-repo",
-		RepoTable:  "vfs_repo_nodes",
-		NodesTable: "vfs_nodes",
-	}
+	cfg := e2ePostgresConfig(dsn, "test-repo")
 
 	pool := connectPool(t, ctx, dsn)
 	defer pool.Close()
@@ -166,13 +154,7 @@ func TestGCCollectionRefs(t *testing.T) {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	ctx := context.Background()
 
-	cfg := postgres.Config{
-		DSN:        dsn,
-		Schema:     "public",
-		Repo:       "test-repo",
-		RepoTable:  "vfs_repo_nodes",
-		NodesTable: "vfs_nodes",
-	}
+	cfg := e2ePostgresConfig(dsn, "test-repo")
 
 	pool := connectPool(t, ctx, dsn)
 	defer pool.Close()
@@ -235,13 +217,7 @@ func TestGCRepoPathRefs(t *testing.T) {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	ctx := context.Background()
 
-	cfg := postgres.Config{
-		DSN:        dsn,
-		Schema:     "public",
-		Repo:       "test-repo",
-		RepoTable:  "vfs_repo_nodes",
-		NodesTable: "vfs_nodes",
-	}
+	cfg := e2ePostgresConfig(dsn, "test-repo")
 
 	pool := connectPool(t, ctx, dsn)
 	defer pool.Close()

@@ -2,11 +2,24 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/austiecodes/gxfs/internal/config"
 )
+
+func writeServerConfig(t *testing.T, name, content string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write server config: %v", err)
+	}
+	return path
+}
 
 func TestSplitAddr(t *testing.T) {
 	tests := []struct {
@@ -55,6 +68,142 @@ func TestPostgresConfigFromRepoDefaultsFileTable(t *testing.T) {
 	}
 }
 
+func TestAPIRoutesRegistersMountSources(t *testing.T) {
+	routes := apiRoutes(http.NotFoundHandler())
+	for _, route := range routes {
+		if route.Method == http.MethodGet && route.Path == "/v1/mount-sources" {
+			return
+		}
+	}
+	t.Fatal("apiRoutes() missing GET /v1/mount-sources")
+}
+
+func TestAPIRoutesRegistersDocsNamespaceRoutes(t *testing.T) {
+	routes := apiRoutes(http.NotFoundHandler())
+	want := map[string]bool{
+		http.MethodGet + " /v1/docs/:name/:op":    false,
+		http.MethodPut + " /v1/docs/:name/:op":    false,
+		http.MethodDelete + " /v1/docs/:name/:op": false,
+	}
+	for _, route := range routes {
+		key := route.Method + " " + route.Path
+		if _, ok := want[key]; ok {
+			want[key] = true
+		}
+	}
+	for key, found := range want {
+		if !found {
+			t.Fatalf("apiRoutes() missing %s", key)
+		}
+	}
+}
+
+func TestLoadServerConfigParsesDocsNamespaces(t *testing.T) {
+	path := writeServerConfig(t, "server.toml", `
+addr = ":7635"
+
+[[repos]]
+name = "shared"
+
+[repos.backend]
+type = "doc_postgres"
+
+[repos.backend.postgres]
+dsn = "postgres://localhost/gxfs"
+schema = "public"
+
+[[docs]]
+name = "shared"
+writable = true
+
+[docs.backend]
+type = "doc_namespace_postgres"
+
+[docs.backend.postgres]
+dsn = "postgres://localhost/gxfs"
+schema = "docs"
+cache_ttl = "5m"
+`)
+
+	cfg, err := config.LoadServer(path)
+	if err != nil {
+		t.Fatalf("LoadServer() error = %v", err)
+	}
+	if len(cfg.Docs) != 1 {
+		t.Fatalf("LoadServer().Docs len = %d, want 1", len(cfg.Docs))
+	}
+	docs := cfg.Docs[0]
+	if docs.Name != "shared" || docs.Backend.Type != "doc_namespace_postgres" || !docs.Writable {
+		t.Fatalf("docs namespace = %+v, want writable shared doc_namespace_postgres", docs)
+	}
+	if cfg.Repos[0].Name != docs.Name {
+		t.Fatalf("repo/docs names = %q/%q, want same-name namespaces allowed", cfg.Repos[0].Name, docs.Name)
+	}
+	if docs.Backend.Postgres.Schema != "docs" || docs.Backend.Postgres.CacheTTL != "5m" {
+		t.Fatalf("docs postgres = %+v, want parsed schema/cache TTL", docs.Backend.Postgres)
+	}
+}
+
+func TestLoadServerConfigValidatesDocsNamespaces(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name: "missing name",
+			content: `
+addr = ":7635"
+
+[[docs]]
+[docs.backend]
+type = "doc_postgres"
+`,
+			wantErr: "docs[0].name is required",
+		},
+		{
+			name: "missing backend type",
+			content: `
+addr = ":7635"
+
+[[docs]]
+name = "shared"
+`,
+			wantErr: "docs[0].backend.type is required",
+		},
+		{
+			name: "duplicate name",
+			content: `
+addr = ":7635"
+
+[[docs]]
+name = "shared"
+[docs.backend]
+type = "doc_postgres"
+
+[[docs]]
+name = "shared"
+[docs.backend]
+type = "doc_namespace_postgres"
+`,
+			wantErr: `duplicate docs namespace "shared"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeServerConfig(t, "server.toml", tt.content)
+			_, err := config.LoadServer(path)
+			if err == nil {
+				t.Fatal("LoadServer() error = nil, want docs namespace validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("LoadServer() error = %q, want containing %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestAdapterFromServerConfigRejectsDuplicateRepos(t *testing.T) {
 	_, err := adapterFromServerConfig(context.Background(), config.ServerConfig{
 		Repos: []config.RepoConfig{
@@ -64,6 +213,24 @@ func TestAdapterFromServerConfigRejectsDuplicateRepos(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("adapterFromServerConfig() error = nil, want duplicate repo error")
+	}
+}
+
+func TestAdapterFromServerConfigRejectsUnsupportedDocsNamespaceBackend(t *testing.T) {
+	_, err := adapterFromServerConfig(context.Background(), config.ServerConfig{
+		Repos: []config.RepoConfig{
+			{Name: "gxfs", Backend: config.BackendConfig{Type: "postgres"}},
+		},
+		Docs: []config.DocsNamespaceConfig{
+			{Name: "shared", Backend: config.BackendConfig{Type: "postgres"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("adapterFromServerConfig() error = nil, want unsupported docs namespace backend error")
+	}
+	if !strings.Contains(err.Error(), "docs namespace shared") ||
+		!strings.Contains(err.Error(), "path-centric postgres is repo-only") {
+		t.Fatalf("adapterFromServerConfig() error = %q, want docs namespace name and unsupported backend detail", err.Error())
 	}
 }
 
@@ -310,6 +477,61 @@ func TestCollectGCTargets(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCollectGCTargetsIncludesDocsNamespaces(t *testing.T) {
+	cfg := config.ServerConfig{
+		Repos: []config.RepoConfig{
+			{
+				Name: "repo1",
+				Backend: config.BackendConfig{
+					Type: "doc_postgres",
+					Postgres: config.PostgresConfig{
+						DSN:    "postgres://user:pass@host1:5432/db1",
+						Schema: "public",
+					},
+				},
+			},
+		},
+		Docs: []config.DocsNamespaceConfig{
+			{
+				Name: "shared",
+				Backend: config.BackendConfig{
+					Type: "doc_namespace_postgres",
+					Postgres: config.PostgresConfig{
+						DSN:    "postgres://user:pass@host2:5432/db2",
+						Schema: "docs",
+					},
+				},
+			},
+			{
+				Name: "legacy",
+				Backend: config.BackendConfig{
+					Type: "postgres",
+					Postgres: config.PostgresConfig{
+						DSN:    "postgres://user:pass@host3:5432/db3",
+						Schema: "ignored",
+					},
+				},
+			},
+		},
+	}
+
+	targets := collectGCTargets(cfg)
+	if len(targets) != 2 {
+		t.Fatalf("collectGCTargets() returned %d targets, want 2", len(targets))
+	}
+
+	gotLabels := []string{targets[0].label(), targets[1].label()}
+	wantLabels := []string{
+		"postgres://host1:5432/db1/public",
+		"postgres://host2:5432/db2/docs",
+	}
+	for i := range wantLabels {
+		if gotLabels[i] != wantLabels[i] {
+			t.Fatalf("target[%d] = %q, want %q", i, gotLabels[i], wantLabels[i])
+		}
 	}
 }
 

@@ -57,13 +57,22 @@ const GXFSInstructionsEnd = "<!-- GXFS_END -->"
 //go:embed instructions/agents.md
 var gxfsInstructionsTemplate string
 
+//go:embed instructions/skill.md
+var gxfsSkillTemplate string
+
 //go:embed instructions/pre_tool_use.sh
 var preToolUseHookScript string
+
+type initModes struct {
+	md    bool
+	skill bool
+}
 
 func NewInitCommand() *cobra.Command {
 	var claude bool
 	var agent string
 	var noInstructions bool
+	var instructionMode string
 	var repoName string
 	var serverAddr string
 	var docsPath string
@@ -71,6 +80,7 @@ func NewInitCommand() *cobra.Command {
 	var hookTarget string
 	var hookScope string
 
+	instructionMode = "md"
 	repoName = "github.com/user/repo"
 	serverAddr = "http://127.0.0.1:7635"
 	docsPath = "docs"
@@ -106,8 +116,12 @@ func NewInitCommand() *cobra.Command {
 				docsPath = "docs"
 			}
 
+			modes, err := parseInitModes(instructionMode)
+			if err != nil {
+				return err
+			}
 			var target string
-			if !noInstructions {
+			if !noInstructions && modes.md {
 				agent = strings.ToLower(agent)
 				if claude {
 					if agent != "" && agent != "claude" {
@@ -164,7 +178,7 @@ func NewInitCommand() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", mountsPath)
 			}
 
-			if !noInstructions {
+			if !noInstructions && modes.md {
 				actual, err := upsertInstructions(target, docsPath)
 				if err != nil {
 					return err
@@ -174,6 +188,13 @@ func NewInitCommand() *cobra.Command {
 				} else {
 					fmt.Fprintf(cmd.OutOrStdout(), "updated GXFS instructions in %s\n", target)
 				}
+			}
+			if !noInstructions && modes.skill {
+				skillPath, err := writeGXFSSkill(dir, docsPath)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "updated GXFS skill in %s\n", skillPath)
 			}
 
 			if hookTarget == "claude" && hookScope == "project" {
@@ -210,6 +231,7 @@ func NewInitCommand() *cobra.Command {
 	cmd.Flags().StringVar(&agent, "agent", "", "agent instructions target: agents or claude")
 	cmd.Flags().BoolVar(&claude, "claude", false, "append GXFS usage to CLAUDE.md (alias for --agent claude)")
 	cmd.Flags().BoolVar(&noInstructions, "no-instructions", false, "only create .gxfs config, without writing agent instructions")
+	cmd.Flags().StringVar(&instructionMode, "mode", instructionMode, "instruction outputs: md, skill, or md,skill")
 	cmd.Flags().StringVar(&repoName, "repo", repoName, "logical repository name")
 	cmd.Flags().StringVar(&serverAddr, "server", serverAddr, "gxfs-server base URL")
 	cmd.Flags().StringVar(&docsPath, "docs", docsPath, "local docs root")
@@ -230,6 +252,26 @@ func renderInitTemplate(name, raw string, data initTemplateData) (string, error)
 		return "", fmt.Errorf("render %s template: %w", name, err)
 	}
 	return out.String(), nil
+}
+
+func parseInitModes(raw string) (initModes, error) {
+	var modes initModes
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = "md"
+	}
+	for _, part := range strings.Split(raw, ",") {
+		mode := strings.ToLower(strings.TrimSpace(part))
+		switch mode {
+		case "md":
+			modes.md = true
+		case "skill":
+			modes.skill = true
+		default:
+			return initModes{}, fmt.Errorf("unsupported init mode %q: supported modes are md, skill, and md,skill", mode)
+		}
+	}
+	return modes, nil
 }
 
 func instructionTargetPath(dir, agent string) (string, error) {
@@ -269,6 +311,21 @@ func upsertInstructions(target, docsPath string) (string, error) {
 	return actual, nil
 }
 
+func writeGXFSSkill(dir, docsPath string) (string, error) {
+	target := filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("create %s: %w", filepath.Dir(target), err)
+	}
+	content, err := renderGXFSSkill(docsPath)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write %s: %w", target, err)
+	}
+	return target, nil
+}
+
 func replaceMarkedBlock(content, block string) string {
 	start := strings.Index(content, GXFSInstructionsStart)
 	end := strings.Index(content, GXFSInstructionsEnd)
@@ -306,6 +363,23 @@ func renderGXFSInstructions(docsPath string) (string, error) {
 		DocsPath: docsPath,
 	}); err != nil {
 		return "", fmt.Errorf("render GXFS instructions template: %w", err)
+	}
+	return out.String(), nil
+}
+
+func renderGXFSSkill(docsPath string) (string, error) {
+	tmpl, err := template.New("gxfs-skill").Option("missingkey=error").Parse(gxfsSkillTemplate)
+	if err != nil {
+		return "", fmt.Errorf("parse GXFS skill template: %w", err)
+	}
+
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, struct {
+		DocsPath string
+	}{
+		DocsPath: docsPath,
+	}); err != nil {
+		return "", fmt.Errorf("render GXFS skill template: %w", err)
 	}
 	return out.String(), nil
 }

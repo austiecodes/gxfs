@@ -22,13 +22,7 @@ func TestCollectionCRUD(t *testing.T) {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	ctx := context.Background()
 
-	cfg := postgres.Config{
-		DSN:        dsn,
-		Schema:     "public",
-		Repo:       "test-repo",
-		RepoTable:  "vfs_repo_nodes",
-		NodesTable: "vfs_nodes",
-	}
+	cfg := e2ePostgresConfig(dsn, "test-repo")
 
 	pool := connectPool(t, ctx, dsn)
 	defer pool.Close()
@@ -134,13 +128,7 @@ func TestCollectionMembership(t *testing.T) {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	ctx := context.Background()
 
-	cfg := postgres.Config{
-		DSN:        dsn,
-		Schema:     "public",
-		Repo:       "test-repo",
-		RepoTable:  "vfs_repo_nodes",
-		NodesTable: "vfs_nodes",
-	}
+	cfg := e2ePostgresConfig(dsn, "test-repo")
 
 	pool := connectPool(t, ctx, dsn)
 	defer pool.Close()
@@ -267,13 +255,7 @@ func TestCollectionDeleteWithMembers(t *testing.T) {
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
 	ctx := context.Background()
 
-	cfg := postgres.Config{
-		DSN:        dsn,
-		Schema:     "public",
-		Repo:       "test-repo",
-		RepoTable:  "vfs_repo_nodes",
-		NodesTable: "vfs_nodes",
-	}
+	cfg := e2ePostgresConfig(dsn, "test-repo")
 
 	pool := connectPool(t, ctx, dsn)
 	defer pool.Close()

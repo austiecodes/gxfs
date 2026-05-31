@@ -6,33 +6,18 @@ import (
 )
 
 func TestGCOrphanCondition(t *testing.T) {
-	// Test that the orphan condition SQL includes both reference tables
-	// This is a critical safety check - missing either table could cause data loss
-
-	cfg := Config{Schema: "public"}
-
-	_, err := quoteTable(cfg.Schema, "gxfs_docs")
+	// Test that orphan detection includes every table that can reference docs.
+	// Missing a table here could cause data loss during forced GC.
+	orphanCondition, err := gcOrphanCondition("public", 1)
 	if err != nil {
-		t.Fatalf("quoteTable docs: %v", err)
-	}
-	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
-	if err != nil {
-		t.Fatalf("quoteTable paths: %v", err)
-	}
-	collectionDocsTable, err := quoteTable(cfg.Schema, "gxfs_collection_docs")
-	if err != nil {
-		t.Fatalf("quoteTable collection_docs: %v", err)
+		t.Fatalf("gcOrphanCondition() error = %v", err)
 	}
 
-	// Build the orphan condition similar to GC()
-	graceHours := 1
-	orphanCondition := `updated_at < NOW() - INTERVAL '` + string(rune(graceHours+'0')) + ` hours'
-AND NOT EXISTS (SELECT 1 FROM ` + pathsTable + ` p WHERE p.doc_id = d.id)
-AND NOT EXISTS (SELECT 1 FROM ` + collectionDocsTable + ` c WHERE c.doc_id = d.id)`
-
-	// Verify both reference tables are checked
 	if !strings.Contains(orphanCondition, "gxfs_repo_paths") {
 		t.Error("orphan condition missing gxfs_repo_paths check")
+	}
+	if !strings.Contains(orphanCondition, "gxfs_doc_namespace_paths") {
+		t.Error("orphan condition missing gxfs_doc_namespace_paths check")
 	}
 	if !strings.Contains(orphanCondition, "gxfs_collection_docs") {
 		t.Error("orphan condition missing gxfs_collection_docs check")

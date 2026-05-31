@@ -3,6 +3,10 @@
 This document covers repository development and administration of the GXFS
 backend. End-user CLI capabilities belong in the top-level `README.md`.
 
+Related design notes:
+
+- [CLI command surface refactor](cli-command-refactor.md)
+
 ## Server Runtime
 
 `gxfs-server` owns backend access and exposes the HTTP API used by the thin
@@ -44,13 +48,31 @@ type = "doc_postgres"
 dsn = "${GXFS_POSTGRES_DSN}"
 schema = "public"
 cache_ttl = "30s"
+
+[[docs]]
+name = "openai-go-sdk"
+writable = false
+
+[docs.backend]
+type = "doc_namespace_postgres"
+
+[docs.backend.postgres]
+dsn = "${GXFS_POSTGRES_DSN}"
+schema = "public"
+cache_ttl = "30s"
 ```
 
 - Environment variables in config files are expanded.
 - A server can configure multiple repositories. HTTP requests route by
   `/v1/repos/{repo}/...`.
-- `doc_postgres` is the document-centric backend required by collections and
-  orphan-content GC.
+- A server can configure reusable docs namespaces. HTTP requests route by
+  `/v1/docs/{name}/...`, and clients can mount them with
+  `gxfs mount add docs://<name>/<path> <local-path>`.
+- Repo namespaces support `postgres` and `doc_postgres`. Docs namespaces support
+  `doc_postgres` and `doc_namespace_postgres`; path-centric `postgres` is
+  repo-only.
+- `doc_postgres` is the document-centric backend required by shared docs
+  namespaces, collections, and orphan-content GC.
 - PostgreSQL schema migration runs during server startup.
 - `writable = true` permits cross-repository writable mounts to target that
   repository. Otherwise cross-repository writes are rejected.
@@ -63,8 +85,8 @@ GC is an administrative database maintenance action, not a request sent by
 `gxfs` to a running HTTP server. The `gxfs-server` executable also contains an
 out-of-band maintenance subcommand: each invocation loads the server config,
 connects directly to the configured `doc_postgres` database, and removes
-document rows that are no longer referenced by repository paths or
-collections.
+document rows that are no longer referenced by repository paths, docs namespace
+paths, or collections.
 
 It defaults to dry-run mode and uses a grace period to avoid deleting recently
 created content:

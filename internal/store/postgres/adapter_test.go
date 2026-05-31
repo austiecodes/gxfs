@@ -194,6 +194,31 @@ create index if not exists idx_repo_paths_prefix on "public"."gxfs_repo_paths" (
 -- Index for finding all paths pointing to a doc (for orphan detection)
 create index if not exists idx_repo_paths_doc_id on "public"."gxfs_repo_paths" (doc_id);
 
+-- First-class docs namespaces: independent writable views over shared docs.
+create table if not exists "public"."gxfs_doc_namespaces" (
+    name text primary key,
+    description text not null default '',
+    writable bool not null default false,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+-- Namespace → Doc mapping: directories are implicit from path prefix.
+create table if not exists "public"."gxfs_doc_namespace_paths" (
+    namespace text not null references "public"."gxfs_doc_namespaces"(name) on delete cascade,
+    path text not null,
+    doc_id uuid not null references "public"."gxfs_docs"(id),
+    size bigint not null default 0,
+    mtime timestamptz not null default now(),
+    primary key (namespace, path)
+);
+
+-- Index for namespace prefix queries.
+create index if not exists idx_doc_namespace_paths_prefix on "public"."gxfs_doc_namespace_paths" (namespace, path text_pattern_ops);
+
+-- Index for finding namespace paths pointing to a doc (for orphan detection).
+create index if not exists idx_doc_namespace_paths_doc_id on "public"."gxfs_doc_namespace_paths" (doc_id);
+
 -- Collections: empty tables, no API in Phase 1A
 create table if not exists "public"."gxfs_collections" (
     id uuid primary key default gen_random_uuid(),
@@ -253,6 +278,12 @@ func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T)
 	}
 	if !strings.Contains(docStmt, `"gxfs_repo_paths"`) {
 		t.Fatalf("empty schema migration missing \"gxfs_repo_paths\"")
+	}
+	if !strings.Contains(docStmt, `"gxfs_doc_namespaces"`) {
+		t.Fatalf("empty schema migration missing \"gxfs_doc_namespaces\"")
+	}
+	if !strings.Contains(docStmt, `"gxfs_doc_namespace_paths"`) {
+		t.Fatalf("empty schema migration missing \"gxfs_doc_namespace_paths\"")
 	}
 	if !strings.Contains(docStmt, `"gxfs_collections"`) {
 		t.Fatalf("empty schema migration missing \"gxfs_collections\"")
@@ -390,6 +421,15 @@ func testDocConfig() Config {
 	return Config{Schema: "docschema"}
 }
 
+func testDocNamespaceConfig() Config {
+	cfg := testDocConfig()
+	cfg.DocBinding = DocBindingConfig{
+		PathsTable:  docNamespacePathsTable,
+		ScopeColumn: docNamespaceScopeColumn,
+	}
+	return cfg
+}
+
 func TestDocListPathsSQL(t *testing.T) {
 	sql, err := DocListPathsSQL(testDocConfig())
 	if err != nil {
@@ -411,6 +451,60 @@ func TestDocListPathsSQLNoSchema(t *testing.T) {
 	want := `select path, size, mtime from "gxfs_repo_paths" where repo = $1 and path like $2 order by path`
 	if sql != want {
 		t.Fatalf("DocListPathsSQL() = %q, want %q", sql, want)
+	}
+}
+
+func TestDocNamespaceBindingSQL(t *testing.T) {
+	cfg := testDocNamespaceConfig()
+	for _, tt := range []struct {
+		name       string
+		fn         func(Config) (string, error)
+		wantScope  string
+		wantExtras []string
+	}{
+		{"DocListPathsSQL", DocListPathsSQL, "where namespace = $1", nil},
+		{"DocCatSQL", DocCatSQL, "where rp.namespace = $1", nil},
+		{"DocStatSQL", DocStatSQL, "where rp.namespace = $1", nil},
+		{"DocStatDirSQL", DocStatDirSQL, "where namespace = $1", nil},
+		{"DocSearchCountSQL", DocSearchCountSQL, "where rp.namespace = $1", nil},
+		{"DocSearchDataSQL", DocSearchDataSQL, "where rp.namespace = $1", nil},
+		{"DocLocateCountSQL", DocLocateCountSQL, "where rp.namespace = $1", nil},
+		{"DocLocateDataSQL", DocLocateDataSQL, "where rp.namespace = $1", nil},
+		{"DocBatchHashesSQL", DocBatchHashesSQL, "where rp.namespace = $1", nil},
+		{"DocStreamGrepSQL", DocStreamGrepSQL, "where rp.namespace = $1", nil},
+		{"DocUpdateByPathSQL", DocUpdateByPathSQL, "where rp.namespace = $1", nil},
+		{"DocSelectForUpdateSQL", DocSelectForUpdateSQL, "where rp.namespace = $1", nil},
+		{"DocUpsertPathSQL", DocUpsertPathSQL, "insert into", []string{"(namespace, path, doc_id, size, mtime)", "on conflict(namespace, path)"}},
+		{"DocLookupPathSQL", DocLookupPathSQL, "where namespace = $1", nil},
+		{"DocLookupPathWithHashSQL", DocLookupPathWithHashSQL, "where p.namespace = $1", nil},
+		{"DocDeletePathSQL", DocDeletePathSQL, "where namespace = $1", nil},
+		{"DocDeletePathRecursiveSQL", DocDeletePathRecursiveSQL, "where namespace = $1", nil},
+		{"DocGlobCountSQL", DocGlobCountSQL, "where namespace = $1", nil},
+		{"DocGlobDataSQL", DocGlobDataSQL, "where namespace = $1", nil},
+		{"DocGlobDataAllSQL", DocGlobDataAllSQL, "where namespace = $1", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, err := tt.fn(cfg)
+			if err != nil {
+				t.Fatalf("%s() error = %v", tt.name, err)
+			}
+			if !strings.Contains(sql, `"docschema"."gxfs_doc_namespace_paths"`) {
+				t.Fatalf("%s() missing docs namespace table: %q", tt.name, sql)
+			}
+			if !strings.Contains(sql, tt.wantScope) {
+				t.Fatalf("%s() missing namespace scope %q: %q", tt.name, tt.wantScope, sql)
+			}
+			for _, want := range tt.wantExtras {
+				if !strings.Contains(sql, want) {
+					t.Fatalf("%s() missing %q: %q", tt.name, want, sql)
+				}
+			}
+			for _, bad := range []string{`"gxfs_repo_paths"`, " repo = $1", "rp.repo = $1", "p.repo = $1", "on conflict(repo, path)"} {
+				if strings.Contains(sql, bad) {
+					t.Fatalf("%s() still contains repo binding %q: %q", tt.name, bad, sql)
+				}
+			}
+		})
 	}
 }
 
@@ -535,6 +629,8 @@ func TestDocQuerySQLRejectsUnsafeSchema(t *testing.T) {
 		{"DocStatDirSQL", DocStatDirSQL},
 		{"DocSearchCountSQL", DocSearchCountSQL},
 		{"DocSearchDataSQL", DocSearchDataSQL},
+		{"DocLocateCountSQL", DocLocateCountSQL},
+		{"DocLocateDataSQL", DocLocateDataSQL},
 		{"DocBatchHashesSQL", DocBatchHashesSQL},
 		{"DocStreamGrepSQL", DocStreamGrepSQL},
 		{"DocInsertSQL", DocInsertSQL},
@@ -543,12 +639,29 @@ func TestDocQuerySQLRejectsUnsafeSchema(t *testing.T) {
 		{"DocUpdateByIDSQL", DocUpdateByIDSQL},
 		{"DocUpsertPathSQL", DocUpsertPathSQL},
 		{"DocLookupPathSQL", DocLookupPathSQL},
+		{"DocLookupPathWithHashSQL", DocLookupPathWithHashSQL},
 		{"DocDeletePathSQL", DocDeletePathSQL},
 		{"DocDeletePathRecursiveSQL", DocDeletePathRecursiveSQL},
+		{"DocGlobCountSQL", DocGlobCountSQL},
+		{"DocGlobDataSQL", DocGlobDataSQL},
+		{"DocGlobDataAllSQL", DocGlobDataAllSQL},
 	} {
 		_, err := fn.fn(bad)
 		if err == nil {
 			t.Fatalf("%s() error = nil for unsafe schema, want rejection", fn.name)
+		}
+	}
+}
+
+func TestDocQuerySQLRejectsUnsafeBinding(t *testing.T) {
+	for _, cfg := range []Config{
+		{DocBinding: DocBindingConfig{PathsTable: "gxfs_repo_paths; drop table users", ScopeColumn: docRepoScopeColumn}},
+		{DocBinding: DocBindingConfig{PathsTable: docRepoPathsTable, ScopeColumn: "repo; drop table users"}},
+		{DocBinding: DocBindingConfig{PathsTable: docRepoPathsTable}},
+		{DocBinding: DocBindingConfig{ScopeColumn: docRepoScopeColumn}},
+	} {
+		if _, err := DocListPathsSQL(cfg); err == nil {
+			t.Fatalf("DocListPathsSQL(%+v) error = nil, want rejection", cfg.DocBinding)
 		}
 	}
 }
@@ -608,6 +721,24 @@ func TestDocDeletePathRecursiveSQL(t *testing.T) {
 	}
 	if !strings.Contains(sql, "path like $2 || '/%%'") {
 		t.Fatalf("DocDeletePathRecursiveSQL() missing LIKE prefix: %q", sql)
+	}
+}
+
+func TestDocAdapterConstructorsSetBindingMode(t *testing.T) {
+	repoAdapter := NewDocAdapter(nil, Config{Repo: "repo"})
+	if repoAdapter.cfg.DocBinding.PathsTable != docRepoPathsTable {
+		t.Fatalf("NewDocAdapter paths table = %q, want %q", repoAdapter.cfg.DocBinding.PathsTable, docRepoPathsTable)
+	}
+	if repoAdapter.cfg.DocBinding.ScopeColumn != docRepoScopeColumn {
+		t.Fatalf("NewDocAdapter scope column = %q, want %q", repoAdapter.cfg.DocBinding.ScopeColumn, docRepoScopeColumn)
+	}
+
+	namespaceAdapter := NewDocsNamespaceAdapter(nil, Config{Repo: "docs"})
+	if namespaceAdapter.cfg.DocBinding.PathsTable != docNamespacePathsTable {
+		t.Fatalf("NewDocsNamespaceAdapter paths table = %q, want %q", namespaceAdapter.cfg.DocBinding.PathsTable, docNamespacePathsTable)
+	}
+	if namespaceAdapter.cfg.DocBinding.ScopeColumn != docNamespaceScopeColumn {
+		t.Fatalf("NewDocsNamespaceAdapter scope column = %q, want %q", namespaceAdapter.cfg.DocBinding.ScopeColumn, docNamespaceScopeColumn)
 	}
 }
 

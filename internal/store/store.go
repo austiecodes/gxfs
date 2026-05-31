@@ -6,24 +6,25 @@ import (
 )
 
 var (
-	ErrNotFound         = errors.New("path not found")
-	ErrIsDir            = errors.New("is a directory")
-	ErrNotDir           = errors.New("not a directory")
-	ErrContentNotReady  = errors.New("content not loaded")
-	ErrEmptyOld         = errors.New("old string cannot be empty")
-	ErrOldNotFound      = errors.New("old string not found")
-	ErrReadOnlyMount    = errors.New("read-only mount")
-	ErrCannotDeleteRoot = errors.New("cannot delete root")
-	ErrUnknownRepo      = errors.New("unknown repo")
-	ErrEmptyQuery       = errors.New("search query cannot be empty")
-	ErrInvalidParam     = errors.New("invalid parameter")
-	ErrNotModified      = errors.New("not modified")
-	ErrConflict         = errors.New("conflict: content hash mismatch")
-	ErrNotSupported     = errors.New("operation not supported")
-	ErrInvalidName      = errors.New("invalid name: must be lowercase alphanumeric with - or _")
-	ErrNameExists       = errors.New("collection name already exists")
-	ErrCollectionNotFound = errors.New("collection not found")
-	ErrMemberExists     = errors.New("member path already exists in collection")
+	ErrNotFound               = errors.New("path not found")
+	ErrIsDir                  = errors.New("is a directory")
+	ErrNotDir                 = errors.New("not a directory")
+	ErrContentNotReady        = errors.New("content not loaded")
+	ErrEmptyOld               = errors.New("old string cannot be empty")
+	ErrOldNotFound            = errors.New("old string not found")
+	ErrReadOnlyMount          = errors.New("read-only mount")
+	ErrCannotDeleteRoot       = errors.New("cannot delete root")
+	ErrUnknownRepo            = errors.New("unknown repo")
+	ErrUnknownSource          = errors.New("unknown source")
+	ErrEmptyQuery             = errors.New("search query cannot be empty")
+	ErrInvalidParam           = errors.New("invalid parameter")
+	ErrNotModified            = errors.New("not modified")
+	ErrConflict               = errors.New("conflict: content hash mismatch")
+	ErrNotSupported           = errors.New("operation not supported")
+	ErrInvalidName            = errors.New("invalid name: must be lowercase alphanumeric with - or _")
+	ErrNameExists             = errors.New("collection name already exists")
+	ErrCollectionNotFound     = errors.New("collection not found")
+	ErrMemberExists           = errors.New("member path already exists in collection")
 	ErrDocAlreadyInCollection = errors.New("document already in collection")
 )
 
@@ -280,6 +281,27 @@ type Reposer interface {
 	Repos() []string
 }
 
+// MountSource describes a namespace that can be used as a mount source.
+type MountSource struct {
+	Ref         string     `json:"ref"`
+	Kind        SourceKind `json:"kind"`
+	Name        string     `json:"name"`
+	Writable    bool       `json:"writable"`
+	Description string     `json:"description,omitempty"`
+}
+
+// MountSourceLister exposes mountable source namespaces. Registry implements
+// this for repo:// sources and future adapters can extend it with docs:// or
+// docset:// sources.
+type MountSourceLister interface {
+	MountSources(ctx context.Context) ([]MountSource, error)
+}
+
+// SourceRouter resolves a typed source namespace to the adapter that owns it.
+type SourceRouter interface {
+	AdapterForSource(ctx context.Context, source SourceRef) (Adapter, error)
+}
+
 // GlobRequest is the input for Glob — path discovery via glob pattern.
 type GlobRequest struct {
 	Repo    string
@@ -348,9 +370,9 @@ type GetCollectionResponse struct {
 
 // AddMemberRequest is the input for adding a document to a collection.
 type AddMemberRequest struct {
-	Name       string `json:"name"`        // collection name
-	SourceRef  string `json:"source_ref"`  // repo://repo-name/path
-	Path       string `json:"path"`        // path within collection
+	Name      string `json:"name"`       // collection name
+	SourceRef string `json:"source_ref"` // repo://repo-name/path
+	Path      string `json:"path"`       // path within collection
 }
 
 // AddMemberResponse is the output for adding a member.

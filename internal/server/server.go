@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,13 +66,28 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GET /v1/mount-sources — list mountable source namespaces.
+	if r.URL.Path == "/v1/mount-sources" && r.Method == http.MethodGet {
+		if lister, ok := h.adapter.(store.MountSourceLister); ok {
+			sources, err := lister.MountSources(r.Context())
+			if err != nil {
+				writeJSONError(w, err)
+				return
+			}
+			writeJSON(w, map[string]any{"sources": sources})
+			return
+		}
+		writeJSON(w, map[string]any{"sources": []any{}})
+		return
+	}
+
 	// Collection routes
 	if h.collectionMgr != nil && strings.HasPrefix(r.URL.Path, "/v1/collections") {
 		h.handleCollections(w, r)
 		return
 	}
 
-	repo, op, ok := parsePath(r.URL.Path)
+	source, op, ok := parseSourcePath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -83,25 +99,33 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Cross-repo write gate: if X-Client-Repo indicates a different source,
 	// verify the target repo has writable=true.
 	clientRepo := r.Header.Get("X-Client-Repo")
-	if clientRepo != "" && clientRepo != repo {
+	if source.Kind == store.SourceKindRepo && clientRepo != "" && clientRepo != source.Name {
 		if r.Method == http.MethodPut || r.Method == http.MethodDelete {
-			if !h.writableRepos[repo] {
+			if !h.writableRepos[source.Name] {
 				writeJSONErrorCode(w, http.StatusForbidden, "FORBIDDEN", "target repo does not allow cross-repo writes")
 				return
 			}
 		}
 	}
 
-	switch r.Method {
-	case http.MethodGet:
-		resp, err = h.dispatchRead(r, repo, op)
-	case http.MethodPut:
-		resp, err = h.dispatchPut(r, repo, op)
-	case http.MethodDelete:
-		resp, err = h.dispatchDelete(r, repo, op)
-	default:
+	if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodDelete {
 		writeJSONErrorCode(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		return
+	}
+
+	adapter, err := h.adapterForSource(r.Context(), source)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		resp, err = h.dispatchRead(r, adapter, source.Name, op)
+	case http.MethodPut:
+		resp, err = h.dispatchPut(r, adapter, source.Name, op)
+	case http.MethodDelete:
+		resp, err = h.dispatchDelete(r, adapter, source.Name, op)
 	}
 
 	if err != nil {
@@ -124,7 +148,22 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
+func (h *handler) adapterForSource(ctx context.Context, source store.SourceRef) (store.Adapter, error) {
+	if source.Kind == store.SourceKindRepo {
+		if router, ok := h.adapter.(store.SourceRouter); ok {
+			return router.AdapterForSource(ctx, source)
+		}
+		return h.adapter, nil
+	}
+
+	router, ok := h.adapter.(store.SourceRouter)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", store.ErrNotSupported, source.String())
+	}
+	return router.AdapterForSource(ctx, source)
+}
+
+func (h *handler) dispatchRead(r *http.Request, adapter store.Adapter, repo, op string) (any, error) {
 	q := r.URL.Query()
 	switch op {
 	case "ls":
@@ -136,7 +175,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return h.adapter.LS(r.Context(), store.LSRequest{
+		return adapter.LS(r.Context(), store.LSRequest{
 			Repo:      repo,
 			Path:      queryPath(q),
 			Sort:      q.Get("sort"),
@@ -151,7 +190,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return h.adapter.Tree(r.Context(), store.TreeRequest{
+		return adapter.Tree(r.Context(), store.TreeRequest{
 			Repo:      repo,
 			Path:      queryPath(q),
 			Depth:     depth,
@@ -163,7 +202,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 			DirsFirst: queryBoolOr(q, "dirs_first"),
 		})
 	case "cat":
-		return h.adapter.Cat(r.Context(), store.CatRequest{Repo: repo, Path: queryPath(q)})
+		return adapter.Cat(r.Context(), store.CatRequest{Repo: repo, Path: queryPath(q)})
 	case "grep":
 		regex, err := queryBool(q, "regex")
 		if err != nil {
@@ -171,7 +210,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 		}
 		ctxBefore, _ := queryInt(q, "context_before")
 		ctxAfter, _ := queryInt(q, "context_after")
-		return h.adapter.Grep(r.Context(), store.GrepRequest{
+		return adapter.Grep(r.Context(), store.GrepRequest{
 			Repo:            repo,
 			Path:            queryPath(q),
 			Pattern:         q.Get("pattern"),
@@ -197,7 +236,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return h.adapter.Find(r.Context(), store.FindRequest{
+		return adapter.Find(r.Context(), store.FindRequest{
 			Repo:     repo,
 			Path:     queryPath(q),
 			Name:     q.Get("name"),
@@ -210,9 +249,9 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 			Offset:   offset,
 		})
 	case "hashes":
-		return h.adapter.BatchHashes(r.Context(), store.HashRequest{Repo: repo, Path: queryPath(q)})
+		return adapter.BatchHashes(r.Context(), store.HashRequest{Repo: repo, Path: queryPath(q)})
 	case "stat":
-		return h.adapter.Stat(r.Context(), store.StatRequest{Repo: repo, Path: queryPath(q)})
+		return adapter.Stat(r.Context(), store.StatRequest{Repo: repo, Path: queryPath(q)})
 	case "search":
 		limit, err := queryIntNonNeg(q, "limit")
 		if err != nil {
@@ -222,7 +261,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return h.adapter.Search(r.Context(), store.SearchRequest{
+		return adapter.Search(r.Context(), store.SearchRequest{
 			Repo:   repo,
 			Query:  q.Get("q"),
 			Path:   queryPath(q),
@@ -230,7 +269,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 			Offset: offset,
 		})
 	case "glob":
-		globber, ok := h.adapter.(store.Globber)
+		globber, ok := adapter.(store.Globber)
 		if !ok {
 			return nil, fmt.Errorf("glob is not supported by this backend")
 		}
@@ -253,7 +292,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 			Offset:  globOffset,
 		})
 	case "locate":
-		locator, ok := h.adapter.(store.Locator)
+		locator, ok := adapter.(store.Locator)
 		if !ok {
 			return nil, fmt.Errorf("locate is not supported by this backend")
 		}
@@ -271,7 +310,7 @@ func (h *handler) dispatchRead(r *http.Request, repo, op string) (any, error) {
 	}
 }
 
-func (h *handler) dispatchPut(r *http.Request, repo, op string) (any, error) {
+func (h *handler) dispatchPut(r *http.Request, adapter store.Adapter, repo, op string) (any, error) {
 	q := r.URL.Query()
 	switch op {
 	case "write":
@@ -279,7 +318,7 @@ func (h *handler) dispatchPut(r *http.Request, repo, op string) (any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read body: %w", err)
 		}
-		return h.adapter.Put(r.Context(), store.PutRequest{
+		return adapter.Put(r.Context(), store.PutRequest{
 			Repo:         repo,
 			Path:         queryPath(q),
 			Content:      string(body),
@@ -294,7 +333,7 @@ func (h *handler) dispatchPut(r *http.Request, repo, op string) (any, error) {
 		if err := json.NewDecoder(r.Body).Decode(&editReq); err != nil {
 			return nil, fmt.Errorf("decode edit body: %w", err)
 		}
-		return h.adapter.Edit(r.Context(), store.EditRequest{
+		return adapter.Edit(r.Context(), store.EditRequest{
 			Repo:         repo,
 			Path:         queryPath(q),
 			Old:          editReq.Old,
@@ -307,11 +346,11 @@ func (h *handler) dispatchPut(r *http.Request, repo, op string) (any, error) {
 	}
 }
 
-func (h *handler) dispatchDelete(r *http.Request, repo, op string) (any, error) {
+func (h *handler) dispatchDelete(r *http.Request, adapter store.Adapter, repo, op string) (any, error) {
 	q := r.URL.Query()
 	switch op {
 	case "delete":
-		return h.adapter.Delete(r.Context(), store.DeleteRequest{
+		return adapter.Delete(r.Context(), store.DeleteRequest{
 			Repo:         repo,
 			Path:         queryPath(q),
 			ExpectedHash: expectedHash(r, q),
@@ -464,19 +503,37 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 }
 
 func parsePath(p string) (repo string, op string, ok bool) {
-	rest := strings.TrimPrefix(p, "/v1/repos/")
-	if rest == p {
+	source, op, ok := parseSourcePath(p)
+	if !ok || source.Kind != store.SourceKindRepo {
 		return "", "", false
 	}
-	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
+	return source.Name, op, true
+}
+
+func parseSourcePath(p string) (source store.SourceRef, op string, ok bool) {
+	prefixes := []struct {
+		prefix string
+		kind   store.SourceKind
+	}{
+		{prefix: "/v1/repos/", kind: store.SourceKindRepo},
+		{prefix: "/v1/docs/", kind: store.SourceKindDocs},
 	}
-	repo, err := url.PathUnescape(parts[0])
-	if err != nil {
-		return "", "", false
+	for _, candidate := range prefixes {
+		rest := strings.TrimPrefix(p, candidate.prefix)
+		if rest == p {
+			continue
+		}
+		parts := strings.Split(rest, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return store.SourceRef{}, "", false
+		}
+		name, err := url.PathUnescape(parts[0])
+		if err != nil {
+			return store.SourceRef{}, "", false
+		}
+		return store.SourceRef{Kind: candidate.kind, Name: name}, parts[1], true
 	}
-	return repo, parts[1], true
+	return store.SourceRef{}, "", false
 }
 
 func queryPath(q url.Values) string {
@@ -583,6 +640,8 @@ func mapError(err error) (int, string) {
 		return http.StatusNotFound, "NOT_FOUND"
 	case errors.Is(err, store.ErrUnknownRepo):
 		return http.StatusNotFound, "UNKNOWN_REPO"
+	case errors.Is(err, store.ErrUnknownSource):
+		return http.StatusNotFound, "UNKNOWN_SOURCE"
 	case errors.Is(err, store.ErrCollectionNotFound):
 		return http.StatusNotFound, "COLLECTION_NOT_FOUND"
 	case errors.Is(err, store.ErrReadOnlyMount):
@@ -637,12 +696,14 @@ func (lm *loggingMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"client_repo", clientRepo,
 			"mount_path", r.Header.Get("X-Mount-Path"),
 		)
-		repo, op, _ := parsePath(r.URL.Path)
+		source, op, _ := parseSourcePath(r.URL.Path)
 		if op != "" {
-			attrs = append(attrs,
-				"target_repo", repo,
-				"op", op,
-			)
+			if source.Kind == store.SourceKindRepo {
+				attrs = append(attrs, "target_repo", source.Name)
+			} else {
+				attrs = append(attrs, "target_source_kind", source.Kind, "target_source_name", source.Name)
+			}
+			attrs = append(attrs, "op", op)
 		}
 		result := "success"
 		if rw.status >= 400 {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,9 +23,16 @@ func NewSyncCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 	syncCmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Synchronize local docs with GXFS",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
 	}
 	syncCmd.AddCommand(newSyncPushCommand(adapter, repo, resolver))
 	syncCmd.AddCommand(newSyncPullCommand(adapter, rawAdapter, repo, resolver))
+	syncCmd.AddCommand(NewRefreshCommand(adapter, rawAdapter, repo, resolver))
+	syncCmd.AddCommand(NewMaterializeCommand(adapter, rawAdapter, repo, resolver))
+	syncCmd.AddCommand(NewDematerializeCommand())
 	return syncCmd
 }
 
@@ -102,7 +108,7 @@ func cleanSyncMount(root string) string {
 func resolveRemoteDoc(resolver *mountadapter.Resolver, repo, localPath, fallbackPath string) string {
 	if resolver != nil {
 		if resolved, err := resolver.Resolve(localPath, mountadapter.OpWrite); err == nil {
-			return formatRemoteRef(repo, resolved.RemoteRepo, resolved.RemotePath)
+			return formatSourceRemoteRef(repo, resolved.Source)
 		}
 	}
 	return "repo://self/" + strings.Trim(fallbackPath, "/")
@@ -111,11 +117,21 @@ func resolveRemoteDoc(resolver *mountadapter.Resolver, repo, localPath, fallback
 // formatRemoteRef returns a repo:// ref string. Same-repo uses "self",
 // cross-repo uses the URL-encoded repo name.
 func formatRemoteRef(currentRepo, remoteRepo, remotePath string) string {
-	repoAlias := "self"
-	if remoteRepo != currentRepo {
-		repoAlias = url.PathEscape(remoteRepo)
+	return formatSourceRemoteRef(currentRepo, store.SourceRef{
+		Kind: store.SourceKindRepo,
+		Name: remoteRepo,
+		Path: remotePath,
+	})
+}
+
+func formatSourceRemoteRef(currentRepo string, source store.SourceRef) string {
+	if source.Kind == store.SourceKindRepo && source.Name == currentRepo {
+		source.Name = "self"
 	}
-	return "repo://" + repoAlias + "/" + strings.Trim(remotePath, "/")
+	if source.Path != "" && !strings.HasPrefix(source.Path, "/") {
+		source.Path = "/" + source.Path
+	}
+	return source.String()
 }
 
 func newSyncPullCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mountadapter.Resolver) *cobra.Command {
@@ -173,13 +189,14 @@ func newSyncPullCommand(adapter, rawAdapter store.Adapter, repo string, resolver
 }
 
 type remoteSyncFile struct {
-	LocalPath   string
-	RemoteRepo  string
-	RemotePath  string
-	Content     string
-	ContentHash string
-	Size        int64
-	MTime       string
+	LocalPath    string
+	RemoteRepo   string
+	RemotePath   string
+	RemoteSource store.SourceRef
+	Content      string
+	ContentHash  string
+	Size         int64
+	MTime        string
 }
 
 type localSyncFile struct {
@@ -261,7 +278,7 @@ func collectRemoteFilesMetadata(ctx context.Context, adapter store.Adapter, repo
 
 // fetchChangedFileContents Cats only the files that need content (hash unknown or changed).
 // For unchanged files, returns a remoteSyncFile with Content="" and the known hash.
-func fetchChangedFileContents(ctx context.Context, adapter store.Adapter, repo string, fileNodes []store.Node, hashMap map[string]string, manifest syncmanifest.Manifest, localPathFn func(store.Node) string) ([]remoteSyncFile, error) {
+func fetchChangedFileContents(ctx context.Context, adapter store.Adapter, repo string, fileNodes []store.Node, hashMap map[string]string, manifest syncmanifest.Manifest, localPathFn func(store.Node) string, sourceFn func(store.Node) store.SourceRef) ([]remoteSyncFile, error) {
 	existingByLocal := manifestEntriesByLocal(manifest)
 
 	// Determine which files need Cat
@@ -273,14 +290,16 @@ func fetchChangedFileContents(ctx context.Context, adapter store.Adapter, repo s
 		existing, hasExisting := existingByLocal[localPath]
 
 		if hashKnown && hasExisting && existing.ContentHash == hash {
+			source := sourceFn(node)
 			// Unchanged — no Cat needed
 			files[i] = remoteSyncFile{
-				LocalPath:   localPath,
-				RemoteRepo:  repo,
-				RemotePath:  node.Path,
-				ContentHash: hash,
-				Size:        node.Size,
-				MTime:       node.ModTime,
+				LocalPath:    localPath,
+				RemoteRepo:   repo,
+				RemotePath:   node.Path,
+				RemoteSource: source,
+				ContentHash:  hash,
+				Size:         node.Size,
+				MTime:        node.ModTime,
 			}
 			continue
 		}
@@ -301,14 +320,16 @@ func fetchChangedFileContents(ctx context.Context, adapter store.Adapter, repo s
 			if err != nil {
 				return err
 			}
+			source := sourceFn(node)
 			files[i] = remoteSyncFile{
-				LocalPath:   localPathFn(node),
-				RemoteRepo:  repo,
-				RemotePath:  node.Path,
-				Content:     cat.Content,
-				ContentHash: store.HashContent(cat.Content),
-				Size:        int64(len(cat.Content)),
-				MTime:       node.ModTime,
+				LocalPath:    localPathFn(node),
+				RemoteRepo:   repo,
+				RemotePath:   node.Path,
+				RemoteSource: source,
+				Content:      cat.Content,
+				ContentHash:  store.HashContent(cat.Content),
+				Size:         int64(len(cat.Content)),
+				MTime:        node.ModTime,
 			}
 			return nil
 		})
@@ -326,6 +347,8 @@ func collectRemoteFiles(ctx context.Context, adapter store.Adapter, repo, root s
 	}
 	return fetchChangedFileContents(ctx, adapter, repo, fileNodes, hashMap, manifest, func(node store.Node) string {
 		return strings.Trim(strings.TrimPrefix(filepath.ToSlash(node.Path), "./"), "/")
+	}, func(node store.Node) store.SourceRef {
+		return store.SourceRef{Kind: store.SourceKindRepo, Name: repo, Path: node.Path}
 	})
 }
 
@@ -339,14 +362,18 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 	if err != nil {
 		return nil, fmt.Errorf("resolve mount %s: %w", localRoot, err)
 	}
-	remoteRepo := resolved.RemoteRepo
-	stat, err := rawAdapter.Stat(ctx, store.StatRequest{Repo: remoteRepo, Path: resolved.RemotePath})
+	sourceAdapter, err := adapterForCommandSource(ctx, rawAdapter, resolved.Source)
+	if err != nil {
+		return nil, fmt.Errorf("resolve mount source %s: %w", resolved.Source.String(), err)
+	}
+	remoteSource := resolved.Source
+	stat, err := sourceAdapter.Stat(ctx, store.StatRequest{Repo: remoteSource.Name, Path: remoteSource.Path})
 	if err != nil {
 		return nil, err
 	}
 	nodes := []store.Node{stat.Node}
 	if stat.Node.Kind == "dir" {
-		resp, err := rawAdapter.LS(ctx, store.LSRequest{Repo: remoteRepo, Path: resolved.RemotePath, Recursive: true, All: true})
+		resp, err := sourceAdapter.LS(ctx, store.LSRequest{Repo: remoteSource.Name, Path: remoteSource.Path, Recursive: true, All: true})
 		if err != nil {
 			return nil, err
 		}
@@ -360,11 +387,11 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 		}
 	}
 
-	remoteRoot := strings.TrimSuffix(resolved.RemotePath, "/")
+	remoteRoot := strings.TrimSuffix(remoteSource.Path, "/")
 	localBase := resolved.LocalPath
 
 	// Fetch known hashes for hash-skip optimization
-	hashResp, err := rawAdapter.BatchHashes(ctx, store.HashRequest{Repo: remoteRepo, Path: resolved.RemotePath})
+	hashResp, err := sourceAdapter.BatchHashes(ctx, store.HashRequest{Repo: remoteSource.Name, Path: remoteSource.Path})
 	if err != nil {
 		return nil, fmt.Errorf("batch hashes: %w", err)
 	}
@@ -382,7 +409,11 @@ func collectMountedRemoteFiles(ctx context.Context, rawAdapter store.Adapter, re
 		}
 		return localPath
 	}
-	return fetchChangedFileContents(ctx, rawAdapter, remoteRepo, fileNodes, hashMap, manifest, localPathFn)
+	return fetchChangedFileContents(ctx, sourceAdapter, remoteSource.Name, fileNodes, hashMap, manifest, localPathFn, func(node store.Node) store.SourceRef {
+		source := remoteSource
+		source.Path = node.Path
+		return source
+	})
 }
 
 func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root string, manifest syncmanifest.Manifest, opts remoteSyncOptions) (remoteSyncPlan, error) {
@@ -470,19 +501,29 @@ func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, rawAdapter 
 			content := change.Remote.Content
 			if content == "" {
 				// Hash-skipped file: fetch content on demand for materialization.
-				// Use rawAdapter + RemotePath when available (mounted paths),
-				// otherwise use the regular adapter.
+				// Use the source adapter when available so docs:// mounts keep
+				// their namespace identity.
 				catAdapter := adapter
 				if rawAdapter != nil {
 					catAdapter = rawAdapter
 				}
 				catRepo := change.Remote.RemoteRepo
+				catPath := change.Remote.RemotePath
+				if change.Remote.RemoteSource.Kind != "" {
+					var err error
+					catAdapter, err = adapterForCommandSource(ctx, catAdapter, change.Remote.RemoteSource)
+					if err != nil {
+						return remoteSyncResult{}, fmt.Errorf("resolve source %s for materialize: %w", change.Remote.RemoteSource.String(), err)
+					}
+					catRepo = change.Remote.RemoteSource.Name
+					catPath = change.Remote.RemoteSource.Path
+				}
 				if catRepo == "" {
 					catRepo = repo
 				}
-				cat, err := catAdapter.Cat(ctx, store.CatRequest{Repo: catRepo, Path: change.Remote.RemotePath})
+				cat, err := catAdapter.Cat(ctx, store.CatRequest{Repo: catRepo, Path: catPath})
 				if err != nil {
-					return remoteSyncResult{}, fmt.Errorf("cat %s for materialize: %w", change.Remote.RemotePath, err)
+					return remoteSyncResult{}, fmt.Errorf("cat %s for materialize: %w", catPath, err)
 				}
 				content = cat.Content
 			}
@@ -504,14 +545,12 @@ func applyRemoteSyncPlan(ctx context.Context, adapter store.Adapter, rawAdapter 
 	return result, nil
 }
 
-// remoteDoc returns the repo:// ref for this file for manifest entries.
-// Same-repo (RemoteRepo empty) uses "self". Cross-repo uses the actual repo name.
+// remoteDoc returns the source ref for this file for manifest entries.
 func (f remoteSyncFile) remoteDoc(currentRepo string) string {
-	repo := "self"
-	if f.RemoteRepo != "" && f.RemoteRepo != currentRepo {
-		repo = url.PathEscape(f.RemoteRepo)
+	if f.RemoteSource.Kind != "" {
+		return formatSourceRemoteRef(currentRepo, f.RemoteSource)
 	}
-	return "repo://" + repo + "/" + strings.Trim(f.RemotePath, "/")
+	return formatRemoteRef(currentRepo, f.RemoteRepo, f.RemotePath)
 }
 
 func (f remoteSyncFile) toManifestEntry(currentRepo, root string, materialized bool) syncmanifest.Entry {

@@ -25,6 +25,9 @@ func TestResolverUsesLongestLocalPrefix(t *testing.T) {
 	if resolved.RemoteRepo != "github.com/acme/project" {
 		t.Fatalf("resolved.RemoteRepo = %q, want github.com/acme/project", resolved.RemoteRepo)
 	}
+	if resolved.Source.Kind != store.SourceKindRepo || resolved.Source.Name != "github.com/acme/project" {
+		t.Fatalf("resolved.Source = %+v, want repo source for github.com/acme/project", resolved.Source)
+	}
 	if resolved.RemotePath != "/shared/openai-go/f.md" {
 		t.Fatalf("resolved.RemotePath = %q, want /shared/openai-go/f.md", resolved.RemotePath)
 	}
@@ -70,6 +73,69 @@ func TestResolverRejectsUnsupportedRemoteForPhaseOne(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("NewResolver() error = nil, want unsupported collection remote")
+	}
+}
+
+func TestSourceRefParseAndFormat(t *testing.T) {
+	tests := []struct {
+		raw        string
+		wantKind   store.SourceKind
+		wantName   string
+		wantPath   string
+		wantString string
+	}{
+		{"repo://github%2Fopenai-go/docs", store.SourceKindRepo, "github/openai-go", "/docs", "repo://github%2Fopenai-go/docs"},
+		{"docs://openai-go-sdk", store.SourceKindDocs, "openai-go-sdk", "/", "docs://openai-go-sdk"},
+		{"docs://openai-go-sdk/usage.md", store.SourceKindDocs, "openai-go-sdk", "/usage.md", "docs://openai-go-sdk/usage.md"},
+		{"docs://github%2Fopenai-go/usage.md", store.SourceKindDocs, "github/openai-go", "/usage.md", "docs://github%2Fopenai-go/usage.md"},
+		{"docset://best-practices", store.SourceKindDocset, "best-practices", "/", "docset://best-practices"},
+	}
+
+	for _, tt := range tests {
+		ref, err := store.ParseSourceRef(tt.raw)
+		if err != nil {
+			t.Fatalf("ParseSourceRef(%q) error = %v", tt.raw, err)
+		}
+		if ref.Kind != tt.wantKind || ref.Name != tt.wantName || ref.Path != tt.wantPath {
+			t.Fatalf("ParseSourceRef(%q) = %+v, want kind=%s name=%q path=%q", tt.raw, ref, tt.wantKind, tt.wantName, tt.wantPath)
+		}
+		if ref.String() != tt.wantString {
+			t.Fatalf("ParseSourceRef(%q).String() = %q, want %q", tt.raw, ref.String(), tt.wantString)
+		}
+	}
+}
+
+func TestSourceRefRejectsCollection(t *testing.T) {
+	if _, err := store.ParseSourceRef("collection://openai-go/usage.md"); err == nil {
+		t.Fatal("ParseSourceRef(collection://...) error = nil, want rejection")
+	}
+}
+
+func TestResolverSupportsDocsSourceRefs(t *testing.T) {
+	r, err := NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/openai-go-sdk", Remote: "docs://openai-go-sdk", Mode: "readonly"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	resolved, err := r.Resolve("docs/openai-go-sdk/usage.md", OpRead)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.Source.Kind != store.SourceKindDocs || resolved.Source.Name != "openai-go-sdk" || resolved.Source.Path != "/usage.md" {
+		t.Fatalf("resolved.Source = %+v, want docs://openai-go-sdk/usage.md", resolved.Source)
+	}
+	if resolved.RemoteRepo != "" || resolved.RemotePath != "/usage.md" {
+		t.Fatalf("compat fields = repo %q path %q, want empty repo and /usage.md", resolved.RemoteRepo, resolved.RemotePath)
+	}
+
+	local, ok := r.ToLocalSource(store.SourceRef{Kind: store.SourceKindDocs, Name: "openai-go-sdk", Path: "/usage.md"})
+	if !ok {
+		t.Fatal("ToLocalSource() ok = false, want true")
+	}
+	if local != "docs/openai-go-sdk/usage.md" {
+		t.Fatalf("local = %q, want docs/openai-go-sdk/usage.md", local)
 	}
 }
 

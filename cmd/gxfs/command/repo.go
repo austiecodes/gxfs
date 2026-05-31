@@ -12,6 +12,10 @@ func NewRepoCommand(rawAdapter store.Adapter) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "repo",
 		Short: "Repository management commands",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
 	}
 
 	cmd.AddCommand(newRepoListCommand(rawAdapter))
@@ -20,7 +24,7 @@ func NewRepoCommand(rawAdapter store.Adapter) *cobra.Command {
 
 func newRepoListCommand(rawAdapter store.Adapter) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   "ls",
 		Short: "List available repositories",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

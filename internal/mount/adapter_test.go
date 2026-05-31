@@ -10,12 +10,17 @@ import (
 )
 
 type fakeStore struct {
-	lsReqs     []store.LSRequest
-	catReq     store.CatRequest
-	putReq     store.PutRequest
-	grepReq    []store.GrepRequest
-	lsByPath   map[string][]store.Node
-	grepByPath map[string][]store.Match
+	lsReqs       []store.LSRequest
+	catReq       store.CatRequest
+	putReq       store.PutRequest
+	deleteReq    store.DeleteRequest
+	editReq      store.EditRequest
+	hashReq      store.HashRequest
+	grepReq      []store.GrepRequest
+	lsByPath     map[string][]store.Node
+	findByPath   map[string][]store.Node
+	grepByPath   map[string][]store.Match
+	hashesByPath map[string][]store.ContentHash
 }
 
 func (f *fakeStore) LS(_ context.Context, req store.LSRequest) (*store.LSResponse, error) {
@@ -41,6 +46,9 @@ func (f *fakeStore) Grep(_ context.Context, req store.GrepRequest) (*store.GrepR
 }
 
 func (f *fakeStore) Find(_ context.Context, req store.FindRequest) (*store.FindResponse, error) {
+	if f.findByPath != nil {
+		return &store.FindResponse{Nodes: append([]store.Node(nil), f.findByPath[req.Path]...)}, nil
+	}
 	return &store.FindResponse{Nodes: []store.Node{{Path: "/remote-docs/guide.md", Name: "guide.md", Kind: "file"}}}, nil
 }
 
@@ -54,14 +62,20 @@ func (f *fakeStore) Put(_ context.Context, req store.PutRequest) (*store.PutResp
 }
 
 func (f *fakeStore) Delete(_ context.Context, req store.DeleteRequest) (*store.DeleteResponse, error) {
+	f.deleteReq = req
 	return &store.DeleteResponse{}, nil
 }
 
 func (f *fakeStore) Edit(_ context.Context, req store.EditRequest) (*store.EditResponse, error) {
+	f.editReq = req
 	return &store.EditResponse{Path: req.Path, Replaced: 1, Content: "new"}, nil
 }
 
-func (f *fakeStore) BatchHashes(_ context.Context, _ store.HashRequest) (*store.HashResponse, error) {
+func (f *fakeStore) BatchHashes(_ context.Context, req store.HashRequest) (*store.HashResponse, error) {
+	f.hashReq = req
+	if f.hashesByPath != nil {
+		return &store.HashResponse{Hashes: append([]store.ContentHash(nil), f.hashesByPath[req.Path]...)}, nil
+	}
 	return &store.HashResponse{Hashes: []store.ContentHash{}}, nil
 }
 
@@ -188,5 +202,141 @@ func TestAdapterRejectsReadOnlyWrites(t *testing.T) {
 	_, err = adapter.Put(context.Background(), store.PutRequest{Repo: "gxfs", Path: "docs/shared/a.md", Content: "x"})
 	if !errors.Is(err, store.ErrReadOnlyMount) {
 		t.Fatalf("Put() error = %v, want ErrReadOnlyMount", err)
+	}
+}
+
+func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
+	resolver, err := NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/openai-go-sdk", Remote: "docs://openai-go-sdk/reference", Mode: "readonly"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+	docsStore := &fakeStore{
+		lsByPath: map[string][]store.Node{
+			"/reference": {
+				{Path: "/reference/usage.md", Name: "usage.md", Kind: "file"},
+			},
+		},
+		findByPath: map[string][]store.Node{
+			"/reference": {
+				{Path: "/reference/usage.md", Name: "usage.md", Kind: "file"},
+			},
+		},
+		grepByPath: map[string][]store.Match{
+			"/reference": {
+				{Path: "/reference/usage.md", Line: 7, Text: "Responses API"},
+			},
+		},
+		hashesByPath: map[string][]store.ContentHash{
+			"/reference": {
+				{Path: "/reference/usage.md", Hash: "sha256:usage"},
+			},
+		},
+	}
+	registry, err := store.NewNamespaceRegistry(
+		map[string]store.Adapter{"gxfs": &fakeStore{}},
+		map[string]store.Adapter{"openai-go-sdk": docsStore},
+	)
+	if err != nil {
+		t.Fatalf("NewNamespaceRegistry() error = %v", err)
+	}
+	adapter := NewAdapter(registry, resolver)
+
+	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "docs/openai-go-sdk/usage.md"})
+	if err != nil {
+		t.Fatalf("Cat() error = %v", err)
+	}
+	if docsStore.catReq.Repo != "openai-go-sdk" || docsStore.catReq.Path != "/reference/usage.md" {
+		t.Fatalf("docs cat req = %+v, want openai-go-sdk /reference/usage.md", docsStore.catReq)
+	}
+	if cat.Path != "/docs/openai-go-sdk/usage.md" {
+		t.Fatalf("cat path = %q, want localized docs path", cat.Path)
+	}
+
+	ls, err := adapter.LS(context.Background(), store.LSRequest{Repo: "gxfs", Path: "docs/openai-go-sdk"})
+	if err != nil {
+		t.Fatalf("LS() error = %v", err)
+	}
+	if len(docsStore.lsReqs) != 1 || docsStore.lsReqs[0].Repo != "openai-go-sdk" || docsStore.lsReqs[0].Path != "/reference" {
+		t.Fatalf("docs ls reqs = %+v, want openai-go-sdk /reference", docsStore.lsReqs)
+	}
+	if len(ls.Nodes) != 1 || ls.Nodes[0].Path != "/docs/openai-go-sdk/usage.md" {
+		t.Fatalf("ls nodes = %+v, want localized docs path", ls.Nodes)
+	}
+
+	found, err := adapter.Find(context.Background(), store.FindRequest{Repo: "gxfs", Path: "docs/openai-go-sdk", Name: "*.md"})
+	if err != nil {
+		t.Fatalf("Find() error = %v", err)
+	}
+	if len(found.Nodes) != 1 || found.Nodes[0].Path != "/docs/openai-go-sdk/usage.md" {
+		t.Fatalf("find nodes = %+v, want localized docs path", found.Nodes)
+	}
+
+	grep, err := adapter.Grep(context.Background(), store.GrepRequest{Repo: "gxfs", Path: "docs/openai-go-sdk", Pattern: "Responses"})
+	if err != nil {
+		t.Fatalf("Grep() error = %v", err)
+	}
+	if len(grep.Matches) != 1 || grep.Matches[0].Path != "/docs/openai-go-sdk/usage.md" {
+		t.Fatalf("grep matches = %+v, want localized docs path", grep.Matches)
+	}
+
+	hashes, err := adapter.BatchHashes(context.Background(), store.HashRequest{Repo: "gxfs", Path: "docs/openai-go-sdk"})
+	if err != nil {
+		t.Fatalf("BatchHashes() error = %v", err)
+	}
+	if docsStore.hashReq.Repo != "openai-go-sdk" || docsStore.hashReq.Path != "/reference" {
+		t.Fatalf("docs hash req = %+v, want openai-go-sdk /reference", docsStore.hashReq)
+	}
+	if len(hashes.Hashes) != 1 || hashes.Hashes[0].Path != "/docs/openai-go-sdk/usage.md" {
+		t.Fatalf("hashes = %+v, want localized docs path", hashes.Hashes)
+	}
+}
+
+func TestAdapterWritesDocsSourceThroughSourceRouter(t *testing.T) {
+	resolver, err := NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/openai-go-sdk", Remote: "docs://openai-go-sdk/reference", Mode: "writable"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+	docsStore := &fakeStore{}
+	registry, err := store.NewNamespaceRegistry(
+		map[string]store.Adapter{"gxfs": &fakeStore{}},
+		map[string]store.Adapter{"openai-go-sdk": docsStore},
+	)
+	if err != nil {
+		t.Fatalf("NewNamespaceRegistry() error = %v", err)
+	}
+	adapter := NewAdapter(registry, resolver)
+
+	resp, err := adapter.Put(context.Background(), store.PutRequest{
+		Repo:    "gxfs",
+		Path:    "docs/openai-go-sdk/new.md",
+		Content: "new content",
+	})
+	if err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+	if docsStore.putReq.Repo != "openai-go-sdk" || docsStore.putReq.Path != "/reference/new.md" || docsStore.putReq.Content != "new content" {
+		t.Fatalf("docs put req = %+v, want routed writable docs request", docsStore.putReq)
+	}
+	if resp.Node.Path != "/docs/openai-go-sdk/new.md" {
+		t.Fatalf("put response path = %q, want localized docs path", resp.Node.Path)
+	}
+}
+
+func TestAdapterRejectsDocsSourceWithoutSourceRouter(t *testing.T) {
+	resolver, err := NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/openai-go-sdk", Remote: "docs://openai-go-sdk", Mode: "readonly"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+	adapter := NewAdapter(&fakeStore{}, resolver)
+
+	_, err = adapter.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "docs/openai-go-sdk/usage.md"})
+	if !errors.Is(err, store.ErrNotSupported) {
+		t.Fatalf("Cat() error = %v, want ErrNotSupported", err)
 	}
 }

@@ -24,7 +24,7 @@ func NewLocateCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 
 By default, searches the current repo. Use --all-repos to search across all
 available repos. Results are returned with repo:// refs for easy follow-up
-with 'gxfs cat' or 'gxfs attach'.`,
+with 'gxfs cat' or 'gxfs mount attach'.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateNonNeg([]string{"limit"}, limit); err != nil {

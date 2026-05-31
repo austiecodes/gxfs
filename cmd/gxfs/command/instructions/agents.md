@@ -14,20 +14,22 @@ Use gxfs CLI to browse and update shared docs. Commands align with Unix: `ls`, `
 - `gxfs search "query"` — full-text search across entire repo
 - `gxfs glob "**/*.md"` — path pattern match
 - `gxfs glob "**/*.md" --all-repos` — search across all repos
-- `gxfs repo list` — list available repos
+- `gxfs repo ls` — list available repos
+- `gxfs mount sources` — list mountable `repo://` and `docs://` sources
 
 **Remote preview** (read without mounting):
 - `gxfs cat repo://other-repo/docs/foo.md`
 
-**Mounting** (cross-repo docs):
+**Mounting** (shared docs):
 - `gxfs mount add repo://other-repo/docs libs/other-repo` — mount remote docs (readonly)
-- `gxfs mount list` — show current mounts
-- `gxfs attach <keyword> --into libs/<name>` — discover + auto-mount by keyword
+- `gxfs mount add docs://openai-go-sdk/reference libs/openai-go` — mount reusable docs namespace
+- `gxfs mount ls` — show current mounts
+- `gxfs mount attach <keyword> --into libs/<name>` — discover + auto-mount by keyword
 
 **Writing**:
 - `gxfs write {{ .DocsPath }}/foo.md "content"` — create or overwrite
 - `gxfs edit {{ .DocsPath }}/foo.md --old "x" --new "y"` — string replacement
-- `gxfs delete {{ .DocsPath }}/foo.md` — delete a doc
+- `gxfs rm {{ .DocsPath }}/foo.md` — delete a doc
 
 Config: `.gxfs/settings.toml`. Mounts: `.gxfs/mounts.toml`. Use `gxfs tree {{ .DocsPath }} -L 3` to start.
 <!-- GXFS_END -->

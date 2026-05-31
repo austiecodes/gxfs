@@ -44,18 +44,46 @@ func splitAddr(addr string) (string, int, error) {
 }
 
 func adapterFromServerConfig(ctx context.Context, cfg config.ServerConfig) (store.Adapter, error) {
-	adapters := make(map[string]store.Adapter, len(cfg.Repos))
+	repoNames := make(map[string]struct{}, len(cfg.Repos))
 	for _, repo := range cfg.Repos {
-		if _, exists := adapters[repo.Name]; exists {
+		if _, exists := repoNames[repo.Name]; exists {
 			return nil, fmt.Errorf("duplicate repo %q", repo.Name)
 		}
+		if err := validateRepoBackendType(repo.Backend.Type); err != nil {
+			return nil, fmt.Errorf("repo %s: %w", repo.Name, err)
+		}
+		repoNames[repo.Name] = struct{}{}
+	}
+
+	docsNames := make(map[string]struct{}, len(cfg.Docs))
+	for _, docs := range cfg.Docs {
+		if _, exists := docsNames[docs.Name]; exists {
+			return nil, fmt.Errorf("duplicate docs namespace %q", docs.Name)
+		}
+		if err := validateDocsNamespaceBackendType(docs.Backend.Type); err != nil {
+			return nil, fmt.Errorf("docs namespace %s: %w", docs.Name, err)
+		}
+		docsNames[docs.Name] = struct{}{}
+	}
+
+	repoAdapters := make(map[string]store.Adapter, len(cfg.Repos))
+	for _, repo := range cfg.Repos {
 		adapter, err := adapterFromRepoConfig(ctx, repo)
 		if err != nil {
 			return nil, fmt.Errorf("repo %s: %w", repo.Name, err)
 		}
-		adapters[repo.Name] = adapter
+		repoAdapters[repo.Name] = adapter
 	}
-	return store.NewRegistry(adapters)
+
+	docsAdapters := make(map[string]store.Adapter, len(cfg.Docs))
+	for _, docs := range cfg.Docs {
+		adapter, err := adapterFromDocsNamespaceConfig(ctx, docs)
+		if err != nil {
+			return nil, fmt.Errorf("docs namespace %s: %w", docs.Name, err)
+		}
+		docsAdapters[docs.Name] = adapter
+	}
+	return store.NewNamespaceRegistry(repoAdapters, docsAdapters)
 }
 
 func adapterFromRepoConfig(ctx context.Context, repo config.RepoConfig) (store.Adapter, error) {
@@ -69,9 +97,48 @@ func adapterFromRepoConfig(ctx context.Context, repo config.RepoConfig) (store.A
 	}
 }
 
+func adapterFromDocsNamespaceConfig(ctx context.Context, docs config.DocsNamespaceConfig) (store.Adapter, error) {
+	switch docs.Backend.Type {
+	case "doc_postgres", "doc_namespace_postgres":
+		return postgres.ConnectDocNamespace(ctx, postgresConfigFromDocsNamespace(docs))
+	case "postgres":
+		return nil, fmt.Errorf("unsupported backend type for docs namespace: %s (path-centric postgres is repo-only)", docs.Backend.Type)
+	default:
+		return nil, fmt.Errorf("unsupported backend type: %s", docs.Backend.Type)
+	}
+}
+
+func validateRepoBackendType(backendType string) error {
+	switch backendType {
+	case "postgres", "doc_postgres":
+		return nil
+	default:
+		return fmt.Errorf("unsupported backend type: %s", backendType)
+	}
+}
+
+func validateDocsNamespaceBackendType(backendType string) error {
+	switch backendType {
+	case "doc_postgres", "doc_namespace_postgres":
+		return nil
+	case "postgres":
+		return fmt.Errorf("unsupported backend type for docs namespace: %s (path-centric postgres is repo-only)", backendType)
+	default:
+		return fmt.Errorf("unsupported backend type: %s", backendType)
+	}
+}
+
 func postgresConfigFromRepo(repo config.RepoConfig) postgres.Config {
-	files := repo.Backend.Postgres.Files
-	pg := repo.Backend.Postgres
+	return postgresConfigFromBackend(repo.Name, repo.Backend)
+}
+
+func postgresConfigFromDocsNamespace(docs config.DocsNamespaceConfig) postgres.Config {
+	return postgresConfigFromBackend(docs.Name, docs.Backend)
+}
+
+func postgresConfigFromBackend(scope string, backend config.BackendConfig) postgres.Config {
+	files := backend.Postgres.Files
+	pg := backend.Postgres
 
 	var cacheTTL time.Duration
 	if pg.CacheTTL != "" {
@@ -81,7 +148,7 @@ func postgresConfigFromRepo(repo config.RepoConfig) postgres.Config {
 	return postgres.Config{
 		DSN:            pg.DSN,
 		Schema:         pg.Schema,
-		Repo:           repo.Name,
+		Repo:           scope,
 		NodesTable:     defaultString(pg.NodesTable, "vfs_nodes"),
 		ContentTable:   defaultString(pg.ContentTable, "vfs_content"),
 		RepoNodesTable: defaultString(pg.RepoNodesTable, "vfs_repo_nodes"),
@@ -100,6 +167,29 @@ func defaultString(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func apiRoutes(handler http.Handler) []rest.Route {
+	return []rest.Route{
+		{Method: http.MethodGet, Path: "/healthz", Handler: handler.ServeHTTP},
+		{Method: http.MethodDelete, Path: "/v1/cache", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/repos", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/mount-sources", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodPut, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodDelete, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/docs/:name/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodPut, Path: "/v1/docs/:name/:op", Handler: handler.ServeHTTP},
+		{Method: http.MethodDelete, Path: "/v1/docs/:name/:op", Handler: handler.ServeHTTP},
+		// Collection routes
+		{Method: http.MethodPost, Path: "/v1/collections", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/collections", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/collections/:name", Handler: handler.ServeHTTP},
+		{Method: http.MethodDelete, Path: "/v1/collections/:name", Handler: handler.ServeHTTP},
+		{Method: http.MethodPut, Path: "/v1/collections/:name/members", Handler: handler.ServeHTTP},
+		{Method: http.MethodDelete, Path: "/v1/collections/:name/members", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/collections/:name/docs", Handler: handler.ServeHTTP},
+	}
 }
 
 // redactDSN returns a safe-to-print version of a DSN with credentials stripped.
@@ -131,7 +221,7 @@ func (t storageTarget) label() string {
 	return fmt.Sprintf("%s/%s", redactDSN(t.dsn), t.schema)
 }
 
-// collectGCTargets extracts unique doc_postgres storage targets from server config.
+// collectGCTargets extracts unique document storage targets from server config.
 func collectGCTargets(cfg config.ServerConfig) []storageTarget {
 	seen := make(map[storageTarget]bool)
 	var targets []storageTarget
@@ -139,14 +229,12 @@ func collectGCTargets(cfg config.ServerConfig) []storageTarget {
 		if repo.Backend.Type != "doc_postgres" {
 			continue
 		}
-		pg := repo.Backend.Postgres
-		if pg.DSN == "" {
-			continue
-		}
-		t := storageTarget{dsn: pg.DSN, schema: pg.Schema}
-		if !seen[t] {
-			seen[t] = true
-			targets = append(targets, t)
+		targets = appendGCTarget(targets, seen, repo.Backend.Postgres)
+	}
+	for _, docs := range cfg.Docs {
+		switch docs.Backend.Type {
+		case "doc_postgres", "doc_namespace_postgres":
+			targets = appendGCTarget(targets, seen, docs.Backend.Postgres)
 		}
 	}
 	// Sort for deterministic output
@@ -157,6 +245,18 @@ func collectGCTargets(cfg config.ServerConfig) []storageTarget {
 		return targets[i].schema < targets[j].schema
 	})
 	return targets
+}
+
+func appendGCTarget(targets []storageTarget, seen map[storageTarget]bool, pg config.PostgresConfig) []storageTarget {
+	if pg.DSN == "" {
+		return targets
+	}
+	t := storageTarget{dsn: pg.DSN, schema: pg.Schema}
+	if seen[t] {
+		return targets
+	}
+	seen[t] = true
+	return append(targets, t)
 }
 
 func main() {
@@ -229,7 +329,7 @@ Use --force to actually delete.`,
 
 			targets := collectGCTargets(cfg)
 			if len(targets) == 0 {
-				return fmt.Errorf("no doc_postgres repos configured")
+				return fmt.Errorf("no doc_postgres storage targets configured")
 			}
 
 			req := postgres.GCRequest{
@@ -355,19 +455,8 @@ func runServer() {
 	srv := rest.MustNewServer(rest.RestConf{Host: host, Port: port})
 	defer srv.Stop()
 
-	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/healthz", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/cache", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/repos", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodPut, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP})
-	// Collection routes
-	srv.AddRoute(rest.Route{Method: http.MethodPost, Path: "/v1/collections", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/collections", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/collections/:name", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/collections/:name", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodPut, Path: "/v1/collections/:name/members", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodDelete, Path: "/v1/collections/:name/members", Handler: handler.ServeHTTP})
-	srv.AddRoute(rest.Route{Method: http.MethodGet, Path: "/v1/collections/:name/docs", Handler: handler.ServeHTTP})
+	for _, route := range apiRoutes(handler) {
+		srv.AddRoute(route)
+	}
 	srv.Start()
 }
