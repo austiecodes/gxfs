@@ -15,8 +15,11 @@ import (
 
 func TestClientLSBuildsURLAndDecodesResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/repos/gxfs/ls" {
-			t.Fatalf("path = %q, want /v1/repos/gxfs/ls", r.URL.Path)
+		if r.URL.Path != "/v1/repos/ls" {
+			t.Fatalf("path = %q, want /v1/repos/ls", r.URL.Path)
+		}
+		if r.URL.Query().Get("repo") != "gxfs" {
+			t.Fatalf("query repo = %q, want gxfs", r.URL.Query().Get("repo"))
 		}
 		if r.URL.Query().Get("path") != "/docs" {
 			t.Fatalf("query path = %q, want /docs", r.URL.Query().Get("path"))
@@ -33,6 +36,63 @@ func TestClientLSBuildsURLAndDecodesResponse(t *testing.T) {
 	}
 	if len(resp.Nodes) != 1 || resp.Nodes[0].Name != "readme.md" {
 		t.Fatalf("LS() = %+v, want readme node", resp)
+	}
+}
+
+func TestClientEscapesSourceNamesWithSlashesOnce(t *testing.T) {
+	const repoName = "github.com/austiecodes/xxxx"
+
+	seen := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		escapedPath := r.URL.EscapedPath()
+		if escapedPath != "/v1/repos/ls" && escapedPath != "/v1/repos/tree" && escapedPath != "/v1/repos/write" {
+			t.Fatalf("escaped path = %q, want repo operation endpoint", escapedPath)
+		}
+		if strings.Contains(r.URL.RawQuery, "%252F") {
+			t.Fatalf("raw query = %q, contains double-encoded slash", r.URL.RawQuery)
+		}
+		if got := r.URL.Query().Get("repo"); got != repoName {
+			t.Fatalf("query repo = %q, want %q; raw query = %q", got, repoName, r.URL.RawQuery)
+		}
+		op := strings.TrimPrefix(escapedPath, "/v1/repos/")
+		seen[r.Method+" "+op] = true
+
+		switch r.Method + " " + op {
+		case http.MethodGet + " ls":
+			_ = json.NewEncoder(w).Encode(store.LSResponse{
+				Nodes: []store.Node{{Path: "/docs", Name: "docs", Kind: "dir"}},
+			})
+		case http.MethodGet + " tree":
+			_ = json.NewEncoder(w).Encode(store.TreeResponse{Text: "/docs\n"})
+		case http.MethodPut + " write":
+			_ = json.NewEncoder(w).Encode(store.PutResponse{
+				Node: store.Node{Path: r.URL.Query().Get("path"), Name: "guide.md", Kind: "file"},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, escapedPath)
+		}
+	}))
+	defer server.Close()
+
+	cli := New(server.URL)
+	if _, err := cli.LS(context.Background(), store.LSRequest{Repo: repoName, Path: "/docs"}); err != nil {
+		t.Fatalf("LS() error = %v", err)
+	}
+	if _, err := cli.Tree(context.Background(), store.TreeRequest{Repo: repoName, Path: "/docs"}); err != nil {
+		t.Fatalf("Tree() error = %v", err)
+	}
+	if _, err := cli.Put(context.Background(), store.PutRequest{Repo: repoName, Path: "/docs/guide.md", Content: "guide"}); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	for _, want := range []string{
+		http.MethodGet + " ls",
+		http.MethodGet + " tree",
+		http.MethodPut + " write",
+	} {
+		if !seen[want] {
+			t.Fatalf("request %q was not observed", want)
+		}
 	}
 }
 
@@ -114,8 +174,11 @@ func TestClientRegisterRepoDuplicateReturnsJSONMessage(t *testing.T) {
 
 func TestClientAdapterForSourceDocsBuildsURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/docs/openai-go-sdk/cat" {
-			t.Fatalf("path = %q, want /v1/docs/openai-go-sdk/cat", r.URL.Path)
+		if r.URL.Path != "/v1/docs/cat" {
+			t.Fatalf("path = %q, want /v1/docs/cat", r.URL.Path)
+		}
+		if r.URL.Query().Get("name") != "openai-go-sdk" {
+			t.Fatalf("query name = %q, want openai-go-sdk", r.URL.Query().Get("name"))
 		}
 		if r.URL.Query().Get("path") != "/usage.md" {
 			t.Fatalf("query path = %q, want /usage.md", r.URL.Query().Get("path"))
@@ -143,8 +206,11 @@ func TestClientAdapterForSourceDocsBuildsURL(t *testing.T) {
 
 func TestClientAdapterForSourceRepoBuildsURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/repos/gxfs/stat" {
-			t.Fatalf("path = %q, want /v1/repos/gxfs/stat", r.URL.Path)
+		if r.URL.Path != "/v1/repos/stat" {
+			t.Fatalf("path = %q, want /v1/repos/stat", r.URL.Path)
+		}
+		if r.URL.Query().Get("repo") != "gxfs" {
+			t.Fatalf("query repo = %q, want gxfs", r.URL.Query().Get("repo"))
 		}
 		if r.URL.Query().Get("path") != "/docs" {
 			t.Fatalf("query path = %q, want /docs", r.URL.Query().Get("path"))
@@ -254,11 +320,11 @@ func containsParam(query, param string) bool {
 
 func TestClientGrepPassesPatternAndRegex(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/repos/gxfs/grep" {
+		if r.URL.Path != "/v1/repos/grep" {
 			t.Fatalf("path = %q, want grep endpoint", r.URL.Path)
 		}
 		q := r.URL.Query()
-		if q.Get("path") != "/" || q.Get("pattern") != "type Adapter" || q.Get("regex") != "true" {
+		if q.Get("repo") != "gxfs" || q.Get("path") != "/" || q.Get("pattern") != "type Adapter" || q.Get("regex") != "true" {
 			t.Fatalf("query = %s, want path/pattern/regex", r.URL.RawQuery)
 		}
 		_ = json.NewEncoder(w).Encode(store.GrepResponse{
@@ -533,10 +599,13 @@ func TestClientTreeZeroValuesOmitParams(t *testing.T) {
 
 func TestClientSearchParams(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/repos/gxfs/search" {
-			t.Fatalf("path = %q, want /v1/repos/gxfs/search", r.URL.Path)
+		if r.URL.Path != "/v1/repos/search" {
+			t.Fatalf("path = %q, want /v1/repos/search", r.URL.Path)
 		}
 		q := r.URL.Query()
+		if q.Get("repo") != "gxfs" {
+			t.Fatalf("query repo = %q, want gxfs", q.Get("repo"))
+		}
 		if q.Get("q") != "openai-go" {
 			t.Fatalf("query q = %q, want openai-go", q.Get("q"))
 		}

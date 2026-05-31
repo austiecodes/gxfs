@@ -54,7 +54,7 @@ selected mounts.
 
 ### Server and Multi-Repo
 
-- The HTTP API shape has `/v1/repos/{repo}/{op}`, but the server currently
+- The HTTP API shape has `/v1/repos/{op}?repo=...`, but the server currently
   supports exactly one configured repo.
 - The Postgres adapter uses the configured repo internally instead of honoring
   the request repo throughout the store layer.

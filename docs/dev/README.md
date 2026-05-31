@@ -55,8 +55,8 @@ refresh_interval = "10s"
 - Register a repository with
   `gxfs init --register --repo github.com/user/repo --server http://127.0.0.1:7635`
   or by posting to `/v1/repos`.
-- Registered repository HTTP requests route by `/v1/repos/{repo}/...`.
-- Registered reusable docs namespaces route by `/v1/docs/{name}/...`, and
+- Registered repository HTTP requests route by `/v1/repos/{op}?repo=...`.
+- Registered reusable docs namespaces route by `/v1/docs/{op}?name=...`, and
   clients can mount them with
   `gxfs mount add docs://<name>/<path> <local-path>`.
 - `backend.type = "postgres"` keeps path-centric repo storage.

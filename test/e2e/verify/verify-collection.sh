@@ -48,11 +48,11 @@ start_server "$BINARY"
 
 # Seed test data: write docs to both repos
 echo "Seeding test data..."
-curl_put "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/write?path=/docs/go-errors.md" \
+curl_put "$(repo_url "$REPO1" write "path=/docs/go-errors.md")" \
     '{"content":"# Go Error Handling\n\nAlways wrap errors with context.\n"}'
-curl_put "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/write?path=/docs/testing.md" \
+curl_put "$(repo_url "$REPO1" write "path=/docs/testing.md")" \
     '{"content":"# Testing Best Practices\n\nTable-driven tests.\n"}'
-curl_put "${SERVER_ADDR}/v1/repos/${REPO2_ENC}/write?path=/docs/api-patterns.md" \
+curl_put "$(repo_url "$REPO2" write "path=/docs/api-patterns.md")" \
     '{"content":"# API Design Patterns\n\nRESTful conventions.\n"}'
 echo "Seed complete."
 echo ""
@@ -185,7 +185,7 @@ assert_contains "Lifecycle: content correct" "$BODY" "Testing Best Practices"
 curl_delete "${SERVER_ADDR}/v1/collections/lifecycle"
 assert_status "Lifecycle: delete" "204" "$STATUS"
 # Doc still exists in original repo
-curl_get "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/cat?path=/docs/testing.md"
+curl_get "$(repo_url "$REPO1" cat "path=/docs/testing.md")"
 assert_status "Lifecycle: doc preserved" "200" "$STATUS"
 
 # --- Scenario 17: GC protection ---
@@ -223,13 +223,13 @@ curl_delete "${SERVER_ADDR}/v1/collections/gc-protect"
 # --- Regression: core commands still work ---
 echo ""
 echo "--- Regression checks ---"
-curl_get "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/ls"
+curl_get "$(repo_url "$REPO1" ls)"
 assert_status "Regression: ls" "200" "$STATUS"
-curl_get "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/cat?path=/docs/testing.md"
+curl_get "$(repo_url "$REPO1" cat "path=/docs/testing.md")"
 assert_status "Regression: cat" "200" "$STATUS"
-curl_get "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/grep?pattern=test&path=/docs"
+curl_get "$(repo_url "$REPO1" grep "pattern=test&path=/docs")"
 assert_status "Regression: grep" "200" "$STATUS"
-curl_get "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/search?q=testing"
+curl_get "$(repo_url "$REPO1" search "q=testing")"
 assert_status "Regression: search" "200" "$STATUS"
 curl_get "${SERVER_ADDR}/v1/repos"
 assert_status "Regression: repo list" "200" "$STATUS"

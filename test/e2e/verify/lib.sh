@@ -23,9 +23,6 @@ VERIFY_DIR="${VERIFY_DIR:-/tmp/gxfs-verify}"
 SERVER_ADDR="http://127.0.0.1:${VERIFY_PORT}"
 REPO1="github.com/test/gxfs-test-repo"
 REPO2="github.com/test/other-repo"
-# URL-encoded repo names for curl (slashes -> %252F for double-encoding through go-zero)
-REPO1_ENC="github.com%252Ftest%252Fgxfs-test-repo"
-REPO2_ENC="github.com%252Ftest%252Fother-repo"
 SERVER_PID=""
 SERVER_LOG="${VERIFY_DIR}/server.log"
 SERVER_CONFIG="${VERIFY_DIR}/server.toml"
@@ -96,6 +93,23 @@ skip() {
 }
 
 # --- HTTP helpers ---
+
+urlencode() {
+    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+}
+
+repo_url() {
+    local repo="$1"
+    local op="$2"
+    local query="${3:-}"
+    local encoded_repo
+    encoded_repo="$(urlencode "$repo")"
+    local url="${SERVER_ADDR}/v1/repos/${op}?repo=${encoded_repo}"
+    if [ -n "$query" ]; then
+        url="${url}&${query}"
+    fi
+    printf '%s' "$url"
+}
 
 # curl_get URL -> sets BODY and STATUS
 curl_get() {

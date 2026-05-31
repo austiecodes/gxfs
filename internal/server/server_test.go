@@ -169,7 +169,7 @@ func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
 
 func TestHandlerRoutesLS(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/ls?path=/docs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/ls?repo=gxfs&path=/docs", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -243,10 +243,11 @@ func TestHandlerRegisterRepoCreatedRefreshesRegistry(t *testing.T) {
 }
 
 func TestDynamicRegistryRefreshesOnceForUnknownRepo(t *testing.T) {
+	const repoName = "github.com/austiecodes/xxxx"
 	catalog := &fakeRegistryStore{
 		repoSnapshots: [][]store.RepoInfo{
 			{},
-			{{Name: "austiecodes/xxxx"}},
+			{{Name: repoName}},
 		},
 	}
 	adapters := map[string]*fakeAdapter{}
@@ -258,7 +259,7 @@ func TestDynamicRegistryRefreshesOnceForUnknownRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDynamicRegistry() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/austiecodes%2Fxxxx/ls?path=/docs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/ls?repo=github.com%2Faustiecodes%2Fxxxx&path=/docs", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(registry, nil).ServeHTTP(rec, req)
@@ -269,12 +270,12 @@ func TestDynamicRegistryRefreshesOnceForUnknownRepo(t *testing.T) {
 	if got := catalog.listCallCount(); got != 2 {
 		t.Fatalf("ListRepos calls = %d, want initial load plus one unknown refresh", got)
 	}
-	adapter := adapters["austiecodes/xxxx"]
+	adapter := adapters[repoName]
 	if adapter == nil {
-		t.Fatal("adapter for austiecodes/xxxx was not created")
+		t.Fatalf("adapter for %s was not created", repoName)
 	}
-	if adapter.lsReq.Repo != "austiecodes/xxxx" || adapter.lsReq.Path != "/docs" {
-		t.Fatalf("ls req = %+v, want refreshed repo /docs", adapter.lsReq)
+	if adapter.lsReq.Repo != repoName || adapter.lsReq.Path != "/docs" {
+		t.Fatalf("ls req = %+v, want %s /docs", adapter.lsReq, repoName)
 	}
 }
 
@@ -288,7 +289,7 @@ func TestDynamicRegistryRefreshesBeforeReturningUnknownRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDynamicRegistry() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/missing/ls?path=/docs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/ls?repo=missing&path=/docs", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(registry, nil).ServeHTTP(rec, req)
@@ -350,7 +351,7 @@ func TestCrossRepoWritableGateRefreshesDynamicRegistryMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDynamicRegistry() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPut, "/v1/repos/target/write?path=/docs/new.md", strings.NewReader("hello"))
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=target&path=/docs/new.md", strings.NewReader("hello"))
 	req.Header.Set("X-Client-Repo", "client")
 	rec := httptest.NewRecorder()
 
@@ -407,7 +408,7 @@ func TestHandlerRoutesDocsNamespaceToDocsAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNamespaceRegistry() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/docs/openai-go-sdk/cat?path=/usage.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/docs/cat?name=openai-go-sdk&path=/usage.md", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(registry, nil).ServeHTTP(rec, req)
@@ -433,7 +434,7 @@ func TestHandlerRoutesRepoNamespaceToRepoAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNamespaceRegistry() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/readme.md", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(registry, nil).ServeHTTP(rec, req)
@@ -450,7 +451,7 @@ func TestHandlerRoutesRepoNamespaceToRepoAdapter(t *testing.T) {
 }
 
 func TestHandlerDocsNamespaceRequiresSourceRouter(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/v1/docs/openai-go-sdk/cat?path=/usage.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/docs/cat?name=openai-go-sdk&path=/usage.md", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(&fakeAdapter{}, nil).ServeHTTP(rec, req)
@@ -471,7 +472,7 @@ func TestHandlerUnknownDocsNamespaceMapsUnknownSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNamespaceRegistry() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/docs/missing/cat?path=/usage.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/docs/cat?name=missing&path=/usage.md", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(registry, nil).ServeHTTP(rec, req)
@@ -525,42 +526,42 @@ func TestHandlerRoutesLSParams(t *testing.T) {
 	}{
 		{
 			name: "defaults",
-			url:  "/v1/repos/test/ls?path=/docs",
+			url:  "/v1/repos/ls?repo=test&path=/docs",
 			want: store.LSRequest{Repo: "test", Path: "/docs"},
 		},
 		{
 			name: "sort",
-			url:  "/v1/repos/test/ls?path=/docs&sort=size",
+			url:  "/v1/repos/ls?repo=test&path=/docs&sort=size",
 			want: store.LSRequest{Repo: "test", Path: "/docs", Sort: "size"},
 		},
 		{
 			name: "reverse",
-			url:  "/v1/repos/test/ls?path=/docs&reverse=true",
+			url:  "/v1/repos/ls?repo=test&path=/docs&reverse=true",
 			want: store.LSRequest{Repo: "test", Path: "/docs", Reverse: true},
 		},
 		{
 			name: "recursive",
-			url:  "/v1/repos/test/ls?path=/docs&recursive=true",
+			url:  "/v1/repos/ls?repo=test&path=/docs&recursive=true",
 			want: store.LSRequest{Repo: "test", Path: "/docs", Recursive: true},
 		},
 		{
 			name: "all",
-			url:  "/v1/repos/test/ls?path=/docs&all=true",
+			url:  "/v1/repos/ls?repo=test&path=/docs&all=true",
 			want: store.LSRequest{Repo: "test", Path: "/docs", All: true},
 		},
 		{
 			name: "invalid reverse treated as false",
-			url:  "/v1/repos/test/ls?path=/docs&reverse=garbage",
+			url:  "/v1/repos/ls?repo=test&path=/docs&reverse=garbage",
 			want: store.LSRequest{Repo: "test", Path: "/docs"},
 		},
 		{
 			name: "invalid recursive treated as false",
-			url:  "/v1/repos/test/ls?path=/docs&recursive=nope",
+			url:  "/v1/repos/ls?repo=test&path=/docs&recursive=nope",
 			want: store.LSRequest{Repo: "test", Path: "/docs"},
 		},
 		{
 			name: "invalid all treated as false",
-			url:  "/v1/repos/test/ls?path=/docs&all=bogus",
+			url:  "/v1/repos/ls?repo=test&path=/docs&all=bogus",
 			want: store.LSRequest{Repo: "test", Path: "/docs"},
 		},
 	}
@@ -587,7 +588,7 @@ func TestHandlerRoutesLSParams(t *testing.T) {
 
 func TestHandlerRoutesGrepRegex(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/grep?path=/go&pattern=Adapter&regex=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/grep?repo=gxfs&path=/go&pattern=Adapter&regex=true", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -609,62 +610,62 @@ func TestHandlerRoutesGrepParams(t *testing.T) {
 	}{
 		{
 			name: "defaults",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello"},
 		},
 		{
 			name: "case_insensitive",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&case_insensitive=true",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&case_insensitive=true",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", CaseInsensitive: true},
 		},
 		{
 			name: "invert",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&invert=true",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&invert=true",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", Invert: true},
 		},
 		{
 			name: "whole_word",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&whole_word=true",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&whole_word=true",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", WholeWord: true},
 		},
 		{
 			name: "whole_line",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&whole_line=true",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&whole_line=true",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", WholeLine: true},
 		},
 		{
 			name: "context_before",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&context_before=3",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&context_before=3",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", ContextBefore: 3},
 		},
 		{
 			name: "context_after",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&context_after=5",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&context_after=5",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", ContextAfter: 5},
 		},
 		{
 			name: "all",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&all=true",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&all=true",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", All: true},
 		},
 		{
 			name: "include",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&include=*.go",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&include=*.go",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", Include: "*.go"},
 		},
 		{
 			name: "exclude",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&exclude=*.md",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&exclude=*.md",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello", Exclude: "*.md"},
 		},
 		{
 			name: "invalid bool treated as false",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&case_insensitive=garbage&invert=nope",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&case_insensitive=garbage&invert=nope",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello"},
 		},
 		{
 			name: "invalid int treated as zero",
-			url:  "/v1/repos/test/grep?path=/src&pattern=hello&context_before=abc&context_after=xyz",
+			url:  "/v1/repos/grep?repo=test&path=/src&pattern=hello&context_before=abc&context_after=xyz",
 			want: store.GrepRequest{Repo: "test", Path: "/src", Pattern: "hello"},
 		},
 	}
@@ -703,52 +704,52 @@ func TestHandlerRoutesFindParams(t *testing.T) {
 	}{
 		{
 			name: "defaults",
-			url:  "/v1/repos/test/find?path=/src",
+			url:  "/v1/repos/find?repo=test&path=/src",
 			want: store.FindRequest{Repo: "test", Path: "/src"},
 		},
 		{
 			name: "name",
-			url:  "/v1/repos/test/find?path=/src&name=*.go",
+			url:  "/v1/repos/find?repo=test&path=/src&name=*.go",
 			want: store.FindRequest{Repo: "test", Path: "/src", Name: "*.go"},
 		},
 		{
 			name: "type",
-			url:  "/v1/repos/test/find?path=/src&type=dir",
+			url:  "/v1/repos/find?repo=test&path=/src&type=dir",
 			want: store.FindRequest{Repo: "test", Path: "/src", Type: "dir"},
 		},
 		{
 			name: "maxdepth",
-			url:  "/v1/repos/test/find?path=/src&maxdepth=3",
+			url:  "/v1/repos/find?repo=test&path=/src&maxdepth=3",
 			want: store.FindRequest{Repo: "test", Path: "/src", MaxDepth: 3},
 		},
 		{
 			name: "mindepth",
-			url:  "/v1/repos/test/find?path=/src&mindepth=2",
+			url:  "/v1/repos/find?repo=test&path=/src&mindepth=2",
 			want: store.FindRequest{Repo: "test", Path: "/src", MinDepth: 2},
 		},
 		{
 			name: "all",
-			url:  "/v1/repos/test/find?path=/src&all=true",
+			url:  "/v1/repos/find?repo=test&path=/src&all=true",
 			want: store.FindRequest{Repo: "test", Path: "/src", All: true},
 		},
 		{
 			name: "iname",
-			url:  "/v1/repos/test/find?path=/src&iname=README",
+			url:  "/v1/repos/find?repo=test&path=/src&iname=README",
 			want: store.FindRequest{Repo: "test", Path: "/src", IName: "README"},
 		},
 		{
 			name: "all params combined",
-			url:  "/v1/repos/test/find?path=/src&name=*.go&type=file&maxdepth=5&mindepth=1&all=true&iname=readme",
+			url:  "/v1/repos/find?repo=test&path=/src&name=*.go&type=file&maxdepth=5&mindepth=1&all=true&iname=readme",
 			want: store.FindRequest{Repo: "test", Path: "/src", Name: "*.go", Type: "file", MaxDepth: 5, MinDepth: 1, All: true, IName: "readme"},
 		},
 		{
 			name: "invalid bool treated as false",
-			url:  "/v1/repos/test/find?path=/src&all=garbage",
+			url:  "/v1/repos/find?repo=test&path=/src&all=garbage",
 			want: store.FindRequest{Repo: "test", Path: "/src"},
 		},
 		{
 			name: "invalid int treated as zero",
-			url:  "/v1/repos/test/find?path=/src&maxdepth=abc&mindepth=xyz",
+			url:  "/v1/repos/find?repo=test&path=/src&maxdepth=abc&mindepth=xyz",
 			want: store.FindRequest{Repo: "test", Path: "/src"},
 		},
 	}
@@ -780,57 +781,57 @@ func TestHandlerRoutesTreeParams(t *testing.T) {
 	}{
 		{
 			name: "defaults",
-			url:  "/v1/repos/test/tree?path=/src",
+			url:  "/v1/repos/tree?repo=test&path=/src",
 			want: store.TreeRequest{Repo: "test", Path: "/src"},
 		},
 		{
 			name: "depth",
-			url:  "/v1/repos/test/tree?path=/src&depth=2",
+			url:  "/v1/repos/tree?repo=test&path=/src&depth=2",
 			want: store.TreeRequest{Repo: "test", Path: "/src", Depth: 2},
 		},
 		{
 			name: "all",
-			url:  "/v1/repos/test/tree?path=/src&all=true",
+			url:  "/v1/repos/tree?repo=test&path=/src&all=true",
 			want: store.TreeRequest{Repo: "test", Path: "/src", All: true},
 		},
 		{
 			name: "dirs_only",
-			url:  "/v1/repos/test/tree?path=/src&dirs_only=true",
+			url:  "/v1/repos/tree?repo=test&path=/src&dirs_only=true",
 			want: store.TreeRequest{Repo: "test", Path: "/src", DirsOnly: true},
 		},
 		{
 			name: "full_path",
-			url:  "/v1/repos/test/tree?path=/src&full_path=true",
+			url:  "/v1/repos/tree?repo=test&path=/src&full_path=true",
 			want: store.TreeRequest{Repo: "test", Path: "/src", FullPath: true},
 		},
 		{
 			name: "show_size",
-			url:  "/v1/repos/test/tree?path=/src&show_size=true",
+			url:  "/v1/repos/tree?repo=test&path=/src&show_size=true",
 			want: store.TreeRequest{Repo: "test", Path: "/src", ShowSize: true},
 		},
 		{
 			name: "sort",
-			url:  "/v1/repos/test/tree?path=/src&sort=size",
+			url:  "/v1/repos/tree?repo=test&path=/src&sort=size",
 			want: store.TreeRequest{Repo: "test", Path: "/src", Sort: "size"},
 		},
 		{
 			name: "dirs_first",
-			url:  "/v1/repos/test/tree?path=/src&dirs_first=true",
+			url:  "/v1/repos/tree?repo=test&path=/src&dirs_first=true",
 			want: store.TreeRequest{Repo: "test", Path: "/src", DirsFirst: true},
 		},
 		{
 			name: "all params combined",
-			url:  "/v1/repos/test/tree?path=/src&depth=3&all=true&dirs_only=true&full_path=true&show_size=true&sort=mtime&dirs_first=true",
+			url:  "/v1/repos/tree?repo=test&path=/src&depth=3&all=true&dirs_only=true&full_path=true&show_size=true&sort=mtime&dirs_first=true",
 			want: store.TreeRequest{Repo: "test", Path: "/src", Depth: 3, All: true, DirsOnly: true, FullPath: true, ShowSize: true, Sort: "mtime", DirsFirst: true},
 		},
 		{
 			name: "invalid bool treated as false",
-			url:  "/v1/repos/test/tree?path=/src&all=garbage&dirs_only=nope",
+			url:  "/v1/repos/tree?repo=test&path=/src&all=garbage&dirs_only=nope",
 			want: store.TreeRequest{Repo: "test", Path: "/src"},
 		},
 		{
 			name:        "invalid depth returns error",
-			url:         "/v1/repos/test/tree?path=/src&depth=abc",
+			url:         "/v1/repos/tree?repo=test&path=/src&depth=abc",
 			want:        store.TreeRequest{}, // won't match; we check status != 200
 			expectError: true,
 		},
@@ -881,7 +882,7 @@ func (a *readOnlyAdapter) Locate(_ context.Context, _ store.LocateRequest) (*sto
 }
 
 func TestHandlerMapsReadOnlyMountErrorToForbidden(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPut, "/v1/repos/gxfs/write?path=/docs/readme.md", strings.NewReader("hello"))
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=gxfs&path=/docs/readme.md", strings.NewReader("hello"))
 	rec := httptest.NewRecorder()
 
 	NewHandler(&readOnlyAdapter{}, nil).ServeHTTP(rec, req)
@@ -895,7 +896,7 @@ func TestHandlerMapsReadOnlyMountErrorToForbidden(t *testing.T) {
 }
 
 func TestHandlerMapsUnknownRepoToNotFound(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/missing/ls?path=/docs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/ls?repo=missing&path=/docs", nil)
 	rec := httptest.NewRecorder()
 	registry, err := store.NewRegistry(map[string]store.Adapter{"known": &fakeAdapter{}})
 	if err != nil {
@@ -914,7 +915,7 @@ func TestHandlerMapsUnknownRepoToNotFound(t *testing.T) {
 
 func TestHandlerRoutesSearch(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/search?q=test&path=/docs&limit=5", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/search?repo=gxfs&q=test&path=/docs&limit=5", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -949,7 +950,7 @@ func TestHandlerRoutesSearch(t *testing.T) {
 
 func TestHandlerSearchEmptyQuery(t *testing.T) {
 	adapter := &fakeAdapter{searchErr: store.ErrEmptyQuery}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/search?q=", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/search?repo=gxfs&q=", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -964,7 +965,7 @@ func TestHandlerSearchEmptyQuery(t *testing.T) {
 
 func TestHandlerSearchInvalidLimit(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/search?q=test&limit=abc", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/search?repo=gxfs&q=test&limit=abc", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -978,7 +979,7 @@ func TestHandlerSearchInvalidLimit(t *testing.T) {
 // underlying adapter returns ErrNotFound (e.g. after delete).
 func TestHandlerCatContentNotFound(t *testing.T) {
 	adapter := &notFoundCatAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/deleted.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/deleted.md", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -1009,36 +1010,36 @@ func TestHandlerLSLimitOffset(t *testing.T) {
 	}{
 		{
 			name:       "defaults",
-			url:        "/v1/repos/test/ls?path=/docs",
+			url:        "/v1/repos/ls?repo=test&path=/docs",
 			wantLimit:  0,
 			wantOffset: 0,
 		},
 		{
 			name:       "limit",
-			url:        "/v1/repos/test/ls?path=/docs&limit=10",
+			url:        "/v1/repos/ls?repo=test&path=/docs&limit=10",
 			wantLimit:  10,
 			wantOffset: 0,
 		},
 		{
 			name:       "offset",
-			url:        "/v1/repos/test/ls?path=/docs&offset=20",
+			url:        "/v1/repos/ls?repo=test&path=/docs&offset=20",
 			wantLimit:  0,
 			wantOffset: 20,
 		},
 		{
 			name:       "both",
-			url:        "/v1/repos/test/ls?path=/docs&limit=5&offset=10",
+			url:        "/v1/repos/ls?repo=test&path=/docs&limit=5&offset=10",
 			wantLimit:  5,
 			wantOffset: 10,
 		},
 		{
 			name:        "negative limit rejected",
-			url:         "/v1/repos/test/ls?path=/docs&limit=-1",
+			url:         "/v1/repos/ls?repo=test&path=/docs&limit=-1",
 			expectError: true,
 		},
 		{
 			name:        "negative offset rejected",
-			url:         "/v1/repos/test/ls?path=/docs&offset=-5",
+			url:         "/v1/repos/ls?repo=test&path=/docs&offset=-5",
 			expectError: true,
 		},
 	}
@@ -1082,30 +1083,30 @@ func TestHandlerFindLimitOffset(t *testing.T) {
 	}{
 		{
 			name:       "defaults",
-			url:        "/v1/repos/test/find?path=/src&name=*.go",
+			url:        "/v1/repos/find?repo=test&path=/src&name=*.go",
 			wantLimit:  0,
 			wantOffset: 0,
 		},
 		{
 			name:       "limit",
-			url:        "/v1/repos/test/find?path=/src&name=*.go&limit=10",
+			url:        "/v1/repos/find?repo=test&path=/src&name=*.go&limit=10",
 			wantLimit:  10,
 			wantOffset: 0,
 		},
 		{
 			name:       "offset",
-			url:        "/v1/repos/test/find?path=/src&name=*.go&offset=5",
+			url:        "/v1/repos/find?repo=test&path=/src&name=*.go&offset=5",
 			wantLimit:  0,
 			wantOffset: 5,
 		},
 		{
 			name:        "negative limit rejected",
-			url:         "/v1/repos/test/find?path=/src&name=*.go&limit=-1",
+			url:         "/v1/repos/find?repo=test&path=/src&name=*.go&limit=-1",
 			expectError: true,
 		},
 		{
 			name:        "negative offset rejected",
-			url:         "/v1/repos/test/find?path=/src&name=*.go&offset=-3",
+			url:         "/v1/repos/find?repo=test&path=/src&name=*.go&offset=-3",
 			expectError: true,
 		},
 	}
@@ -1149,36 +1150,36 @@ func TestHandlerSearchLimitOffset(t *testing.T) {
 	}{
 		{
 			name:       "defaults",
-			url:        "/v1/repos/test/search?q=hello",
+			url:        "/v1/repos/search?repo=test&q=hello",
 			wantLimit:  0,
 			wantOffset: 0,
 		},
 		{
 			name:       "limit",
-			url:        "/v1/repos/test/search?q=hello&limit=10",
+			url:        "/v1/repos/search?repo=test&q=hello&limit=10",
 			wantLimit:  10,
 			wantOffset: 0,
 		},
 		{
 			name:       "offset",
-			url:        "/v1/repos/test/search?q=hello&offset=20",
+			url:        "/v1/repos/search?repo=test&q=hello&offset=20",
 			wantLimit:  0,
 			wantOffset: 20,
 		},
 		{
 			name:       "both",
-			url:        "/v1/repos/test/search?q=hello&limit=5&offset=10",
+			url:        "/v1/repos/search?repo=test&q=hello&limit=5&offset=10",
 			wantLimit:  5,
 			wantOffset: 10,
 		},
 		{
 			name:        "negative limit rejected",
-			url:         "/v1/repos/test/search?q=hello&limit=-1",
+			url:         "/v1/repos/search?repo=test&q=hello&limit=-1",
 			expectError: true,
 		},
 		{
 			name:        "negative offset rejected",
-			url:         "/v1/repos/test/search?q=hello&offset=-5",
+			url:         "/v1/repos/search?repo=test&q=hello&offset=-5",
 			expectError: true,
 		},
 	}
@@ -1216,7 +1217,7 @@ func TestHandlerSearchLimitOffset(t *testing.T) {
 
 func TestHandlerCatReturnsETag(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -1245,7 +1246,7 @@ func TestHandlerCatReturnsETag(t *testing.T) {
 func TestHandlerCatIfNoneMatchReturns304(t *testing.T) {
 	adapter := &fakeAdapter{}
 	hash := store.HashContent("# Readme\n")
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", `"`+hash+`"`)
 	rec := httptest.NewRecorder()
 
@@ -1265,7 +1266,7 @@ func TestHandlerCatIfNoneMatchReturns304(t *testing.T) {
 
 func TestHandlerCatIfNoneMatchMismatchReturns200(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", `"sha256:0000000000"`)
 	rec := httptest.NewRecorder()
 
@@ -1286,7 +1287,7 @@ func TestHandlerCatIfNoneMatchMismatchReturns200(t *testing.T) {
 func TestHandlerCatIfNoneMatchUnquoted(t *testing.T) {
 	adapter := &fakeAdapter{}
 	hash := store.HashContent("# Readme\n")
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", hash)
 	rec := httptest.NewRecorder()
 
@@ -1300,7 +1301,7 @@ func TestHandlerCatIfNoneMatchUnquoted(t *testing.T) {
 func TestHandlerCatIfNoneMatchMultipleETags(t *testing.T) {
 	adapter := &fakeAdapter{}
 	hash := store.HashContent("# Readme\n")
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", `"sha256:other", "`+hash+`"`)
 	rec := httptest.NewRecorder()
 
@@ -1313,7 +1314,7 @@ func TestHandlerCatIfNoneMatchMultipleETags(t *testing.T) {
 
 func TestHandlerCatNoHashNoETag(t *testing.T) {
 	adapter := &noHashCatAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/gxfs/cat?path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", `"sha256:whatever"`)
 	rec := httptest.NewRecorder()
 

@@ -159,24 +159,12 @@ func defaultString(value, fallback string) string {
 }
 
 func apiRoutes(handler http.Handler) []rest.Route {
-	return []rest.Route{
+	routes := []rest.Route{
 		{Method: http.MethodGet, Path: "/healthz", Handler: handler.ServeHTTP},
 		{Method: http.MethodDelete, Path: "/v1/cache", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/repos", Handler: handler.ServeHTTP},
 		{Method: http.MethodPost, Path: "/v1/repos", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/mount-sources", Handler: handler.ServeHTTP},
-		{Method: http.MethodGet, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodGet, Path: "/v1/repos/:repo/:repo2/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodPut, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodPut, Path: "/v1/repos/:repo/:repo2/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodDelete, Path: "/v1/repos/:repo/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodDelete, Path: "/v1/repos/:repo/:repo2/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodGet, Path: "/v1/docs/:name/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodGet, Path: "/v1/docs/:name/:name2/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodPut, Path: "/v1/docs/:name/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodPut, Path: "/v1/docs/:name/:name2/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodDelete, Path: "/v1/docs/:name/:op", Handler: handler.ServeHTTP},
-		{Method: http.MethodDelete, Path: "/v1/docs/:name/:name2/:op", Handler: handler.ServeHTTP},
 		// Collection routes
 		{Method: http.MethodPost, Path: "/v1/collections", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/collections", Handler: handler.ServeHTTP},
@@ -186,6 +174,13 @@ func apiRoutes(handler http.Handler) []rest.Route {
 		{Method: http.MethodDelete, Path: "/v1/collections/:name/members", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/collections/:name/docs", Handler: handler.ServeHTTP},
 	}
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		routes = append(routes,
+			rest.Route{Method: method, Path: "/v1/repos/:op", Handler: handler.ServeHTTP},
+			rest.Route{Method: method, Path: "/v1/docs/:op", Handler: handler.ServeHTTP},
+		)
+	}
+	return routes
 }
 
 // redactDSN returns a safe-to-print version of a DSN with credentials stripped.

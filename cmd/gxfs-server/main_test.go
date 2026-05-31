@@ -89,33 +89,38 @@ func TestAPIRoutesRegistersMountSources(t *testing.T) {
 }
 
 func TestAPIRoutesDispatchEscapedSlashRepoNames(t *testing.T) {
-	called := false
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusNoContent)
-	})
-	rt := router.NewRouter()
-	for _, route := range apiRoutes(handler) {
-		if err := rt.Handle(route.Method, route.Path, route.Handler); err != nil {
-			t.Fatalf("register route %s %s: %v", route.Method, route.Path, err)
-		}
-	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/austiecodes%2Fxxxx/ls", nil)
-	rec := httptest.NewRecorder()
+	tests := []string{"/v1/repos/ls?repo=github.com%2Faustiecodes%2Fxxxx"}
+	for _, target := range tests {
+		t.Run(target, func(t *testing.T) {
+			called := false
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				w.WriteHeader(http.StatusNoContent)
+			})
+			rt := router.NewRouter()
+			for _, route := range apiRoutes(handler) {
+				if err := rt.Handle(route.Method, route.Path, route.Handler); err != nil {
+					t.Fatalf("register route %s %s: %v", route.Method, route.Path, err)
+				}
+			}
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			rec := httptest.NewRecorder()
 
-	rt.ServeHTTP(rec, req)
+			rt.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNoContent || !called {
-		t.Fatalf("route status = %d called = %v, want dispatch to handler", rec.Code, called)
+			if rec.Code != http.StatusNoContent || !called {
+				t.Fatalf("route status = %d called = %v, want dispatch to handler", rec.Code, called)
+			}
+		})
 	}
 }
 
 func TestAPIRoutesRegistersDocsNamespaceRoutes(t *testing.T) {
 	routes := apiRoutes(http.NotFoundHandler())
 	want := map[string]bool{
-		http.MethodGet + " /v1/docs/:name/:op":    false,
-		http.MethodPut + " /v1/docs/:name/:op":    false,
-		http.MethodDelete + " /v1/docs/:name/:op": false,
+		http.MethodGet + " /v1/docs/:op":    false,
+		http.MethodPut + " /v1/docs/:op":    false,
+		http.MethodDelete + " /v1/docs/:op": false,
 	}
 	for _, route := range routes {
 		key := route.Method + " " + route.Path

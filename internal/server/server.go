@@ -92,7 +92,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	source, op, ok := parseSourcePath(requestPath(r.URL))
+	source, op, ok := parseSourceRequest(r.URL)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -575,36 +575,25 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-func parsePath(p string) (repo string, op string, ok bool) {
-	source, op, ok := parseSourcePath(p)
-	if !ok || source.Kind != store.SourceKindRepo {
-		return "", "", false
-	}
-	return source.Name, op, true
-}
-
-func parseSourcePath(p string) (source store.SourceRef, op string, ok bool) {
-	prefixes := []struct {
+func parseSourceRequest(u *url.URL) (source store.SourceRef, op string, ok bool) {
+	p := requestPath(u)
+	for _, candidate := range []struct {
 		prefix string
+		param  string
 		kind   store.SourceKind
 	}{
-		{prefix: "/v1/repos/", kind: store.SourceKindRepo},
-		{prefix: "/v1/docs/", kind: store.SourceKindDocs},
-	}
-	for _, candidate := range prefixes {
+		{prefix: "/v1/repos/", param: "repo", kind: store.SourceKindRepo},
+		{prefix: "/v1/docs/", param: "name", kind: store.SourceKindDocs},
+	} {
 		rest := strings.TrimPrefix(p, candidate.prefix)
-		if rest == p {
+		if rest == p || rest == "" || strings.Contains(rest, "/") {
 			continue
 		}
-		parts := strings.Split(rest, "/")
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return store.SourceRef{}, "", false
+		name := u.Query().Get(candidate.param)
+		if name == "" {
+			continue
 		}
-		name, err := url.PathUnescape(parts[0])
-		if err != nil {
-			return store.SourceRef{}, "", false
-		}
-		return store.SourceRef{Kind: candidate.kind, Name: name}, parts[1], true
+		return store.SourceRef{Kind: candidate.kind, Name: name}, rest, true
 	}
 	return store.SourceRef{}, "", false
 }
@@ -777,7 +766,7 @@ func (lm *loggingMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"client_repo", clientRepo,
 			"mount_path", r.Header.Get("X-Mount-Path"),
 		)
-		source, op, _ := parseSourcePath(requestPath(r.URL))
+		source, op, _ := parseSourceRequest(r.URL)
 		if op != "" {
 			if source.Kind == store.SourceKindRepo {
 				attrs = append(attrs, "target_repo", source.Name)

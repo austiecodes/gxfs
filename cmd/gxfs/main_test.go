@@ -561,8 +561,11 @@ func TestRunUsesMountsForRemotePathResolution(t *testing.T) {
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Query().Get("path")
-		if r.URL.Path != "/v1/repos/gxfs/stat" {
-			t.Fatalf("request path = %q, want /v1/repos/gxfs/stat", r.URL.Path)
+		if r.URL.Path != "/v1/repos/stat" {
+			t.Fatalf("request path = %q, want /v1/repos/stat", r.URL.Path)
+		}
+		if r.URL.Query().Get("repo") != "gxfs" {
+			t.Fatalf("request repo = %q, want gxfs", r.URL.Query().Get("repo"))
 		}
 		if err := json.NewEncoder(w).Encode(store.StatResponse{
 			Node: store.Node{Path: "/remote-docs/readme.md", Name: "readme.md", Kind: "file", Size: 7},
@@ -2155,6 +2158,133 @@ func TestInitRegisterPostsRepoAndWritesConfig(t *testing.T) {
 	}
 	if !strings.Contains(got, "registered repo austiecodes/xxxx") {
 		t.Fatalf("init output = %q, want register message", got)
+	}
+}
+
+func TestInitRegisterExistingRepoIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/repos" {
+			t.Fatalf("register request = %s %s, want POST /v1/repos", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, `{"error":{"code":"REPO_EXISTS","message":"repo already exists"}}`)
+	}))
+	defer server.Close()
+
+	got := executeInit(t,
+		"--no-instructions",
+		"--repo", "github.com/austiecodes/xxxx",
+		"--register",
+		"--server", server.URL,
+		dir,
+	)
+
+	if !strings.Contains(got, "repo already registered github.com/austiecodes/xxxx") {
+		t.Fatalf("init output = %q, want already registered message", got)
+	}
+	if !strings.Contains(got, "initialized "+filepath.Join(dir, ".gxfs")) {
+		t.Fatalf("init output = %q, want initialized message", got)
+	}
+}
+
+func TestRunRegisteredSlashRepoUsesCanonicalRepoInRequests(t *testing.T) {
+	const repoName = "github.com/austiecodes/xxxx"
+
+	dir := t.TempDir()
+	var mu sync.Mutex
+	seen := map[string]int{}
+	var registeredName string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/repos" {
+			var body struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode register body: %v", err)
+			}
+			registeredName = body.Name
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"repo":{"name":"`+repoName+`"}}`)
+			return
+		}
+
+		escapedPath := r.URL.EscapedPath()
+		if escapedPath != "/v1/repos/ls" && escapedPath != "/v1/repos/tree" && escapedPath != "/v1/repos/write" {
+			t.Fatalf("request path = %q, want repo operation endpoint", escapedPath)
+		}
+		if strings.Contains(r.URL.RawQuery, "%252F") {
+			t.Fatalf("raw query = %q, contains double-encoded slash", r.URL.RawQuery)
+		}
+		if got := r.URL.Query().Get("repo"); got != repoName {
+			t.Fatalf("query repo = %q, want %q; raw query = %q", got, repoName, r.URL.RawQuery)
+		}
+		op := strings.TrimPrefix(escapedPath, "/v1/repos/")
+		mu.Lock()
+		seen[r.Method+" "+op]++
+		mu.Unlock()
+
+		switch r.Method + " " + op {
+		case http.MethodGet + " ls":
+			_ = json.NewEncoder(w).Encode(store.LSResponse{
+				Nodes: []store.Node{{Path: "/docs", Name: "docs", Kind: "dir"}},
+				Total: 1,
+			})
+		case http.MethodGet + " tree":
+			_ = json.NewEncoder(w).Encode(store.TreeResponse{Text: "/docs\n"})
+		case http.MethodPut + " write":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read write body: %v", err)
+			}
+			remotePath := r.URL.Query().Get("path")
+			_ = json.NewEncoder(w).Encode(store.PutResponse{
+				Node: store.Node{
+					Path: remotePath,
+					Name: filepath.Base(remotePath),
+					Kind: "file",
+					Size: int64(len(body)),
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, escapedPath)
+		}
+	}))
+	defer server.Close()
+
+	runOK := func(args ...string) string {
+		t.Helper()
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 0 {
+			t.Fatalf("run(%v) code = %d, stderr = %q", args, code, stderr.String())
+		}
+		return stdout.String()
+	}
+
+	runOK("init", "--no-instructions", "--repo", repoName, "--register", "--server", server.URL, "--docs", "docs", dir)
+	if registeredName != repoName {
+		t.Fatalf("registered repo = %q, want %q", registeredName, repoName)
+	}
+
+	t.Setenv("GXFS_CONFIG", filepath.Join(dir, ".gxfs", "settings.toml"))
+	t.Chdir(dir)
+	runOK("ls", "docs")
+	runOK("tree", "docs")
+	runOK("write", "docs/manual.md", "manual")
+	writeTestFile(t, filepath.Join(dir, "docs", "a.md"), "alpha")
+	runOK("sync", "push", "docs")
+
+	for _, want := range []string{
+		http.MethodGet + " ls",
+		http.MethodGet + " tree",
+	} {
+		if seen[want] == 0 {
+			t.Fatalf("request %q was not observed", want)
+		}
+	}
+	if seen[http.MethodPut+" write"] < 2 {
+		t.Fatalf("PUT write count = %d, want direct write plus sync push", seen[http.MethodPut+" write"])
 	}
 }
 
@@ -3947,7 +4077,7 @@ func TestServerCrossRepoWriteGateRejectsNonWritable(t *testing.T) {
 	writableRepos := map[string]bool{} // target-repo not writable
 	handler := server.NewHandler(noopAdapter, writableRepos)
 
-	req := httptest.NewRequest(http.MethodPut, "/v1/repos/target-repo/write?path=/hello.txt", strings.NewReader("content"))
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=target-repo&path=/hello.txt", strings.NewReader("content"))
 	req.Header.Set("X-Client-Repo", "source-repo")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -3962,7 +4092,7 @@ func TestServerCrossRepoWriteGateAllowsWritable(t *testing.T) {
 	writableRepos := map[string]bool{"target-repo": true}
 	handler := server.NewHandler(noopAdapter, writableRepos)
 
-	req := httptest.NewRequest(http.MethodPut, "/v1/repos/target-repo/write?path=/hello.txt", strings.NewReader("content"))
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=target-repo&path=/hello.txt", strings.NewReader("content"))
 	req.Header.Set("X-Client-Repo", "source-repo")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -3977,7 +4107,7 @@ func TestServerSelfRepoWriteAlwaysAllowed(t *testing.T) {
 	writableRepos := map[string]bool{} // nothing writable
 	handler := server.NewHandler(noopAdapter, writableRepos)
 
-	req := httptest.NewRequest(http.MethodPut, "/v1/repos/my-repo/write?path=/hello.txt", strings.NewReader("content"))
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=my-repo&path=/hello.txt", strings.NewReader("content"))
 	// No X-Client-Repo header → self-repo write
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -3996,7 +4126,7 @@ func TestServerCASConflict(t *testing.T) {
 	// The noop adapter returns success, so we test that the CAS field is parsed
 	// and passed through. For actual CAS testing we need a real adapter.
 	// This test verifies the HTTP contract: If-Match header is parsed and passed.
-	req := httptest.NewRequest(http.MethodPut, "/v1/repos/my-repo/write?path=/hello.txt", strings.NewReader("content"))
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=my-repo&path=/hello.txt", strings.NewReader("content"))
 	req.Header.Set("If-Match", `"sha256:abc123"`)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -4012,7 +4142,7 @@ func TestServerCreateOnlyRejectsExisting(t *testing.T) {
 	writableRepos := map[string]bool{}
 	handler := server.NewHandler(conflictAdapter, writableRepos)
 
-	req := httptest.NewRequest(http.MethodPut, "/v1/repos/my-repo/write?path=/hello.txt", strings.NewReader("content"))
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=my-repo&path=/hello.txt", strings.NewReader("content"))
 	req.Header.Set("If-None-Match", "*")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -4027,7 +4157,7 @@ func TestServerExpectedHashQueryParam(t *testing.T) {
 	writableRepos := map[string]bool{}
 	handler := server.NewHandler(conflictAdapter, writableRepos)
 
-	req := httptest.NewRequest(http.MethodPut, "/v1/repos/my-repo/write?path=/hello.txt&expected_hash=sha256%3Awrong", strings.NewReader("content"))
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=my-repo&path=/hello.txt&expected_hash=sha256%3Awrong", strings.NewReader("content"))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 

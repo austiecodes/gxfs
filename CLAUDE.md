@@ -42,10 +42,10 @@ gxfs CLI  ──HTTP──>  gxfs-server  ──>  store.Adapter
 ```
 
 - **CLI** (`cmd/gxfs`) — Cobra-based command line app. Reads `.gxfs/settings.toml`, talks to the server through the HTTP client, and must not know about storage internals.
-- **Server** (`cmd/gxfs-server`) — go-zero HTTP service. Loads `conf/server.toml`, owns the store adapter, and exposes `/v1/repos/{repo}/{op}` APIs.
+- **Server** (`cmd/gxfs-server`) — go-zero HTTP service. Loads `conf/server.toml`, owns the store adapter, and exposes `/v1/repos/{op}?repo=...` APIs.
 - **Store boundary** — `internal/store/store.go` defines the capability interfaces (`Lister`, `Treer`, `Catter`, `Grepper`, `Finder`, `Statter`, `Writer`) and combines them into `store.Adapter`. Every adapter must include a compile-time assertion: `var _ store.Adapter = (*Adapter)(nil)`.
 - **VFS tree** (`internal/vfs/tree.go`) — in-memory tree that auto-synthesizes parent directories and provides `ls`, `tree`, `cat`, `grep`, `find`, and `stat`.
-- **Client** (`internal/client/client.go`) — HTTP client that implements `store.Adapter`, with URLs shaped as `/v1/repos/{repo}/{op}?path=...`.
+- **Client** (`internal/client/client.go`) — HTTP client that implements `store.Adapter`, with URLs shaped as `/v1/repos/{op}?repo=...&path=...`.
 - **Config** (`internal/config/config.go`) — TOML config. CLI config must not contain backend credentials. Server config owns storage connection details. Environment variables are expanded automatically.
 
 ## Key Conventions

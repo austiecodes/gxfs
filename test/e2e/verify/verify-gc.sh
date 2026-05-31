@@ -36,11 +36,11 @@ start_server "$BINARY"
 
 # Seed: write some docs
 echo "Seeding test data..."
-curl_put "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/write?path=/docs/keep-me.md" \
+curl_put "$(repo_url "$REPO1" write "path=/docs/keep-me.md")" \
     '{"content":"# Keep This\n\nThis doc has a repo_path reference.\n"}'
-curl_put "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/write?path=/docs/orphan1.md" \
+curl_put "$(repo_url "$REPO1" write "path=/docs/orphan1.md")" \
     '{"content":"# Orphan 1\n\nWill become orphan.\n"}'
-curl_put "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/write?path=/docs/orphan2.md" \
+curl_put "$(repo_url "$REPO1" write "path=/docs/orphan2.md")" \
     '{"content":"# Orphan 2\n\nWill become orphan.\n"}'
 echo "Seed complete."
 
@@ -109,7 +109,7 @@ fi
 # --- Scenario 3: Grace period protection ---
 echo "--- Scenario 3: Grace period protection ---"
 # Create a fresh orphan (updated_at = now)
-curl_put "${SERVER_ADDR}/v1/repos/${REPO1_ENC}/write?path=/docs/fresh-orphan.md" \
+curl_put "$(repo_url "$REPO1" write "path=/docs/fresh-orphan.md")" \
     '{"content":"# Fresh\n\nJust created.\n"}'
 FRESH_ID=$(db_exec "SELECT doc_id FROM gxfs_repo_paths WHERE path = '/docs/fresh-orphan.md' AND repo = '${REPO1}';")
 db_exec "DELETE FROM gxfs_repo_paths WHERE doc_id = '${FRESH_ID}';"

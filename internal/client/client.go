@@ -557,16 +557,30 @@ func (c *Client) urlForSource(source store.SourceRef, op string, q url.Values) (
 	if err != nil {
 		return "", fmt.Errorf("parse base url: %w", err)
 	}
+	if q == nil {
+		q = url.Values{}
+	}
+	decodedPrefix := strings.TrimRight(base.Path, "/")
+	escapedPrefix := strings.TrimRight(base.EscapedPath(), "/")
+
+	var decodedPath string
+	var escapedPath string
 	switch source.Kind {
 	case store.SourceKindRepo:
-		base.Path = strings.TrimRight(base.Path, "/") + "/v1/repos/" + url.PathEscape(source.Name) + "/" + op
+		decodedPath = decodedPrefix + "/v1/repos/" + op
+		escapedPath = escapedPrefix + "/v1/repos/" + url.PathEscape(op)
+		q.Set("repo", source.Name)
 	case store.SourceKindDocs:
-		base.Path = strings.TrimRight(base.Path, "/") + "/v1/docs/" + url.PathEscape(source.Name) + "/" + op
+		decodedPath = decodedPrefix + "/v1/docs/" + op
+		escapedPath = escapedPrefix + "/v1/docs/" + url.PathEscape(op)
+		q.Set("name", source.Name)
 	case store.SourceKindDocset:
 		return "", fmt.Errorf("%w: %s", store.ErrNotSupported, source.String())
 	default:
 		return "", fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
 	}
+	base.Path = decodedPath
+	base.RawPath = escapedPath
 	base.RawQuery = q.Encode()
 	return base.String(), nil
 }

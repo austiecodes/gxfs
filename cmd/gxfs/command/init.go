@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/austiecodes/gxfs/internal/client"
+	"github.com/austiecodes/gxfs/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -226,9 +227,13 @@ func NewInitCommand() *cobra.Command {
 
 			if registerRepo {
 				if err := client.New(serverAddr).RegisterRepo(cmd.Context(), repoName); err != nil {
-					return err
+					if !errors.Is(err, store.ErrRepoExists) {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "repo already registered %s\n", repoName)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "registered repo %s\n", repoName)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "registered repo %s\n", repoName)
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "initialized %s\n", gxfsDir)
