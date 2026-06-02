@@ -66,19 +66,37 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	logID := os.Getenv("GXFS_LOG_ID")
+	sessionID := os.Getenv("GXFS_SESSION_ID")
 	start := time.Now()
 	commandName := ""
 	if len(args) > 0 {
 		commandName = args[0]
 	}
 
-	exitCode := runInner(args, stdout, stderr)
+	result := runInner(args, stdout, stderr)
+	durationMs := time.Since(start).Milliseconds()
 
-	appendAudit(logID, commandName, time.Since(start).Milliseconds(), exitCode)
-	return exitCode
+	appendAudit(logID, sessionID, commandName, durationMs, result.exitCode)
+	maybeReportUsageEvent(usageReportRequest{
+		ServerAddr: result.serverAddr,
+		Repo:       result.repo,
+		LogID:      logID,
+		SessionID:  sessionID,
+		Command:    commandName,
+		Args:       args,
+		DurationMs: durationMs,
+		ExitCode:   result.exitCode,
+	})
+	return result.exitCode
 }
 
-func runInner(args []string, stdout, stderr io.Writer) int {
+type runResult struct {
+	exitCode   int
+	serverAddr string
+	repo       string
+}
+
+func runInner(args []string, stdout, stderr io.Writer) runResult {
 	if isConfigFreeCommand(args) {
 		cmd := newRootCommand(nil, nil, "", nil)
 		cmd.SetArgs(args)
@@ -86,9 +104,9 @@ func runInner(args []string, stdout, stderr io.Writer) int {
 		cmd.SetErr(stderr)
 		if err := cmd.Execute(); err != nil {
 			fmt.Fprintln(stderr, err)
-			return 1
+			return runResult{exitCode: 1}
 		}
-		return 0
+		return runResult{exitCode: 0}
 	}
 
 	path := os.Getenv("GXFS_CONFIG")
@@ -98,7 +116,7 @@ func runInner(args []string, stdout, stderr io.Writer) int {
 	cfg, err := config.LoadCLI(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return 1
+		return runResult{exitCode: 1}
 	}
 
 	rawClient := client.New(cfg.Server.Addr)
@@ -108,7 +126,7 @@ func runInner(args []string, stdout, stderr io.Writer) int {
 	adapter, resolver, err := loadRuntimeAdapter(cfg, path, rawClient)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return 1
+		return runResult{exitCode: 1, serverAddr: cfg.Server.Addr, repo: cfg.Repo}
 	}
 
 	cmd := newRootCommand(adapter, rawClient, cfg.Repo, resolver)
@@ -118,9 +136,9 @@ func runInner(args []string, stdout, stderr io.Writer) int {
 	cmd.SetContext(context.Background())
 	if err := cmd.Execute(); err != nil {
 		fmt.Fprintln(stderr, err)
-		return 1
+		return runResult{exitCode: 1, serverAddr: cfg.Server.Addr, repo: cfg.Repo}
 	}
-	return 0
+	return runResult{exitCode: 0, serverAddr: cfg.Server.Addr, repo: cfg.Repo}
 }
 
 func isConfigFreeCommand(args []string) bool {

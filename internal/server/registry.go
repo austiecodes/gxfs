@@ -55,6 +55,7 @@ var _ store.CacheInvalidator = (*DynamicRegistry)(nil)
 var _ store.MountSourceLister = (*DynamicRegistry)(nil)
 var _ store.SourceRouter = (*DynamicRegistry)(nil)
 var _ store.RepoRegistry = (*DynamicRegistry)(nil)
+var _ store.UsageRecorder = (*DynamicRegistry)(nil)
 
 func NewDynamicRegistry(ctx context.Context, catalog repoCatalog, namespaces namespaceCatalog, factory SourceAdapterFactory) (*DynamicRegistry, error) {
 	if catalog == nil {
@@ -190,6 +191,14 @@ func (r *DynamicRegistry) RegisterRepo(ctx context.Context, req store.RegisterRe
 		return nil, fmt.Errorf("refresh registry after register repo: %w", err)
 	}
 	return resp, nil
+}
+
+func (r *DynamicRegistry) RecordUsageEvent(ctx context.Context, event store.UsageEvent) (*store.UsageEventResponse, error) {
+	recorder, ok := r.catalog.(store.UsageRecorder)
+	if !ok {
+		return nil, fmt.Errorf("%w: usage event recording is not supported", store.ErrNotSupported)
+	}
+	return recorder.RecordUsageEvent(ctx, event)
 }
 
 func (r *DynamicRegistry) Repos() []string {

@@ -54,7 +54,7 @@ func TestAppendAuditWritesJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	appendAudit("test-log-id-123", "locate", 42, 0)
+	appendAudit("test-log-id-123", "", "locate", 42, 0)
 
 	data, err := os.ReadFile(".gxfs/audit.jsonl")
 	if err != nil {
@@ -91,7 +91,7 @@ func TestAppendAuditDisabled(t *testing.T) {
 	os.Setenv("GXFS_AUDIT", "0")
 	defer os.Unsetenv("GXFS_AUDIT")
 
-	appendAudit("should-not-appear", "cat", 10, 0)
+	appendAudit("should-not-appear", "", "cat", 10, 0)
 
 	if _, err := os.Stat(".gxfs/audit.jsonl"); !os.IsNotExist(err) {
 		t.Error("audit file should not exist when GXFS_AUDIT=0")
@@ -110,7 +110,7 @@ func TestAppendAuditNoLogID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	appendAudit("", "ls", 5, 0)
+	appendAudit("", "", "ls", 5, 0)
 
 	data, err := os.ReadFile(".gxfs/audit.jsonl")
 	if err != nil {
@@ -124,5 +124,5 @@ func TestAppendAuditNoLogID(t *testing.T) {
 }
 
 func TestAppendAuditWriteFailureSilent(t *testing.T) {
-	appendAudit("test", "cat", 1, 0)
+	appendAudit("test", "", "cat", 1, 0)
 }

@@ -22,6 +22,7 @@ type fakeAdapter struct {
 	treeReq   store.TreeRequest
 	searchReq store.SearchRequest
 	putReq    store.PutRequest
+	usageReq  store.UsageEvent
 	searchErr error
 }
 
@@ -91,6 +92,13 @@ func (f *fakeAdapter) Glob(_ context.Context, req store.GlobRequest) (*store.Glo
 
 func (f *fakeAdapter) Locate(_ context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
 	return &store.LocateResponse{Results: []store.LocateResult{}, Total: 0}, nil
+}
+
+func (f *fakeAdapter) RecordUsageEvent(_ context.Context, event store.UsageEvent) (*store.UsageEventResponse, error) {
+	f.usageReq = event
+	event.ID = "usage-1"
+	event.CreatedAt = "2026-06-02T00:00:00Z"
+	return &store.UsageEventResponse{Event: event}, nil
 }
 
 type fakeRegistryStore struct {
@@ -186,6 +194,42 @@ func TestHandlerRoutesLS(t *testing.T) {
 	}
 	if len(resp.Nodes) != 1 || resp.Nodes[0].Name != "docs" {
 		t.Fatalf("resp = %+v, want docs node", resp)
+	}
+}
+
+func TestHandlerRecordsUsageEvent(t *testing.T) {
+	adapter := &fakeAdapter{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/usage-events", strings.NewReader(`{
+		"session_id":"session-1",
+		"client_repo":"gxfs",
+		"command":"search",
+		"exit_code":0,
+		"duration_ms":42,
+		"payload":{"query":"auth"}
+	}`))
+	req.Header.Set("X-Gxfs-Log-Id", "log-1")
+	rec := httptest.NewRecorder()
+
+	NewHandler(adapter, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if adapter.usageReq.LogID != "log-1" {
+		t.Fatalf("usage log_id = %q, want log-1", adapter.usageReq.LogID)
+	}
+	if adapter.usageReq.SessionID != "session-1" || adapter.usageReq.ClientRepo != "gxfs" {
+		t.Fatalf("usage req = %+v, want session/client repo", adapter.usageReq)
+	}
+	if adapter.usageReq.Command != "search" || adapter.usageReq.ExitCode != 0 || adapter.usageReq.DurationMs != 42 {
+		t.Fatalf("usage req = %+v, want search success duration", adapter.usageReq)
+	}
+	var resp store.UsageEventResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Event.ID != "usage-1" {
+		t.Fatalf("usage response ID = %q, want usage-1", resp.Event.ID)
 	}
 }
 

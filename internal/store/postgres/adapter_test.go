@@ -251,6 +251,24 @@ select distinct repo
 from "public"."gxfs_repo_paths"
 where repo <> ''
 on conflict (name) do nothing;`,
+		`create table if not exists "public"."gxfs_usage_events" (
+    id uuid primary key default gen_random_uuid(),
+    created_at timestamptz not null default now(),
+    log_id text,
+    session_id text,
+    client_repo text,
+    command text not null,
+    exit_code integer not null,
+    duration_ms bigint not null,
+    event_kind text not null default 'cli.command',
+    payload jsonb not null default '{}'::jsonb
+);
+
+create index if not exists idx_usage_events_created_at on "public"."gxfs_usage_events" (created_at);
+create index if not exists idx_usage_events_log_id on "public"."gxfs_usage_events" (log_id) where log_id is not null;
+create index if not exists idx_usage_events_session_id on "public"."gxfs_usage_events" (session_id) where session_id is not null;
+create index if not exists idx_usage_events_client_repo on "public"."gxfs_usage_events" (client_repo) where client_repo is not null;
+create index if not exists idx_usage_events_command on "public"."gxfs_usage_events" (command);`,
 	}
 	if len(statements) != len(want) {
 		t.Fatalf("SchemaSQL() len = %d, want %d: %v", len(statements), len(want), statements)

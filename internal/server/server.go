@@ -71,6 +71,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/v1/usage-events" {
+		if r.Method != http.MethodPost {
+			writeJSONErrorCode(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+			return
+		}
+		h.handleUsageEvent(w, r)
+		return
+	}
+
 	// GET /v1/mount-sources — list mountable source namespaces.
 	if r.URL.Path == "/v1/mount-sources" && r.Method == http.MethodGet {
 		if lister, ok := h.adapter.(store.MountSourceLister); ok {
@@ -204,6 +213,34 @@ func (h *handler) handleRegisterRepo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := registrar.RegisterRepo(r.Context(), req)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	writeJSONStatus(w, http.StatusCreated, resp)
+}
+
+func (h *handler) handleUsageEvent(w http.ResponseWriter, r *http.Request) {
+	recorder, ok := h.adapter.(store.UsageRecorder)
+	if !ok {
+		writeJSONErrorCode(w, http.StatusNotImplemented, "NOT_SUPPORTED", "usage event recording is not supported by this backend")
+		return
+	}
+
+	var req store.UsageEvent
+	body := http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		writeJSONErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+		return
+	}
+	if req.LogID == "" {
+		req.LogID = r.Header.Get("X-Gxfs-Log-Id")
+	}
+	if req.EventKind == "" {
+		req.EventKind = store.UsageEventKindCLICommand
+	}
+
+	resp, err := recorder.RecordUsageEvent(r.Context(), req)
 	if err != nil {
 		writeJSONError(w, err)
 		return

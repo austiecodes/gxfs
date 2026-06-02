@@ -21,7 +21,7 @@ talks to `gxfs-server`, and prints file-system-like output.
 | Shared docs mounts | A project can compose documentation from repository namespaces or reusable docs namespaces into local paths, with read-only or writable mount policy and direct remote preview. | `mount`, `mount sources`, `mount attach`, `cat repo://...` |
 | Writing and synchronization | Create, replace, or delete remote docs; push local docs; pull remote metadata or files; track hashes and detect conflicting local/remote changes. | `write`, `edit`, `rm`, `sync refresh`, `sync materialize`, `sync dematerialize` |
 | Curated docsets | Optional advanced workflow for curated cross-repository document sets when the server enables collections. Shared docs should usually use `docs://` namespaces and mounts instead. | `collection` |
-| Agent integration and observability | Generate agent instructions, install Codex or Claude hooks, refresh docs at session start, and record CLI audit JSONL with optional correlation IDs. | `init`, `hook session-start` |
+| Agent integration and observability | Generate agent instructions, install Codex or Claude hooks, refresh docs at session start, record CLI audit JSONL, and persist hook-correlated usage events server-side when enabled by hooks. | `init`, `hook session-start` |
 
 ## Install the CLI
 
@@ -84,6 +84,12 @@ gxfs init --hook claude --scope project
 
 Codex requires reviewing newly installed hooks before they run. After installing
 Codex hooks, open Codex and use `/hooks` to trust them.
+
+Hook-correlated CLI calls write local audit JSONL and also try to report a
+structured usage event to `gxfs-server` with a short timeout. Reporting failures
+do not change the original command exit code. Set `GXFS_USAGE_REPORT=0` to
+disable server reporting, or `GXFS_USAGE_REPORT=1` to report non-hooked CLI
+calls as well.
 
 Use the CLI with a project config:
 

@@ -12,11 +12,12 @@ import (
 var auditMu sync.Mutex
 
 type auditEntry struct {
-	Timestamp   string `json:"timestamp"`
-	LogID       string `json:"log_id,omitempty"`
-	Command     string `json:"command"`
-	DurationMs  int64  `json:"duration_ms"`
-	ExitCode    int    `json:"exit_code"`
+	Timestamp  string `json:"timestamp"`
+	LogID      string `json:"log_id,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+	Command    string `json:"command"`
+	DurationMs int64  `json:"duration_ms"`
+	ExitCode   int    `json:"exit_code"`
 }
 
 // auditPath returns the audit JSONL file path:
@@ -36,7 +37,7 @@ func auditPath() string {
 	return filepath.Join(globalDir, "audit.jsonl")
 }
 
-func appendAudit(logID, command string, durationMs int64, exitCode int) {
+func appendAudit(logID, sessionID, command string, durationMs int64, exitCode int) {
 	if os.Getenv("GXFS_AUDIT") == "0" {
 		return
 	}
@@ -49,6 +50,7 @@ func appendAudit(logID, command string, durationMs int64, exitCode int) {
 	entry := auditEntry{
 		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
 		LogID:      logID,
+		SessionID:  sessionID,
 		Command:    command,
 		DurationMs: durationMs,
 		ExitCode:   exitCode,

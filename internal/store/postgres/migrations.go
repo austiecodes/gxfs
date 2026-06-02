@@ -25,6 +25,7 @@ type migrationData struct {
 	DocNamespacePathsTable string
 	CollectionsTable       string
 	CollectionDocsTable    string
+	UsageEventsTable       string
 	PathColumn             string
 	KindColumn             string
 	SizeColumn             string
@@ -161,6 +162,10 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 	if err != nil {
 		return migrationData{}, err
 	}
+	usageEventsTable, err := quoteTable(cfg.Schema, "gxfs_usage_events")
+	if err != nil {
+		return migrationData{}, err
+	}
 
 	return migrationData{
 		SchemaName:             schemaName,
@@ -174,6 +179,7 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 		DocNamespacePathsTable: docNamespacePathsTable,
 		CollectionsTable:       collectionsTable,
 		CollectionDocsTable:    collectionDocsTable,
+		UsageEventsTable:       usageEventsTable,
 		PathColumn:             pathCol,
 		KindColumn:             kindCol,
 		SizeColumn:             sizeCol,

@@ -27,6 +27,7 @@ type Client struct {
 var _ store.Adapter = (*Client)(nil)
 var _ store.MountSourceLister = (*Client)(nil)
 var _ store.SourceRouter = (*Client)(nil)
+var _ store.UsageRecorder = (*Client)(nil)
 
 func New(baseURL string) *Client {
 	return &Client{
@@ -90,6 +91,24 @@ func (c *Client) RegisterRepo(ctx context.Context, name string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return c.do(req, "register_repo", nil)
+}
+
+func (c *Client) RecordUsageEvent(ctx context.Context, event store.UsageEvent) (*store.UsageEventResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/usage-events"
+	body, err := json.Marshal(event)
+	if err != nil {
+		return nil, fmt.Errorf("marshal usage event request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build usage event request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var resp store.UsageEventResponse
+	if err := c.do(req, "usage_event", &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 func (c *Client) MountSources(ctx context.Context) ([]store.MountSource, error) {

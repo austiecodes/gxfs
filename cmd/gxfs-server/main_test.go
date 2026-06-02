@@ -78,6 +78,16 @@ func TestAPIRoutesRegistersRepoPost(t *testing.T) {
 	t.Fatal("apiRoutes() missing POST /v1/repos")
 }
 
+func TestAPIRoutesRegistersUsageEventsPost(t *testing.T) {
+	routes := apiRoutes(http.NotFoundHandler())
+	for _, route := range routes {
+		if route.Method == http.MethodPost && route.Path == "/v1/usage-events" {
+			return
+		}
+	}
+	t.Fatal("apiRoutes() missing POST /v1/usage-events")
+}
+
 func TestAPIRoutesRegistersMountSources(t *testing.T) {
 	routes := apiRoutes(http.NotFoundHandler())
 	for _, route := range routes {

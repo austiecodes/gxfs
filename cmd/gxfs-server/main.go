@@ -164,6 +164,7 @@ func apiRoutes(handler http.Handler) []rest.Route {
 		{Method: http.MethodDelete, Path: "/v1/cache", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/repos", Handler: handler.ServeHTTP},
 		{Method: http.MethodPost, Path: "/v1/repos", Handler: handler.ServeHTTP},
+		{Method: http.MethodPost, Path: "/v1/usage-events", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/mount-sources", Handler: handler.ServeHTTP},
 		// Collection routes
 		{Method: http.MethodPost, Path: "/v1/collections", Handler: handler.ServeHTTP},

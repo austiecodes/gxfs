@@ -149,6 +149,45 @@ func TestClientRegisterRepoPostsJSON(t *testing.T) {
 	}
 }
 
+func TestClientRecordUsageEventPostsJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %q, want POST", r.Method)
+		}
+		if r.URL.Path != "/v1/usage-events" {
+			t.Fatalf("path = %q, want /v1/usage-events", r.URL.Path)
+		}
+		if got := r.Header.Get("X-Gxfs-Log-Id"); got != "log-1" {
+			t.Fatalf("X-Gxfs-Log-Id = %q, want log-1", got)
+		}
+		var body store.UsageEvent
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body.Command != "search" || body.ClientRepo != "gxfs" || body.DurationMs != 42 {
+			t.Fatalf("body = %+v, want search usage event", body)
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintln(w, `{"event":{"id":"usage-1","command":"search"}}`)
+	}))
+	defer server.Close()
+
+	cli := New(server.URL)
+	cli.SetLogID("log-1")
+	resp, err := cli.RecordUsageEvent(context.Background(), store.UsageEvent{
+		LogID:      "log-1",
+		ClientRepo: "gxfs",
+		Command:    "search",
+		DurationMs: 42,
+	})
+	if err != nil {
+		t.Fatalf("RecordUsageEvent() error = %v", err)
+	}
+	if resp.Event.ID != "usage-1" {
+		t.Fatalf("response ID = %q, want usage-1", resp.Event.ID)
+	}
+}
+
 func TestClientRegisterRepoDuplicateReturnsJSONMessage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

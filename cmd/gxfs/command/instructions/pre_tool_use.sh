@@ -92,9 +92,16 @@ with open(sys.argv[5], 'a') as f:
 " "$timestamp" "$log_id" "$session_id" "$command_name" "$hook_log_dir/audit.jsonl" 2>/dev/null || true
 fi
 
-# Output: rewrite command with GXFS_LOG_ID env prefix.
+# Output: rewrite command with GXFS_LOG_ID/GXFS_SESSION_ID env prefix.
 # Use python3 for reliable JSON encoding.
-rewritten="GXFS_LOG_ID=$log_id $command"
+env_prefix="GXFS_LOG_ID=$log_id"
+if [ -n "$session_id" ]; then
+    quoted_session=$(python3 -c "import shlex, sys; print(shlex.quote(sys.argv[1]))" "$session_id" 2>/dev/null || echo "")
+    if [ -n "$quoted_session" ]; then
+        env_prefix="$env_prefix GXFS_SESSION_ID=$quoted_session"
+    fi
+fi
+rewritten="$env_prefix $command"
 
 python3 -c "
 import json, sys
