@@ -172,7 +172,7 @@ source = "default"
 
 [[mounts]]
 local = "docs/gotchas/openai-go"
-remote = "collection://openai-go/v3/gotchas"
+remote = "docset://openai-go/v3/gotchas"
 mode = "readonly"
 source = "search"
 `)

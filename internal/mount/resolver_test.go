@@ -67,12 +67,20 @@ func TestResolverMapsRemotePathBackToLocal(t *testing.T) {
 	}
 }
 
-func TestResolverRejectsUnsupportedRemoteForPhaseOne(t *testing.T) {
-	_, err := NewResolver("gxfs", []config.MountConfig{
-		{Local: "docs/shared", Remote: "collection://openai-go/v3/gotchas", Mode: "readonly"},
+func TestResolverAcceptsDocsetRemote(t *testing.T) {
+	r, err := NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/shared", Remote: "docset://openai-go/v3/gotchas", Mode: "readonly"},
 	})
-	if err == nil {
-		t.Fatal("NewResolver() error = nil, want unsupported collection remote")
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+
+	resolved, err := r.Resolve("docs/shared/guide.md", OpRead)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.Source.Kind != store.SourceKindDocset || resolved.Source.Name != "openai-go" || resolved.Source.Path != "/v3/gotchas/guide.md" {
+		t.Fatalf("resolved.Source = %+v, want docset://openai-go/v3/gotchas/guide.md", resolved.Source)
 	}
 }
 
@@ -102,12 +110,6 @@ func TestSourceRefParseAndFormat(t *testing.T) {
 		if ref.String() != tt.wantString {
 			t.Fatalf("ParseSourceRef(%q).String() = %q, want %q", tt.raw, ref.String(), tt.wantString)
 		}
-	}
-}
-
-func TestSourceRefRejectsCollection(t *testing.T) {
-	if _, err := store.ParseSourceRef("collection://openai-go/usage.md"); err == nil {
-		t.Fatal("ParseSourceRef(collection://...) error = nil, want rejection")
 	}
 }
 
@@ -260,7 +262,7 @@ func TestParseRemoteRef(t *testing.T) {
 		{"repo://github%2Fopenai-go/docs", "github/openai-go", "/docs", false},
 		{"repo://other-repo/docs", "other-repo", "/docs", false},
 		{"repo://other-repo", "other-repo", "/", false},
-		{"collection://stuff", "", "", true},
+		{"docset://stuff", "", "", true},
 		{"unknown://thing", "", "", true},
 	}
 

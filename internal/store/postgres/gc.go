@@ -31,7 +31,7 @@ type GCResult struct {
 // An orphan document is one that:
 //   - has no references in gxfs_repo_paths
 //   - has no references in gxfs_doc_namespace_paths
-//   - has no references in gxfs_collection_docs
+//   - has no references in gxfs_docset_docs
 //   - was last updated more than GraceHours ago (to protect fresh creates in progress)
 //
 // In dry-run mode, it reports the count and sample candidates without deleting.
@@ -69,7 +69,7 @@ func gcOrphanCondition(schema string, graceHours int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	collectionDocsTable, err := quoteTable(schema, "gxfs_collection_docs")
+	docsetDocsTable, err := quoteTable(schema, "gxfs_docset_docs")
 	if err != nil {
 		return "", err
 	}
@@ -79,7 +79,7 @@ func gcOrphanCondition(schema string, graceHours int) (string, error) {
 		AND NOT EXISTS (SELECT 1 FROM %s p WHERE p.doc_id = d.id)
 		AND NOT EXISTS (SELECT 1 FROM %s np WHERE np.doc_id = d.id)
 		AND NOT EXISTS (SELECT 1 FROM %s c WHERE c.doc_id = d.id)`,
-		graceHours, pathsTable, namespacePathsTable, collectionDocsTable), nil
+		graceHours, pathsTable, namespacePathsTable, docsetDocsTable), nil
 }
 
 func gcDryRun(ctx context.Context, pool *pgxpool.Pool, docsTable, orphanCondition string, limit int) (*GCResult, error) {

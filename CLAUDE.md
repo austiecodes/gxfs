@@ -2,56 +2,57 @@
 
 ## Document Index
 
-- `docs/dev/README.md` — developer and operator guide: server configuration, maintenance commands, build/test workflow, and package layout
-- `docs/gotchas/` — pitfall notes. Create subdirectories by topic (for example `pg/`, `testing/`, or `go-zero/`). One Markdown file per pitfall, using the format: problem -> cause -> solution
+- `docs/dev/README.md` - developer and operator guide: server configuration,
+  maintenance commands, build/test workflow, and package layout
+- `docs/dev/cli-command-refactor.md` - command shape and agent guidance design
+- `docs/gotchas/` - pitfall notes. Create subdirectories by topic, one
+  Markdown file per pitfall, using the format: problem -> cause -> solution
+- `cmd/gxfs/command/instructions/skill.md` - generated GXFS skill index
+- `cmd/gxfs/command/instructions/skill/references/` - generated GXFS skill
+  scenario references
 
 ## Documentation Update Rules
 
-- Add or update a file under `docs/gotchas/` whenever you hit a non-obvious bug, tooling issue, integration trap, flaky behavior, or debugging lesson that is likely to waste time again if left undocumented.
-- Treat `docs/gotchas/` as a required follow-up for real pitfalls encountered during implementation or testing, not as optional extra documentation.
+- Add or update a file under `docs/gotchas/` whenever you hit a non-obvious
+  bug, tooling issue, integration trap, flaky behavior, or debugging lesson
+  that is likely to waste time again if left undocumented.
+- Treat `docs/gotchas/` as a required follow-up for real pitfalls encountered
+  during implementation or testing, not as optional extra documentation.
 
-## PostgreSQL (Docker)
+## GXFS Quick Use
+
+Use `gxfs` like a Unix-style virtual filesystem for shared docs:
 
 ```bash
-docker exec -it gxfs-pg psql -U gxfs -d gxfs                  # connect
-docker start gxfs-pg                                          # start
-docker stop gxfs-pg                                           # stop
-docker exec gxfs-pg psql -U gxfs -d gxfs -c "SELECT count(*) FROM vfs_files"
+gxfs ls docs
+gxfs tree docs -L 3
+gxfs cat docs/foo.md
+gxfs grep "pattern" docs
+gxfs find docs --name "*.md"
 ```
 
-DSN: `postgres://gxfs:gxfs@localhost:5432/gxfs?sslmode=disable`
+For discovery, mounts, sync, writes, hooks, or operations, use the GXFS skill
+instead of expanding AGENTS.md. In this repo, read
+`cmd/gxfs/command/instructions/skill.md` and then only the relevant scenario
+file under `cmd/gxfs/command/instructions/skill/references/`. Generated repos
+should load `.gxfs/skills/gxfs/SKILL.md` when present.
 
 ## Build & Test
 
 ```bash
-go test ./...                              # run all tests
-go test ./internal/store                   # run a single package
-go test ./internal/vfs -run TestGrep       # run a single test
-go build ./cmd/gxfs                        # build the CLI
-go build ./cmd/gxfs-server                 # build the server
+go test ./...
+go test ./internal/store
+go test ./internal/vfs -run TestGrep
+go build ./cmd/gxfs
+go build ./cmd/gxfs-server
 ```
 
-## Architecture Overview
+## Project Boundaries
 
-GXFS is an agent-oriented virtual file system built as a thin CLI plus a backend server.
-
-```text
-gxfs CLI  ──HTTP──>  gxfs-server  ──>  store.Adapter
-                                          ├─ memory   (testing/development)
-                                          └─ postgres (production, pgxpool)
-```
-
-- **CLI** (`cmd/gxfs`) — Cobra-based command line app. Reads `.gxfs/settings.toml`, talks to the server through the HTTP client, and must not know about storage internals.
-- **Server** (`cmd/gxfs-server`) — go-zero HTTP service. Loads `conf/server.toml`, owns the store adapter, and exposes `/v1/repos/{op}?repo=...` APIs.
-- **Store boundary** — `internal/store/store.go` defines the capability interfaces (`Lister`, `Treer`, `Catter`, `Grepper`, `Finder`, `Statter`, `Writer`) and combines them into `store.Adapter`. Every adapter must include a compile-time assertion: `var _ store.Adapter = (*Adapter)(nil)`.
-- **VFS tree** (`internal/vfs/tree.go`) — in-memory tree that auto-synthesizes parent directories and provides `ls`, `tree`, `cat`, `grep`, `find`, and `stat`.
-- **Client** (`internal/client/client.go`) — HTTP client that implements `store.Adapter`, with URLs shaped as `/v1/repos/{op}?repo=...&path=...`.
-- **Config** (`internal/config/config.go`) — TOML config. CLI config must not contain backend credentials. Server config owns storage connection details. Environment variables are expanded automatically.
-
-## Key Conventions
-
-- Define interfaces only at real polymorphic boundaries (`store.Adapter`). Use concrete structs elsewhere.
-- The Postgres adapter builds the VFS tree lazily: load metadata (`vfs_nodes`) once, then load and cache content (`vfs_content`) on demand.
-- Database schema: `vfs_nodes` (path PK) + `vfs_content` (path PK) + `vfs_repo_nodes` (repo, path) for many-to-many repo mapping. A document is stored once and shared across repos.
-- `grep` uses plain-text substring matching by default. `-E` enables regex mode.
-- The CLI must never connect to the database directly. All operations go through the server HTTP API.
+- `cmd/gxfs` is the thin Cobra CLI. It reads `.gxfs/settings.toml` and talks to
+  the server through HTTP; it must not connect to the database directly.
+- `cmd/gxfs-server` owns backend configuration, store adapters, and HTTP APIs.
+- `internal/store/store.go` defines the adapter capability boundary. Every
+  adapter must include `var _ store.Adapter = (*Adapter)(nil)`.
+- CLI config must not contain backend credentials. Server config owns storage
+  connection details.

@@ -604,106 +604,106 @@ func (c *Client) urlForSource(source store.SourceRef, op string, q url.Values) (
 	return base.String(), nil
 }
 
-// === Collection Methods ===
+// === Docset Methods ===
 
-// CreateCollection creates a new collection.
-func (c *Client) CreateCollection(ctx context.Context, req store.CreateCollectionRequest) (*store.CreateCollectionResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections"
+// CreateDocset creates a new docset.
+func (c *Client) CreateDocset(ctx context.Context, req store.CreateDocsetRequest) (*store.CreateDocsetResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets"
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal create collection request: %w", err)
+		return nil, fmt.Errorf("marshal create docset request: %w", err)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("build create collection request: %w", err)
+		return nil, fmt.Errorf("build create docset request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	var resp store.CreateCollectionResponse
-	if err := c.do(httpReq, "create_collection", &resp); err != nil {
+	var resp store.CreateDocsetResponse
+	if err := c.do(httpReq, "create_docset", &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
-// ListCollections lists all collections.
-func (c *Client) ListCollections(ctx context.Context) (*store.ListCollectionsResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections"
+// ListDocsets lists all docsets.
+func (c *Client) ListDocsets(ctx context.Context) (*store.ListDocsetsResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build list collections request: %w", err)
+		return nil, fmt.Errorf("build list docsets request: %w", err)
 	}
-	var resp store.ListCollectionsResponse
-	if err := c.do(req, "list_collections", &resp); err != nil {
+	var resp store.ListDocsetsResponse
+	if err := c.do(req, "list_docsets", &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
-// GetCollection gets a collection by name.
-func (c *Client) GetCollection(ctx context.Context, name string) (*store.GetCollectionResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(name)
+// GetDocset gets a docset by name.
+func (c *Client) GetDocset(ctx context.Context, name string) (*store.GetDocsetResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(name)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build get collection request: %w", err)
+		return nil, fmt.Errorf("build get docset request: %w", err)
 	}
-	var resp store.GetCollectionResponse
-	if err := c.do(req, "get_collection", &resp); err != nil {
+	var resp store.GetDocsetResponse
+	if err := c.do(req, "get_docset", &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
-// DeleteCollection deletes a collection by name.
-func (c *Client) DeleteCollection(ctx context.Context, name string) error {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(name)
+// DeleteDocset deletes a docset by name.
+func (c *Client) DeleteDocset(ctx context.Context, name string) error {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(name)
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
-		return fmt.Errorf("build delete collection request: %w", err)
+		return fmt.Errorf("build delete docset request: %w", err)
 	}
-	return c.do(req, "delete_collection", nil)
+	return c.do(req, "delete_docset", nil)
 }
 
-// AddMember adds a document to a collection.
-func (c *Client) AddMember(ctx context.Context, req store.AddMemberRequest) (*store.AddMemberResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(req.Name) + "/members"
+// AddDocsetMember adds a document to a docset.
+func (c *Client) AddDocsetMember(ctx context.Context, req store.AddDocsetMemberRequest) (*store.AddDocsetMemberResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(req.Name) + "/members"
 	body, err := json.Marshal(map[string]string{
 		"source_ref": req.SourceRef,
 		"path":       req.Path,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal add member request: %w", err)
+		return nil, fmt.Errorf("marshal add docset member request: %w", err)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("build add member request: %w", err)
+		return nil, fmt.Errorf("build add docset member request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	var resp store.AddMemberResponse
-	if err := c.do(httpReq, "add_member", &resp); err != nil {
+	var resp store.AddDocsetMemberResponse
+	if err := c.do(httpReq, "add_docset_member", &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
-// RemoveMember removes a document from a collection.
-func (c *Client) RemoveMember(ctx context.Context, name, path string) error {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(name) + "/members?path=" + url.QueryEscape(path)
+// RemoveDocsetMember removes a document from a docset.
+func (c *Client) RemoveDocsetMember(ctx context.Context, name, path string) error {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(name) + "/members?path=" + url.QueryEscape(path)
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
-		return fmt.Errorf("build remove member request: %w", err)
+		return fmt.Errorf("build remove docset member request: %w", err)
 	}
-	return c.do(req, "remove_member", nil)
+	return c.do(req, "remove_docset_member", nil)
 }
 
-// GetMemberContent reads a document's content via collection membership.
-func (c *Client) GetMemberContent(ctx context.Context, name, path string) (*store.GetMemberContentResponse, error) {
-	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/collections/" + url.PathEscape(name) + "/docs?path=" + url.QueryEscape(path)
+// GetDocsetMemberContent reads a document's content via docset membership.
+func (c *Client) GetDocsetMemberContent(ctx context.Context, name, path string) (*store.GetDocsetMemberContentResponse, error) {
+	endpoint := strings.TrimRight(c.baseURL, "/") + "/v1/docsets/" + url.PathEscape(name) + "/docs?path=" + url.QueryEscape(path)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build get member content request: %w", err)
+		return nil, fmt.Errorf("build get docset member content request: %w", err)
 	}
-	var resp store.GetMemberContentResponse
-	if err := c.do(req, "get_member_content", &resp); err != nil {
+	var resp store.GetDocsetMemberContentResponse
+	if err := c.do(req, "get_docset_member_content", &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

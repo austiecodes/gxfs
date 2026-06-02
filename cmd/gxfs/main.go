@@ -30,15 +30,15 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 		},
 	}
 
-	// Try to get collection client from rawAdapter
-	var collectionClient *client.Client
+	// Try to get a docset client from rawAdapter.
+	var docsetClient *client.Client
 	if cli, ok := rawAdapter.(*client.Client); ok {
-		collectionClient = cli
+		docsetClient = cli
 	}
 
 	cmd.AddCommand(command.NewLSCommand(adapter, rawAdapter, repo))
 	cmd.AddCommand(command.NewTreeCommand(adapter, repo))
-	cmd.AddCommand(command.NewCatCommand(adapter, rawAdapter, repo, collectionClient))
+	cmd.AddCommand(command.NewCatCommand(adapter, rawAdapter, repo, docsetClient))
 	cmd.AddCommand(command.NewGrepCommand(adapter, repo))
 	cmd.AddCommand(command.NewFindCommand(adapter, repo))
 	cmd.AddCommand(command.NewStatCommand(adapter, rawAdapter, repo))
@@ -54,9 +54,7 @@ func newRootCommand(adapter, rawAdapter store.Adapter, repo string, resolver *mo
 	cmd.AddCommand(command.NewRepoCommand(rawAdapter))
 	cmd.AddCommand(command.NewGlobCommand(rawAdapter, repo))
 	cmd.AddCommand(command.NewHookCommand(adapter, rawAdapter, repo, resolver))
-	if collectionClient != nil {
-		cmd.AddCommand(command.NewCollectionCommand(collectionClient))
-	}
+	cmd.AddCommand(command.NewDocsetCommand(docsetClient))
 	return cmd
 }
 

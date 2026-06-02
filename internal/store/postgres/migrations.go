@@ -14,22 +14,26 @@ import (
 var migrationFS embed.FS
 
 type migrationData struct {
-	SchemaName             string
-	NodesTable             string
-	ContentTable           string
-	RepoNodesTable         string
-	ReposTable             string
-	DocsTable              string
-	RepoPathsTable         string
-	DocNamespacesTable     string
-	DocNamespacePathsTable string
-	CollectionsTable       string
-	CollectionDocsTable    string
-	UsageEventsTable       string
-	PathColumn             string
-	KindColumn             string
-	SizeColumn             string
-	MTimeColumn            string
+	SchemaName                   string
+	NodesTable                   string
+	ContentTable                 string
+	RepoNodesTable               string
+	ReposTable                   string
+	DocsTable                    string
+	RepoPathsTable               string
+	DocNamespacesTable           string
+	DocNamespacePathsTable       string
+	DocsetsTable                 string
+	DocsetDocsTable              string
+	LegacyCollectionsTable       string
+	LegacyCollectionDocsTable    string
+	LegacyCollectionsRegClass    string
+	LegacyCollectionDocsRegClass string
+	UsageEventsTable             string
+	PathColumn                   string
+	KindColumn                   string
+	SizeColumn                   string
+	MTimeColumn                  string
 }
 
 func SchemaSQL(cfg Config) ([]string, error) {
@@ -154,11 +158,19 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 	if err != nil {
 		return migrationData{}, err
 	}
-	collectionsTable, err := quoteTable(cfg.Schema, "gxfs_collections")
+	docsetsTable, err := quoteTable(cfg.Schema, "gxfs_docsets")
 	if err != nil {
 		return migrationData{}, err
 	}
-	collectionDocsTable, err := quoteTable(cfg.Schema, "gxfs_collection_docs")
+	docsetDocsTable, err := quoteTable(cfg.Schema, "gxfs_docset_docs")
+	if err != nil {
+		return migrationData{}, err
+	}
+	legacyCollectionsTable, err := quoteTable(cfg.Schema, "gxfs_collections")
+	if err != nil {
+		return migrationData{}, err
+	}
+	legacyCollectionDocsTable, err := quoteTable(cfg.Schema, "gxfs_collection_docs")
 	if err != nil {
 		return migrationData{}, err
 	}
@@ -166,24 +178,30 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 	if err != nil {
 		return migrationData{}, err
 	}
+	legacyCollectionsRegClass := legacyRelationName(cfg.Schema, "gxfs_collections")
+	legacyCollectionDocsRegClass := legacyRelationName(cfg.Schema, "gxfs_collection_docs")
 
 	return migrationData{
-		SchemaName:             schemaName,
-		NodesTable:             nodesTable,
-		ContentTable:           contentTable,
-		RepoNodesTable:         repoNodesTable,
-		ReposTable:             reposTable,
-		DocsTable:              docsTable,
-		RepoPathsTable:         repoPathsTable,
-		DocNamespacesTable:     docNamespacesTable,
-		DocNamespacePathsTable: docNamespacePathsTable,
-		CollectionsTable:       collectionsTable,
-		CollectionDocsTable:    collectionDocsTable,
-		UsageEventsTable:       usageEventsTable,
-		PathColumn:             pathCol,
-		KindColumn:             kindCol,
-		SizeColumn:             sizeCol,
-		MTimeColumn:            mtimeCol,
+		SchemaName:                   schemaName,
+		NodesTable:                   nodesTable,
+		ContentTable:                 contentTable,
+		RepoNodesTable:               repoNodesTable,
+		ReposTable:                   reposTable,
+		DocsTable:                    docsTable,
+		RepoPathsTable:               repoPathsTable,
+		DocNamespacesTable:           docNamespacesTable,
+		DocNamespacePathsTable:       docNamespacePathsTable,
+		DocsetsTable:                 docsetsTable,
+		DocsetDocsTable:              docsetDocsTable,
+		LegacyCollectionsTable:       legacyCollectionsTable,
+		LegacyCollectionDocsTable:    legacyCollectionDocsTable,
+		LegacyCollectionsRegClass:    legacyCollectionsRegClass,
+		LegacyCollectionDocsRegClass: legacyCollectionDocsRegClass,
+		UsageEventsTable:             usageEventsTable,
+		PathColumn:                   pathCol,
+		KindColumn:                   kindCol,
+		SizeColumn:                   sizeCol,
+		MTimeColumn:                  mtimeCol,
 	}, nil
 }
 
@@ -198,4 +216,11 @@ func renderMigration(name, raw string, data migrationData) (string, error) {
 		return "", fmt.Errorf("render migration %s: %w", name, err)
 	}
 	return strings.TrimSpace(buf.String()), nil
+}
+
+func legacyRelationName(schema, table string) string {
+	if schema == "" {
+		return table
+	}
+	return schema + "." + table
 }

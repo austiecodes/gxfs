@@ -17,7 +17,7 @@ import (
 const (
 	repoRegistryTable            = "gxfs_repos"
 	docNamespaceRegistryTable    = "gxfs_doc_namespaces"
-	docsetRegistrySourceTable    = "gxfs_collections"
+	docsetRegistrySourceTable    = "gxfs_docsets"
 	postgresDuplicateKeySQLState = "23505"
 )
 
@@ -160,7 +160,7 @@ func (r *Registry) ListDocNamespaces(ctx context.Context) ([]store.DocNamespace,
 	return namespaces, nil
 }
 
-// ListDocsets returns curated docset:// namespaces from gxfs_collections.
+// ListDocsets returns curated docset:// namespaces from gxfs_docsets.
 func (r *Registry) ListDocsets(ctx context.Context) ([]store.Docset, error) {
 	if r.pool == nil {
 		return nil, fmt.Errorf("postgres registry pool is nil")

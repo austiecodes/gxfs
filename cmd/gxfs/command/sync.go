@@ -424,7 +424,7 @@ func buildRemoteSyncPlan(ctx context.Context, adapter store.Adapter, repo, root 
 	return buildRemoteSyncPlanFromFiles(repo, remoteFiles, manifest, opts, root)
 }
 
-// buildRemoteSyncPlanForRoot picks the correct collection strategy based on
+// buildRemoteSyncPlanForRoot picks the correct source resolution strategy based on
 // whether a mount resolver is available, then builds the sync plan.
 // When resolver != nil, it uses the raw adapter + resolver so that RemotePath
 // contains the true server path (not the localized display path).

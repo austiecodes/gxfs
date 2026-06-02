@@ -17,7 +17,7 @@ e2e/verify/
   lib.sh                    # Shared helpers (assertions, server lifecycle, DB ops)
   verify-writable-mount.sh  # Phase #14 - Cross-repo writable mount
   verify-locate.sh          # Phase #15A - Lexical locate
-  verify-collection.sh      # Phase #16 - Collection API
+  verify-docset.sh          # Phase #16 - Docset API
   verify-gc.sh              # Phase #17 - Orphan doc GC
 ```
 
@@ -28,7 +28,7 @@ Run a single phase:
 ```bash
 cd e2e/verify
 chmod +x *.sh
-./verify-collection.sh
+./verify-docset.sh
 ```
 
 Run all phases:
@@ -45,7 +45,7 @@ done
 Pass a custom binary path:
 
 ```bash
-./verify-collection.sh /path/to/gxfs-server
+./verify-docset.sh /path/to/gxfs-server
 ```
 
 ## Configuration

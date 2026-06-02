@@ -27,7 +27,7 @@ gxfs locate
 gxfs find
 ```
 
-The CLI also exposes setup, sync, mount, repository, hook, and collection
+The CLI also exposes setup, sync, mount, repository, hook, and docset
 workflows. Those workflows may still be valid, but they make the command surface
 feel broader than a compact filesystem tool when they are all top-level verbs.
 Non-Unix commands should either be grouped behind a small number of nouns or
@@ -43,8 +43,8 @@ current product direction and calls out the remaining open decisions.
 3. Treat non-Unix commands as extra cognitive load for agents.
 4. Group operational workflows instead of exposing every operation as a
    top-level command.
-5. Teach non-Unix workflows through both generated `AGENTS.md` instructions and
-   generated skills.
+5. Keep generated `AGENTS.md` instructions small and teach non-Unix workflows
+   through generated skills.
 
 The goal is not to remove every GXFS-specific operation. The goal is to make
 the top-level CLI look like a filesystem first, then make the remaining
@@ -86,9 +86,9 @@ gxfs grep "streaming" /docs/openai-go-sdk
 - 18 GXFS business commands registered by the project.
 - 2 Cobra-provided commands: `help` and `completion`.
 
-There is also one conditionally registered business command, `collection`, when
-the root command is created with an HTTP client adapter. That brings the
-business command design surface to 19 commands.
+There is also one business command, `docset`, which remains public even in the
+config-free help tree. That brings the business command design surface to 19
+commands.
 
 ## Current Commands
 
@@ -112,7 +112,7 @@ business command design surface to 19 commands.
 | `mount` | Manage mount points | Management | Keep as grouped command |
 | `sync` | Synchronize local docs with GXFS | Sync group | Keep as grouped command |
 | `hook` | GXFS lifecycle hooks | Automation/internal | Consider hiding or moving under an internal/admin group |
-| `collection` | Collection management commands | Product workflow | Re-evaluate name and surface; this overlaps with shared docs/docset behavior |
+| `docset` | Docset management commands | Product workflow | Keep as an advanced surface; this overlaps with shared docs/docset behavior |
 | `help` | Help about any command | Cobra built-in | Keep implicit |
 | `completion` | Generate shell completion scripts | Cobra built-in | Keep implicit or hide from primary docs |
 
@@ -203,14 +203,14 @@ advanced features:
 
 ```text
 gxfs hook ...
-gxfs collection ...
+gxfs docset ...
 gxfs completion
 ```
 
 `completion` is standard Cobra behavior, so hiding it is optional. `hook` and
-`collection` need product-level decisions.
+`docset` need product-level decisions.
 
-## Repo, Shared Docs, and Collections
+## Repo, Shared Docs, and Docsets
 
 The intended model is:
 
@@ -276,22 +276,22 @@ model should not treat shared docs as fake repos. The storage layer should have
 enough namespace metadata to distinguish repo namespaces from shared docs
 namespaces.
 
-The current `collection` implementation is different. It represents a named,
+The current `docset` implementation is different. It represents a named,
 curated set of document references across repos, with each member pointing at a
-stored document ID and an internal collection path. That is useful, but it is
+stored document ID and an internal docset path. That is useful, but it is
 not the same as "repo A references repo B's docs directory."
 
-Because of that mismatch, `collection` needs a naming decision:
+Because of that mismatch, `docset` needs a product-surface decision:
 
-- Hide `collection` as an internal backend concept if shared docs are expressed
+- Hide `docset` as an internal backend concept if shared docs are expressed
   entirely through `mount`.
-- Rename it to a more explicit public concept such as `docset` if curated
-  reusable doc groups remain first-class.
-- Keep `collection` only as a compatibility alias if existing users depend on
+- Keep it as the public `docset` concept if curated reusable doc groups remain
+  first-class.
+- Keep `docset` only as a compatibility alias if existing users depend on
   it.
 
-For AI ergonomics, `docset` is clearer than `collection` if the object means
-"a reusable set of docs." `collection` is too generic and does not communicate
+For AI ergonomics, `docset` is clearer if the object means
+"a reusable set of docs." `docset` communicates the shape better and avoids the old generic name that did not communicate
 whether it is a repo, a path, a mounted tree, or a curated list.
 
 ## Agent Guidance Generation
@@ -316,8 +316,9 @@ gxfs search
 For these commands, GXFS should generate explicit agent-facing instructions.
 Two output forms should be retained:
 
-- Markdown instructions for repository context, such as `AGENTS.md`.
-- A local skill that teaches the agent GXFS-specific workflows.
+- Minimal Markdown instructions for repository context, such as `AGENTS.md`.
+- A local skill that indexes GXFS-specific workflows and loads scenario details
+  on demand.
 
 Implemented command shape:
 
@@ -327,9 +328,10 @@ gxfs init --mode skill
 gxfs init --mode md,skill
 ```
 
-Users can choose either output form or generate both. The generated content
-explains only the GXFS-specific commands and assumes the agent already
-understands Unix-like commands.
+Users can choose either output form or generate both. The default should
+generate both: a short Markdown entry that lists a few Unix-like commands and
+points to the local GXFS skill, plus the skill itself for discovery, mounting,
+sync, writing, hooks, and operations.
 
 ## Non-Unix Command Consolidation
 
@@ -345,7 +347,7 @@ understands Unix-like commands.
 | `materialize` | `sync materialize` | Materialization is part of local sync/state management |
 | `dematerialize` | `sync dematerialize` | Dematerialization is part of local sync/state management |
 | `hook` | hidden or `admin hook` | Lifecycle hooks are not a normal filesystem operation |
-| `collection` | hide or migrate to `docset` | Current collection semantics are curated doc references, not repo docs mounts or shared docs namespaces |
+| `docset` | keep as advanced public surface | Current docset semantics are curated doc references, not repo docs mounts or shared docs namespaces |
 | `search` | possibly `locate` mode or advanced search | It overlaps with `grep` and `locate` and needs a sharper meaning |
 
 ## Discovery Command Overlap
@@ -394,7 +396,7 @@ Primary docs and generated agent instructions should teach only the new shape.
    read-only browsing stay the primary identity?
 2. Should `glob` become `find -glob` or `find -name`?
 3. Should `search` and `locate` both survive as top-level commands?
-4. Should `collection` be hidden or renamed to `docset`?
+4. Should `docset` stay public or move under a more explicitly advanced surface?
 5. Should advanced commands be hidden from default help?
 6. What metadata and storage tables are needed for first-class `docs://...`
    namespaces?

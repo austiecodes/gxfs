@@ -11,7 +11,7 @@ import (
 	"github.com/austiecodes/gxfs/internal/store"
 )
 
-func NewCatCommand(adapter, rawAdapter store.Adapter, repo string, collectionClient *client.Client) *cobra.Command {
+func NewCatCommand(adapter, rawAdapter store.Adapter, repo string, docsetClient *client.Client) *cobra.Command {
 	var numberAll, numberNonBlank, squeezeBlanks bool
 
 	cmd := &cobra.Command{
@@ -22,21 +22,21 @@ func NewCatCommand(adapter, rawAdapter store.Adapter, repo string, collectionCli
 Supports multiple path formats:
   - Regular path: cat /docs/readme.md
   - Repo ref: cat repo://other-repo/docs/readme.md
-  - Collection ref: cat collection://my-collection/docs/readme.md`,
+  - Docset ref: cat docset://my-docset/docs/readme.md`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
 
-			// Check for collection:// ref
-			if strings.HasPrefix(path, "collection://") {
-				if collectionClient == nil {
-					return fmt.Errorf("collection:// refs require a configured server")
+			// Check for docset:// ref
+			if strings.HasPrefix(path, "docset://") {
+				if docsetClient == nil {
+					return fmt.Errorf("docset:// refs require a configured server")
 				}
-				name, colPath, err := parseCollectionRef(path)
+				name, docsetPath, err := parseDocsetRef(path)
 				if err != nil {
 					return err
 				}
-				resp, err := collectionClient.GetMemberContent(cmd.Context(), name, colPath)
+				resp, err := docsetClient.GetDocsetMemberContent(cmd.Context(), name, docsetPath)
 				if err != nil {
 					return err
 				}
@@ -88,27 +88,27 @@ Supports multiple path formats:
 	return cmd
 }
 
-// parseCollectionRef parses collection://name/path into (name, path).
-func parseCollectionRef(ref string) (string, string, error) {
-	if !strings.HasPrefix(ref, "collection://") {
-		return "", "", fmt.Errorf("invalid collection ref: must start with collection://")
+// parseDocsetRef parses docset://name/path into (name, path).
+func parseDocsetRef(ref string) (string, string, error) {
+	if !strings.HasPrefix(ref, "docset://") {
+		return "", "", fmt.Errorf("invalid docset ref: must start with docset://")
 	}
-	rest := ref[13:] // len("collection://")
+	rest := strings.TrimPrefix(ref, "docset://")
 	if rest == "" {
-		return "", "", fmt.Errorf("invalid collection ref: missing collection name")
+		return "", "", fmt.Errorf("invalid docset ref: missing docset name")
 	}
 	// Find the first /
 	slashIdx := strings.Index(rest, "/")
 	if slashIdx < 0 {
-		return "", "", fmt.Errorf("invalid collection ref: missing path")
+		return "", "", fmt.Errorf("invalid docset ref: missing path")
 	}
 	name := rest[:slashIdx]
 	path := rest[slashIdx:]
 	if name == "" {
-		return "", "", fmt.Errorf("invalid collection ref: empty collection name")
+		return "", "", fmt.Errorf("invalid docset ref: empty docset name")
 	}
 	if path == "" || path == "/" {
-		return "", "", fmt.Errorf("invalid collection ref: missing document path")
+		return "", "", fmt.Errorf("invalid docset ref: missing document path")
 	}
 	return name, path, nil
 }

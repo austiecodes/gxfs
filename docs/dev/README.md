@@ -61,7 +61,7 @@ refresh_interval = "10s"
   `gxfs mount add docs://<name>/<path> <local-path>`.
 - `backend.type = "postgres"` keeps path-centric repo storage.
   `backend.type = "doc_postgres"` enables document-centric repo storage and is
-  required for shared docs namespaces, collections, and orphan-content GC.
+  required for shared docs namespaces, docsets, and orphan-content GC.
 - PostgreSQL schema migration runs during server startup.
 - Registered repos carry their own writable flag. Writable repos permit
   cross-repository writable mounts; otherwise cross-repository writes are
@@ -76,7 +76,7 @@ GC is an administrative database maintenance action, not a request sent by
 out-of-band maintenance subcommand: each invocation loads the server config,
 connects directly to the configured `doc_postgres` database, and removes
 document rows that are no longer referenced by repository paths, docs namespace
-paths, or collections.
+paths, or docsets.
 
 It defaults to dry-run mode and uses a grace period to avoid deleting recently
 created content:
@@ -109,7 +109,7 @@ go build ./cmd/gxfs-server
 - `internal/client`: HTTP client implementing the store adapter interface.
 - `internal/server`: HTTP API handler.
 - `internal/store`: adapter interfaces and request/response types.
-- `internal/store/postgres`: PostgreSQL adapters, migrations, collections, and
+- `internal/store/postgres`: PostgreSQL adapters, migrations, docsets, and
   orphan-content GC implementation.
 - `internal/mount`: local-to-remote mount resolution and composed views.
 - `internal/syncmanifest`: manifest persistence and materialization tracking.

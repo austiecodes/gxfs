@@ -518,6 +518,20 @@ func TestRunHelpDoesNotRequireConfig(t *testing.T) {
 	}
 }
 
+func TestRunDocsetHelpDoesNotRequireConfig(t *testing.T) {
+	t.Setenv("GXFS_CONFIG", "/path/that/does/not/exist")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"docset", "--help"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(docset --help) code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Docset management commands") {
+		t.Fatalf("help output = %q, want docset help", stdout.String())
+	}
+}
+
 func TestRunInitDoesNotRequireConfig(t *testing.T) {
 	t.Setenv("GXFS_CONFIG", "/path/that/does/not/exist")
 	dir := t.TempDir()
@@ -1891,7 +1905,31 @@ func executeInit(t *testing.T, args ...string) string {
 	return out.String()
 }
 
-func TestInitWritesSettingsAndAgentsInstructions(t *testing.T) {
+func readGXFSSkillBundle(t *testing.T, dir string) string {
+	t.Helper()
+
+	skillDir := filepath.Join(dir, ".gxfs", "skills", "gxfs")
+	var bundle strings.Builder
+	bundle.WriteString(readTextFile(t, filepath.Join(skillDir, "SKILL.md")))
+
+	refsDir := filepath.Join(skillDir, "references")
+	entries, err := os.ReadDir(refsDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", refsDir, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		bundle.WriteString("\n\n--- ")
+		bundle.WriteString(entry.Name())
+		bundle.WriteString(" ---\n")
+		bundle.WriteString(readTextFile(t, filepath.Join(refsDir, entry.Name())))
+	}
+	return bundle.String()
+}
+
+func TestInitWritesSettingsAgentsInstructionsAndSkill(t *testing.T) {
 	dir := t.TempDir()
 	got := executeInit(t, dir)
 
@@ -1924,14 +1962,24 @@ func TestInitWritesSettingsAndAgentsInstructions(t *testing.T) {
 	if !strings.Contains(agents, command.GXFSInstructionsStart) || !strings.Contains(agents, command.GXFSInstructionsEnd) {
 		t.Fatalf("AGENTS.md missing GXFS markers: %q", agents)
 	}
-	if !strings.Contains(agents, "Use gxfs CLI to browse") || !strings.Contains(agents, "gxfs tree docs -L 3") {
+	if !strings.Contains(agents, "gxfs tree docs -L 3") || !strings.Contains(agents, ".gxfs/skills/gxfs/SKILL.md") {
 		t.Fatalf("AGENTS.md missing instruction content: %q", agents)
+	}
+	if strings.Contains(agents, "gxfs mount add") || strings.Contains(agents, "gxfs sync") || strings.Contains(agents, "gxfs write") {
+		t.Fatalf("AGENTS.md should stay minimal, got: %q", agents)
 	}
 	if !strings.Contains(got, "updated GXFS instructions in") {
 		t.Fatalf("init output = %q, want instruction update", got)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")); !os.IsNotExist(err) {
-		t.Fatalf("SKILL.md exists for default init mode, err=%v", err)
+	if !strings.Contains(got, "updated GXFS skill in") {
+		t.Fatalf("init output = %q, want skill update", got)
+	}
+	skill := readTextFile(t, filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md"))
+	if !strings.Contains(skill, "references/discovery.md") || !strings.Contains(skill, "references/mounting.md") {
+		t.Fatalf("SKILL.md missing reference index: %q", skill)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "references", "browse.md")); err != nil {
+		t.Fatalf("browse reference stat error = %v", err)
 	}
 }
 
@@ -1941,21 +1989,25 @@ func TestInitModeSkillWritesSkillOnly(t *testing.T) {
 
 	skillPath := filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")
 	skill := readTextFile(t, skillPath)
+	bundle := readGXFSSkillBundle(t, dir)
+	if !strings.Contains(skill, `references/discovery.md`) || !strings.Contains(skill, `references/setup-hooks-ops.md`) {
+		t.Fatalf("SKILL.md missing reference index: %q", skill)
+	}
 	for _, want := range []string{
 		`gxfs ls knowledge`,
 		`gxfs cat knowledge/foo.md`,
 		`gxfs grep "pattern" knowledge`,
 		`gxfs find knowledge --name "*.md"`,
 		`gxfs stat knowledge/foo.md`,
-		`gxfs rm knowledge/foo.md`,
+		`gxfs rm knowledge/new.md`,
 		`gxfs mount sources`,
 		`docs://openai-go-sdk/reference`,
 		`gxfs sync refresh knowledge`,
 		`gxfs sync materialize knowledge`,
 		`gxfs sync dematerialize knowledge --keep-files`,
 	} {
-		if !strings.Contains(skill, want) {
-			t.Fatalf("SKILL.md = %q, missing %q", skill, want)
+		if !strings.Contains(bundle, want) {
+			t.Fatalf("generated skill bundle missing %q in %q", want, bundle)
 		}
 	}
 	for _, notWant := range []string{
@@ -1965,8 +2017,8 @@ func TestInitModeSkillWritesSkillOnly(t *testing.T) {
 		`gxfs dematerialize `,
 		`gxfs attach `,
 	} {
-		if strings.Contains(skill, notWant) {
-			t.Fatalf("SKILL.md = %q, contains removed alias %q", skill, notWant)
+		if strings.Contains(bundle, notWant) {
+			t.Fatalf("generated skill bundle contains removed alias %q in %q", notWant, bundle)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
@@ -1985,12 +2037,31 @@ func TestInitModeMdSkillWritesMarkdownAndSkill(t *testing.T) {
 	if !strings.Contains(agents, command.GXFSInstructionsStart) {
 		t.Fatalf("AGENTS.md missing GXFS instructions: %q", agents)
 	}
-	skill := readTextFile(t, filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md"))
-	if !strings.Contains(skill, `gxfs mount sources`) || !strings.Contains(skill, `docs://openai-go-sdk/reference`) {
-		t.Fatalf("SKILL.md missing GXFS content: %q", skill)
+	bundle := readGXFSSkillBundle(t, dir)
+	if !strings.Contains(bundle, `gxfs mount sources`) || !strings.Contains(bundle, `docs://openai-go-sdk/reference`) {
+		t.Fatalf("generated skill bundle missing GXFS content: %q", bundle)
 	}
 	if !strings.Contains(got, "updated GXFS instructions in") || !strings.Contains(got, "updated GXFS skill in") {
 		t.Fatalf("init output = %q, want both instruction and skill updates", got)
+	}
+}
+
+func TestInitModeMdWritesMarkdownOnly(t *testing.T) {
+	dir := t.TempDir()
+	got := executeInit(t, "--mode", "md", dir)
+
+	agents := readTextFile(t, filepath.Join(dir, "AGENTS.md"))
+	if !strings.Contains(agents, ".gxfs/skills/gxfs/SKILL.md") || !strings.Contains(agents, "when present") {
+		t.Fatalf("AGENTS.md missing conditional skill guidance: %q", agents)
+	}
+	if strings.Contains(agents, "gxfs mount add") || strings.Contains(agents, "gxfs sync") || strings.Contains(agents, "gxfs write") {
+		t.Fatalf("AGENTS.md should stay minimal in md mode, got: %q", agents)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("SKILL.md exists after --mode md, err=%v", err)
+	}
+	if !strings.Contains(got, "updated GXFS instructions in") || strings.Contains(got, "updated GXFS skill in") {
+		t.Fatalf("init output = %q, want markdown only", got)
 	}
 }
 
@@ -2380,14 +2451,14 @@ func TestMountAddRejectsInvalidRemoteRef(t *testing.T) {
 	}
 }
 
-func TestMountAddRejectsCollectionRef(t *testing.T) {
+func TestMountAddRejectsDocsetRef(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	client := &fakeClient{}
 
-	_, err := executeWithClientErr(client, "mount", "add", "collection://stuff", "docs")
+	_, err := executeWithClientErr(client, "mount", "add", "docset://stuff", "docs")
 	if err == nil {
-		t.Fatal("expected error for collection ref")
+		t.Fatal("expected error for docset ref")
 	}
 }
 

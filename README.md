@@ -20,7 +20,7 @@ talks to `gxfs-server`, and prints file-system-like output.
 | Document discovery | Ranked full-text search, lexical lookup returning `repo://` references, glob discovery, and repository enumeration. Discovery can operate outside the mounted local view. | `search`, `locate`, `glob`, `repo ls` |
 | Shared docs mounts | A project can compose documentation from repository namespaces or reusable docs namespaces into local paths, with read-only or writable mount policy and direct remote preview. | `mount`, `mount sources`, `mount attach`, `cat repo://...` |
 | Writing and synchronization | Create, replace, or delete remote docs; push local docs; pull remote metadata or files; track hashes and detect conflicting local/remote changes. | `write`, `edit`, `rm`, `sync refresh`, `sync materialize`, `sync dematerialize` |
-| Curated docsets | Optional advanced workflow for curated cross-repository document sets when the server enables collections. Shared docs should usually use `docs://` namespaces and mounts instead. | `collection` |
+| Curated docsets | Optional advanced workflow for curated cross-repository document sets when the server enables docsets. Shared docs should usually use `docs://` namespaces and mounts instead. | `docset` |
 | Agent integration and observability | Generate agent instructions, install Codex or Claude hooks, refresh docs at session start, record CLI audit JSONL, and persist hook-correlated usage events server-side when enabled by hooks. | `init`, `hook session-start` |
 
 ## Install the CLI
@@ -55,8 +55,11 @@ gxfs init --register --repo github.com/user/repo
 ```
 
 By default this creates `.gxfs/settings.toml` and `.gxfs/mounts.toml`, then
-injects GXFS usage instructions into `AGENTS.md`. Use `--server` if the server
-is not at `http://127.0.0.1:7635`. To target Claude Code instead:
+injects a minimal GXFS entry into `AGENTS.md` and writes the local GXFS skill at
+`.gxfs/skills/gxfs/SKILL.md`. The agent instruction file stays small; the skill
+indexes detailed GXFS workflows and loads scenario references only when needed.
+Use `--server` if the server is not at `http://127.0.0.1:7635`. To target
+Claude Code instead:
 
 ```bash
 gxfs init --agent claude --register --repo github.com/user/repo
@@ -229,16 +232,16 @@ gxfs sync dematerialize docs
 gxfs sync push docs --manifest .gxfs/manifest.toml
 ```
 
-Curated document collections are optional and advanced. Prefer `docs://`
-namespaces for reusable documentation trees. Use collections only when the
-server explicitly enables curated document sets:
+Curated docsets are optional and advanced. Prefer `docs://` namespaces for
+reusable documentation trees. Use docsets only when the server explicitly
+enables curated document sets:
 
 ```bash
-gxfs collection create best-practices --description "Reusable guidance"
-gxfs collection add best-practices /go/errors.md --source repo://shared-docs/go/errors.md
-gxfs collection show best-practices
-gxfs cat collection://best-practices/go/errors.md
-gxfs collection rm best-practices /go/errors.md
+gxfs docset create best-practices --description "Reusable guidance"
+gxfs docset add best-practices /go/errors.md --source repo://shared-docs/go/errors.md
+gxfs docset show best-practices
+gxfs cat docset://best-practices/go/errors.md
+gxfs docset rm best-practices /go/errors.md
 ```
 
 ## Command Reference
@@ -380,13 +383,14 @@ Finds a uniquely matching repository name and adds a read-only root mount.
 `gxfs init [path]`
 
 Creates `.gxfs/settings.toml` and `.gxfs/mounts.toml` and, unless disabled,
-injects GXFS instructions into an agent instruction file.
+injects a minimal GXFS entry into an agent instruction file plus the local GXFS
+skill.
 
-- default: write `AGENTS.md`
+- default: write `AGENTS.md` and `.gxfs/skills/gxfs/SKILL.md`
 - `--repo <name>`: set the logical repository name
 - `--server <url>`: set the `gxfs-server` base URL
 - `--mode md|skill|md,skill`: choose Markdown instructions, local skill output,
-  or both
+  or both; default is `md,skill`
 - `--agent claude`: write `CLAUDE.md`
 - `--register`: register the repo with `gxfs-server`
 - `--no-instructions`: write config only
@@ -452,21 +456,21 @@ materialized files.
 - `--manifest`: custom manifest path. Defaults to `.gxfs/manifest.toml`.
 - `--keep-files`: update the manifest but leave local files in place.
 
-`gxfs collection <subcommand>`
+`gxfs docset <subcommand>`
 
-Manages optional curated cross-repository document sets when enabled by the
+Manages optional curated cross-repository docsets when enabled by the
 configured server. Prefer `docs://` namespaces plus `gxfs mount add` for
-reusable documentation trees. Collection names accept lowercase letters,
+reusable documentation trees. Docset names accept lowercase letters,
 digits, `-`, and `_`.
 
-- `create <name> [--description <text>]`: create a collection.
-- `list [--json]`: list collections.
-- `show <name> [--json]`: show members and their `collection://` references.
-- `add <name> <collection-path> --source repo://<repo>/<path>`: add a source
-  document at a stable collection path.
-- `rm <name> <collection-path>`: remove a member.
+- `create <name> [--description <text>]`: create a docset.
+- `list [--json]`: list docsets.
+- `show <name> [--json]`: show members and their `docset://` references.
+- `add <name> <docset-path> --source repo://<repo>/<path>`: add a source
+  document at a stable docset path.
+- `rm <name> <docset-path>`: remove a member.
 
-Use `gxfs cat collection://<name>/<path>` to read a collection member.
+Use `gxfs cat docset://<name>/<path>` to read a docset member.
 
 `gxfs config doctor`
 

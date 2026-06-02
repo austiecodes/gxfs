@@ -5,29 +5,29 @@ import (
 	"testing"
 )
 
-func TestCollectionNameRegex(t *testing.T) {
+func TestDocsetNameRegex(t *testing.T) {
 	tests := []struct {
 		name  string
 		valid bool
 	}{
-		{"my-collection", true},
-		{"my_collection", true},
-		{"mycollection123", true},
+		{"my-docset", true},
+		{"my_docset", true},
+		{"mydocset123", true},
 		{"abc", true},
 		{"a-b_c123", true},
-		{"MyCollection", false},  // uppercase
-		{"my collection", false}, // space
-		{"my.collection", false}, // dot
-		{"my/collection", false}, // slash
-		{"", false},              // empty
-		{"my collection", false}, // space
+		{"MyDocset", false},  // uppercase
+		{"my docset", false}, // space
+		{"my.docset", false}, // dot
+		{"my/docset", false}, // slash
+		{"", false},          // empty
+		{"my docset", false}, // space
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := collectionNameRegex.MatchString(tt.name)
+			got := docsetNameRegex.MatchString(tt.name)
 			if got != tt.valid {
-				t.Errorf("collectionNameRegex.MatchString(%q) = %v, want %v", tt.name, got, tt.valid)
+				t.Errorf("docsetNameRegex.MatchString(%q) = %v, want %v", tt.name, got, tt.valid)
 			}
 		})
 	}
@@ -56,7 +56,7 @@ func TestParseRepoRef(t *testing.T) {
 		},
 		{
 			name:        "non-repo ref rejected",
-			ref:         "collection://my-col/docs/readme.md",
+			ref:         "docset://my-docset/docs/readme.md",
 			wantErr:     true,
 			errContains: "must start with repo://",
 		},

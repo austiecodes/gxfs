@@ -37,7 +37,7 @@ func TestRegistrySQLBuilders(t *testing.T) {
 		{
 			name: "ListDocsetsSQL",
 			fn:   ListDocsetsSQL,
-			want: `select id::text, name, description, created_at, updated_at from "catalog"."gxfs_collections" order by name`,
+			want: `select id::text, name, description, created_at, updated_at from "catalog"."gxfs_docsets" order by name`,
 		},
 	}
 
@@ -162,7 +162,7 @@ func TestIsRepoDuplicateError(t *testing.T) {
 		},
 		{
 			name: "other unique constraint",
-			err:  &pgconn.PgError{Code: postgresDuplicateKeySQLState, ConstraintName: "gxfs_collections_name_key"},
+			err:  &pgconn.PgError{Code: postgresDuplicateKeySQLState, ConstraintName: "gxfs_docsets_name_key"},
 			want: false,
 		},
 		{
@@ -182,8 +182,8 @@ func TestIsRepoDuplicateError(t *testing.T) {
 }
 
 func TestRepoExistsErrorIsSpecific(t *testing.T) {
-	if errors.Is(store.ErrNameExists, store.ErrRepoExists) {
-		t.Fatal("ErrRepoExists should be distinct from collection ErrNameExists")
+	if errors.Is(store.ErrDocsetNameExists, store.ErrRepoExists) {
+		t.Fatal("ErrRepoExists should be distinct from docset ErrDocsetNameExists")
 	}
 	if !errors.Is(store.ErrRepoExists, store.ErrRepoExists) {
 		t.Fatal("ErrRepoExists should be an errors.Is sentinel")

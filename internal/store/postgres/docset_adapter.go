@@ -13,46 +13,46 @@ import (
 	"github.com/austiecodes/gxfs/internal/store"
 )
 
-// CollectionAdapter implements store.CollectionManager over gxfs_collections and gxfs_collection_docs.
-type CollectionAdapter struct {
+// DocsetAdapter implements store.DocsetManager over gxfs_docsets and gxfs_docset_docs.
+type DocsetAdapter struct {
 	pool   *pgxpool.Pool
 	schema string
 }
 
-var _ store.CollectionManager = (*CollectionAdapter)(nil)
+var _ store.DocsetManager = (*DocsetAdapter)(nil)
 
-// collectionNameRegex validates collection names: lowercase alphanumeric, dash, underscore only.
-var collectionNameRegex = regexp.MustCompile(`^[a-z0-9_-]+$`)
+// docsetNameRegex validates docset names: lowercase alphanumeric, dash, underscore only.
+var docsetNameRegex = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
-// NewCollectionAdapter creates a CollectionAdapter.
-func NewCollectionAdapter(pool *pgxpool.Pool, schema string) *CollectionAdapter {
-	return &CollectionAdapter{pool: pool, schema: schema}
+// NewDocsetAdapter creates a DocsetAdapter.
+func NewDocsetAdapter(pool *pgxpool.Pool, schema string) *DocsetAdapter {
+	return &DocsetAdapter{pool: pool, schema: schema}
 }
 
-func (c *CollectionAdapter) collectionsTable() string {
-	tbl, _ := quoteTable(c.schema, "gxfs_collections")
+func (c *DocsetAdapter) docsetsTable() string {
+	tbl, _ := quoteTable(c.schema, "gxfs_docsets")
 	return tbl
 }
 
-func (c *CollectionAdapter) collectionDocsTable() string {
-	tbl, _ := quoteTable(c.schema, "gxfs_collection_docs")
+func (c *DocsetAdapter) docsetDocsTable() string {
+	tbl, _ := quoteTable(c.schema, "gxfs_docset_docs")
 	return tbl
 }
 
-func (c *CollectionAdapter) docsTable() string {
+func (c *DocsetAdapter) docsTable() string {
 	tbl, _ := quoteTable(c.schema, "gxfs_docs")
 	return tbl
 }
 
-func (c *CollectionAdapter) repoPathsTable() string {
+func (c *DocsetAdapter) repoPathsTable() string {
 	tbl, _ := quoteTable(c.schema, "gxfs_repo_paths")
 	return tbl
 }
 
-// CreateCollection creates a new collection.
-func (c *CollectionAdapter) CreateCollection(ctx context.Context, req store.CreateCollectionRequest) (*store.CreateCollectionResponse, error) {
+// CreateDocset creates a new docset.
+func (c *DocsetAdapter) CreateDocset(ctx context.Context, req store.CreateDocsetRequest) (*store.CreateDocsetResponse, error) {
 	// Validate name
-	if !collectionNameRegex.MatchString(req.Name) {
+	if !docsetNameRegex.MatchString(req.Name) {
 		return nil, store.ErrInvalidName
 	}
 
@@ -62,16 +62,16 @@ func (c *CollectionAdapter) CreateCollection(ctx context.Context, req store.Crea
 		INSERT INTO %s (name, description, created_at, updated_at)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id
-	`, c.collectionsTable()), req.Name, req.Description, now, now).Scan(&id)
+	`, c.docsetsTable()), req.Name, req.Description, now, now).Scan(&id)
 	if err != nil {
 		if isDuplicateKeyError(err) {
-			return nil, store.ErrNameExists
+			return nil, store.ErrDocsetNameExists
 		}
-		return nil, fmt.Errorf("create collection: %w", err)
+		return nil, fmt.Errorf("create docset: %w", err)
 	}
 
-	return &store.CreateCollectionResponse{
-		Collection: store.Collection{
+	return &store.CreateDocsetResponse{
+		Docset: store.Docset{
 			ID:          id,
 			Name:        req.Name,
 			Description: req.Description,
@@ -81,70 +81,70 @@ func (c *CollectionAdapter) CreateCollection(ctx context.Context, req store.Crea
 	}, nil
 }
 
-// ListCollections lists all collections.
-func (c *CollectionAdapter) ListCollections(ctx context.Context) (*store.ListCollectionsResponse, error) {
+// ListDocsets lists all docsets.
+func (c *DocsetAdapter) ListDocsets(ctx context.Context) (*store.ListDocsetsResponse, error) {
 	rows, err := c.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, name, description, created_at, updated_at
 		FROM %s
 		ORDER BY name
-	`, c.collectionsTable()))
+	`, c.docsetsTable()))
 	if err != nil {
-		return nil, fmt.Errorf("list collections: %w", err)
+		return nil, fmt.Errorf("list docsets: %w", err)
 	}
 	defer rows.Close()
 
-	var collections []store.Collection
+	var docsets []store.Docset
 	for rows.Next() {
-		var col store.Collection
+		var docset store.Docset
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&col.ID, &col.Name, &col.Description, &createdAt, &updatedAt); err != nil {
-			return nil, fmt.Errorf("scan collection: %w", err)
+		if err := rows.Scan(&docset.ID, &docset.Name, &docset.Description, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan docset: %w", err)
 		}
-		col.CreatedAt = createdAt.Format(time.RFC3339)
-		col.UpdatedAt = updatedAt.Format(time.RFC3339)
-		collections = append(collections, col)
+		docset.CreatedAt = createdAt.Format(time.RFC3339)
+		docset.UpdatedAt = updatedAt.Format(time.RFC3339)
+		docsets = append(docsets, docset)
 	}
 
-	if collections == nil {
-		collections = []store.Collection{}
+	if docsets == nil {
+		docsets = []store.Docset{}
 	}
 
-	return &store.ListCollectionsResponse{Collections: collections}, nil
+	return &store.ListDocsetsResponse{Docsets: docsets}, nil
 }
 
-// GetCollection gets a collection by name with its members.
-func (c *CollectionAdapter) GetCollection(ctx context.Context, name string) (*store.GetCollectionResponse, error) {
-	var col store.Collection
+// GetDocset gets a docset by name with its members.
+func (c *DocsetAdapter) GetDocset(ctx context.Context, name string) (*store.GetDocsetResponse, error) {
+	var docset store.Docset
 	var createdAt, updatedAt time.Time
 	err := c.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT id, name, description, created_at, updated_at
 		FROM %s
 		WHERE name = $1
-	`, c.collectionsTable()), name).Scan(&col.ID, &col.Name, &col.Description, &createdAt, &updatedAt)
+	`, c.docsetsTable()), name).Scan(&docset.ID, &docset.Name, &docset.Description, &createdAt, &updatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, store.ErrCollectionNotFound
+			return nil, store.ErrDocsetNotFound
 		}
-		return nil, fmt.Errorf("get collection: %w", err)
+		return nil, fmt.Errorf("get docset: %w", err)
 	}
-	col.CreatedAt = createdAt.Format(time.RFC3339)
-	col.UpdatedAt = updatedAt.Format(time.RFC3339)
+	docset.CreatedAt = createdAt.Format(time.RFC3339)
+	docset.UpdatedAt = updatedAt.Format(time.RFC3339)
 
 	// Get members
 	rows, err := c.pool.Query(ctx, fmt.Sprintf(`
 		SELECT cd.path, cd.doc_id
 		FROM %s cd
-		WHERE cd.collection_id = $1
+		WHERE cd.docset_id = $1
 		ORDER BY cd.path
-	`, c.collectionDocsTable()), col.ID)
+	`, c.docsetDocsTable()), docset.ID)
 	if err != nil {
-		return nil, fmt.Errorf("get collection members: %w", err)
+		return nil, fmt.Errorf("get docset members: %w", err)
 	}
 	defer rows.Close()
 
-	var members []store.CollectionMember
+	var members []store.DocsetMember
 	for rows.Next() {
-		var m store.CollectionMember
+		var m store.DocsetMember
 		if err := rows.Scan(&m.Path, &m.DocID); err != nil {
 			return nil, fmt.Errorf("scan member: %w", err)
 		}
@@ -152,14 +152,14 @@ func (c *CollectionAdapter) GetCollection(ctx context.Context, name string) (*st
 	}
 
 	if members == nil {
-		members = []store.CollectionMember{}
+		members = []store.DocsetMember{}
 	}
 
-	return &store.GetCollectionResponse{Collection: col, Members: members}, nil
+	return &store.GetDocsetResponse{Docset: docset, Members: members}, nil
 }
 
-// DeleteCollection deletes a collection and its members in a single transaction.
-func (c *CollectionAdapter) DeleteCollection(ctx context.Context, name string) error {
+// DeleteDocset deletes a docset and its members in a single transaction.
+func (c *DocsetAdapter) DeleteDocset(ctx context.Context, name string) error {
 	// Use a transaction to ensure atomicity
 	tx, err := c.pool.Begin(ctx)
 	if err != nil {
@@ -171,35 +171,35 @@ func (c *CollectionAdapter) DeleteCollection(ctx context.Context, name string) e
 		}
 	}()
 
-	// Get collection ID first
-	var collectionID string
+	// Get docset ID first
+	var docsetID string
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
 		SELECT id FROM %s WHERE name = $1
-	`, c.collectionsTable()), name).Scan(&collectionID)
+	`, c.docsetsTable()), name).Scan(&docsetID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return store.ErrCollectionNotFound
+			return store.ErrDocsetNotFound
 		}
-		return fmt.Errorf("get collection: %w", err)
+		return fmt.Errorf("get docset: %w", err)
 	}
 
 	// Delete members first (no ON DELETE CASCADE in schema)
 	_, err = tx.Exec(ctx, fmt.Sprintf(`
-		DELETE FROM %s WHERE collection_id = $1
-	`, c.collectionDocsTable()), collectionID)
+		DELETE FROM %s WHERE docset_id = $1
+	`, c.docsetDocsTable()), docsetID)
 	if err != nil {
-		return fmt.Errorf("delete collection members: %w", err)
+		return fmt.Errorf("delete docset members: %w", err)
 	}
 
-	// Delete collection
+	// Delete docset
 	result, err := tx.Exec(ctx, fmt.Sprintf(`
 		DELETE FROM %s WHERE id = $1
-	`, c.collectionsTable()), collectionID)
+	`, c.docsetsTable()), docsetID)
 	if err != nil {
-		return fmt.Errorf("delete collection: %w", err)
+		return fmt.Errorf("delete docset: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return store.ErrCollectionNotFound
+		return store.ErrDocsetNotFound
 	}
 
 	// Commit transaction
@@ -209,25 +209,25 @@ func (c *CollectionAdapter) DeleteCollection(ctx context.Context, name string) e
 	return nil
 }
 
-// AddMember adds a document to a collection.
+// AddDocsetMember adds a document to a docset.
 // source_ref must be in format repo://repo-name/path (repo-name is URL-encoded if it contains /)
-func (c *CollectionAdapter) AddMember(ctx context.Context, req store.AddMemberRequest) (*store.AddMemberResponse, error) {
+func (c *DocsetAdapter) AddDocsetMember(ctx context.Context, req store.AddDocsetMemberRequest) (*store.AddDocsetMemberResponse, error) {
 	// Parse source_ref: repo://repo-name/path
 	repoName, docPath, err := parseRepoRef(req.SourceRef)
 	if err != nil {
 		return nil, fmt.Errorf("invalid source_ref: %w", err)
 	}
 
-	// Get collection ID
-	var collectionID string
+	// Get docset ID
+	var docsetID string
 	err = c.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT id FROM %s WHERE name = $1
-	`, c.collectionsTable()), req.Name).Scan(&collectionID)
+	`, c.docsetsTable()), req.Name).Scan(&docsetID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, store.ErrCollectionNotFound
+			return nil, store.ErrDocsetNotFound
 		}
-		return nil, fmt.Errorf("get collection: %w", err)
+		return nil, fmt.Errorf("get docset: %w", err)
 	}
 
 	// Find doc_id from repo_paths
@@ -244,40 +244,40 @@ func (c *CollectionAdapter) AddMember(ctx context.Context, req store.AddMemberRe
 
 	// Insert member
 	_, err = c.pool.Exec(ctx, fmt.Sprintf(`
-		INSERT INTO %s (collection_id, doc_id, path)
+		INSERT INTO %s (docset_id, doc_id, path)
 		VALUES ($1, $2, $3)
-	`, c.collectionDocsTable()), collectionID, docID, req.Path)
+	`, c.docsetDocsTable()), docsetID, docID, req.Path)
 	if err != nil {
 		if isDuplicateKeyError(err) {
 			// Check which constraint was violated
 			if isPathConflict(err) {
-				return nil, store.ErrMemberExists
+				return nil, store.ErrDocsetMemberExists
 			}
-			return nil, store.ErrDocAlreadyInCollection
+			return nil, store.ErrDocAlreadyInDocset
 		}
 		return nil, fmt.Errorf("add member: %w", err)
 	}
 
-	// Update collection updated_at
+	// Update docset updated_at
 	_, _ = c.pool.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s SET updated_at = NOW() WHERE id = $1
-	`, c.collectionsTable()), collectionID)
+	`, c.docsetsTable()), docsetID)
 
-	return &store.AddMemberResponse{
-		Member: store.CollectionMember{
+	return &store.AddDocsetMemberResponse{
+		Member: store.DocsetMember{
 			Path:  req.Path,
 			DocID: docID,
 		},
 	}, nil
 }
 
-// RemoveMember removes a document from a collection.
-func (c *CollectionAdapter) RemoveMember(ctx context.Context, req store.RemoveMemberRequest) error {
+// RemoveDocsetMember removes a document from a docset.
+func (c *DocsetAdapter) RemoveDocsetMember(ctx context.Context, req store.RemoveDocsetMemberRequest) error {
 	result, err := c.pool.Exec(ctx, fmt.Sprintf(`
 		DELETE FROM %s
-		WHERE collection_id = (SELECT id FROM %s WHERE name = $1)
+		WHERE docset_id = (SELECT id FROM %s WHERE name = $1)
 		AND path = $2
-	`, c.collectionDocsTable(), c.collectionsTable()), req.Name, req.Path)
+	`, c.docsetDocsTable(), c.docsetsTable()), req.Name, req.Path)
 	if err != nil {
 		return fmt.Errorf("remove member: %w", err)
 	}
@@ -285,24 +285,24 @@ func (c *CollectionAdapter) RemoveMember(ctx context.Context, req store.RemoveMe
 		return store.ErrNotFound
 	}
 
-	// Update collection updated_at
+	// Update docset updated_at
 	_, _ = c.pool.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s SET updated_at = NOW() WHERE name = $1
-	`, c.collectionsTable()), req.Name)
+	`, c.docsetsTable()), req.Name)
 
 	return nil
 }
 
-// GetMemberContent reads a document's content via collection membership.
-func (c *CollectionAdapter) GetMemberContent(ctx context.Context, req store.GetMemberContentRequest) (*store.GetMemberContentResponse, error) {
+// GetDocsetMemberContent reads a document's content via docset membership.
+func (c *DocsetAdapter) GetDocsetMemberContent(ctx context.Context, req store.GetDocsetMemberContentRequest) (*store.GetDocsetMemberContentResponse, error) {
 	var content, hash string
 	err := c.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT d.content, d.content_hash
 		FROM %s d
 		JOIN %s cd ON d.id = cd.doc_id
-		JOIN %s c ON cd.collection_id = c.id
+		JOIN %s c ON cd.docset_id = c.id
 		WHERE c.name = $1 AND cd.path = $2
-	`, c.docsTable(), c.collectionDocsTable(), c.collectionsTable()), req.Name, req.Path).Scan(&content, &hash)
+	`, c.docsTable(), c.docsetDocsTable(), c.docsetsTable()), req.Name, req.Path).Scan(&content, &hash)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, store.ErrNotFound
@@ -310,7 +310,7 @@ func (c *CollectionAdapter) GetMemberContent(ctx context.Context, req store.GetM
 		return nil, fmt.Errorf("get member content: %w", err)
 	}
 
-	return &store.GetMemberContentResponse{
+	return &store.GetDocsetMemberContentResponse{
 		Path:    req.Path,
 		Content: content,
 		Hash:    hash,
@@ -319,7 +319,7 @@ func (c *CollectionAdapter) GetMemberContent(ctx context.Context, req store.GetM
 
 // parseRepoRef parses repo://repo-name/path into (repoName, path).
 // The repo-name segment is URL-decoded to handle repo names containing /.
-// Only repo:// refs are accepted; collection:// refs are rejected with an error.
+// Only repo:// refs are accepted; docset:// refs are rejected with an error.
 func parseRepoRef(ref string) (string, string, error) {
 	if len(ref) < 7 || ref[:7] != "repo://" {
 		return "", "", fmt.Errorf("source_ref must start with repo:// (non-repo refs not supported in v1)")
@@ -358,7 +358,7 @@ func isDuplicateKeyError(err error) bool {
 
 // isPathConflict checks if the duplicate key error is for the path constraint.
 func isPathConflict(err error) bool {
-	return err != nil && containsErrorMsg(err, "gxfs_collection_docs_pkey")
+	return err != nil && containsErrorMsg(err, "gxfs_docset_docs_pkey")
 }
 
 func containsErrorMsg(err error, substr string) bool {

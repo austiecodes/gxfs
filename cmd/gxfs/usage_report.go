@@ -107,7 +107,7 @@ func redactUsageArgs(args []string) []string {
 
 func isGroupedUsageCommand(command string) bool {
 	switch command {
-	case "collection", "config", "hook", "mount", "repo", "sync":
+	case "config", "docset", "hook", "mount", "repo", "sync":
 		return true
 	default:
 		return false

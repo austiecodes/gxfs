@@ -219,8 +219,8 @@ create index if not exists idx_doc_namespace_paths_prefix on "public"."gxfs_doc_
 -- Index for finding namespace paths pointing to a doc (for orphan detection).
 create index if not exists idx_doc_namespace_paths_doc_id on "public"."gxfs_doc_namespace_paths" (doc_id);
 
--- Collections: empty tables, no API in Phase 1A
-create table if not exists "public"."gxfs_collections" (
+-- Docsets: empty tables, no API in Phase 1A
+create table if not exists "public"."gxfs_docsets" (
     id uuid primary key default gen_random_uuid(),
     name text not null unique,
     description text not null default '',
@@ -229,13 +229,30 @@ create table if not exists "public"."gxfs_collections" (
     updated_at timestamptz not null default now()
 );
 
-create table if not exists "public"."gxfs_collection_docs" (
-    collection_id uuid not null references "public"."gxfs_collections"(id),
+create table if not exists "public"."gxfs_docset_docs" (
+    docset_id uuid not null references "public"."gxfs_docsets"(id),
     doc_id uuid not null references "public"."gxfs_docs"(id),
     path text not null,
-    primary key (collection_id, path),
-    unique (collection_id, doc_id)
+    primary key (docset_id, path),
+    unique (docset_id, doc_id)
 );`,
+		`-- Phase 1B: preserve curated sets when upgrading from collection-backed tables.
+do $$
+begin
+    if to_regclass('public.gxfs_collections') is not null then
+        insert into "public"."gxfs_docsets" (id, name, description, visibility, created_at, updated_at)
+        select id, name, description, visibility, created_at, updated_at
+        from "public"."gxfs_collections"
+        on conflict do nothing;
+    end if;
+
+    if to_regclass('public.gxfs_collection_docs') is not null then
+        insert into "public"."gxfs_docset_docs" (docset_id, doc_id, path)
+        select collection_id, doc_id, path
+        from "public"."gxfs_collection_docs"
+        on conflict do nothing;
+    end if;
+end $$;`,
 		`-- DB-backed repository registry.
 create table if not exists "public"."gxfs_repos" (
     name text primary key,
@@ -327,8 +344,8 @@ func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T)
 	if !strings.Contains(docStmt, `"gxfs_doc_namespace_paths"`) {
 		t.Fatalf("empty schema migration missing \"gxfs_doc_namespace_paths\"")
 	}
-	if !strings.Contains(docStmt, `"gxfs_collections"`) {
-		t.Fatalf("empty schema migration missing \"gxfs_collections\"")
+	if !strings.Contains(docStmt, `"gxfs_docsets"`) {
+		t.Fatalf("empty schema migration missing \"gxfs_docsets\"")
 	}
 
 	// Must NOT start with a dot (e.g., `"gxfs_docs"` not `.gxfs_docs`).

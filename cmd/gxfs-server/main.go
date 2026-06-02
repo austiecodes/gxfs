@@ -166,14 +166,14 @@ func apiRoutes(handler http.Handler) []rest.Route {
 		{Method: http.MethodPost, Path: "/v1/repos", Handler: handler.ServeHTTP},
 		{Method: http.MethodPost, Path: "/v1/usage-events", Handler: handler.ServeHTTP},
 		{Method: http.MethodGet, Path: "/v1/mount-sources", Handler: handler.ServeHTTP},
-		// Collection routes
-		{Method: http.MethodPost, Path: "/v1/collections", Handler: handler.ServeHTTP},
-		{Method: http.MethodGet, Path: "/v1/collections", Handler: handler.ServeHTTP},
-		{Method: http.MethodGet, Path: "/v1/collections/:name", Handler: handler.ServeHTTP},
-		{Method: http.MethodDelete, Path: "/v1/collections/:name", Handler: handler.ServeHTTP},
-		{Method: http.MethodPut, Path: "/v1/collections/:name/members", Handler: handler.ServeHTTP},
-		{Method: http.MethodDelete, Path: "/v1/collections/:name/members", Handler: handler.ServeHTTP},
-		{Method: http.MethodGet, Path: "/v1/collections/:name/docs", Handler: handler.ServeHTTP},
+		// Docset routes
+		{Method: http.MethodPost, Path: "/v1/docsets", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/docsets", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/docsets/:name", Handler: handler.ServeHTTP},
+		{Method: http.MethodDelete, Path: "/v1/docsets/:name", Handler: handler.ServeHTTP},
+		{Method: http.MethodPut, Path: "/v1/docsets/:name/members", Handler: handler.ServeHTTP},
+		{Method: http.MethodDelete, Path: "/v1/docsets/:name/members", Handler: handler.ServeHTTP},
+		{Method: http.MethodGet, Path: "/v1/docsets/:name/docs", Handler: handler.ServeHTTP},
 	}
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		routes = append(routes,
@@ -272,11 +272,11 @@ func newGCCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gc run",
 		Short: "Run orphan document garbage collection",
-		Long: `Garbage collect orphan documents that have no references in repo_paths or collections.
+		Long: `Garbage collect orphan documents that have no references in repo_paths or docsets.
 
 Orphan documents are those that:
   - Have no references in gxfs_repo_paths
-  - Have no references in gxfs_collection_docs
+  - Have no references in gxfs_docset_docs
   - Were last updated more than the grace period ago (to protect in-progress creates)
 
 By default, runs in dry-run mode to preview candidates without deleting.
@@ -419,8 +419,8 @@ func runServer() {
 
 	var handler http.Handler
 	if cfg.Backend.Type == "doc_postgres" {
-		collectionMgr := postgres.NewCollectionAdapter(pool, pgCfg.Schema)
-		handler = server.NewHandlerWithCollections(adapter, nil, collectionMgr)
+		docsetMgr := postgres.NewDocsetAdapter(pool, pgCfg.Schema)
+		handler = server.NewHandlerWithDocsets(adapter, nil, docsetMgr)
 	} else {
 		handler = server.NewHandler(adapter, nil)
 	}

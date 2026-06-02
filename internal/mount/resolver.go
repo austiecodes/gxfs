@@ -174,7 +174,9 @@ func parseRemote(currentRepo, raw string) (store.SourceRef, error) {
 		return store.SourceRef{}, fmt.Errorf("remote %q needs a path after self/ (e.g. repo://self/docs)", raw)
 	}
 	switch {
-	case strings.HasPrefix(raw, "repo://"), strings.HasPrefix(raw, "docs://"), strings.HasPrefix(raw, "docset://"), strings.HasPrefix(raw, "collection://"):
+	case strings.HasPrefix(raw, "repo://"),
+		strings.HasPrefix(raw, "docs://"),
+		strings.HasPrefix(raw, "docset://"):
 	default:
 		return store.SourceRef{}, fmt.Errorf("unsupported remote %q", raw)
 	}

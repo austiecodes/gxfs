@@ -22,18 +22,18 @@ func NewHandler(adapter store.Adapter, writableRepos map[string]bool) http.Handl
 	return &loggingMiddleware{next: h}
 }
 
-// NewHandlerWithCollections creates a handler with collection support.
-func NewHandlerWithCollections(adapter store.Adapter, writableRepos map[string]bool, collectionMgr store.CollectionManager) http.Handler {
+// NewHandlerWithDocsets creates a handler with docset support.
+func NewHandlerWithDocsets(adapter store.Adapter, writableRepos map[string]bool, docsetMgr store.DocsetManager) http.Handler {
 	inv, _ := adapter.(store.CacheInvalidator)
-	h := &handler{adapter: adapter, invalidator: inv, writableRepos: writableRepos, collectionMgr: collectionMgr}
+	h := &handler{adapter: adapter, invalidator: inv, writableRepos: writableRepos, docsetMgr: docsetMgr}
 	return &loggingMiddleware{next: h}
 }
 
 type handler struct {
 	adapter       store.Adapter
 	invalidator   store.CacheInvalidator
-	writableRepos map[string]bool         // repos that accept cross-repo writes
-	collectionMgr store.CollectionManager // optional: collection management
+	writableRepos map[string]bool // repos that accept cross-repo writes
+	docsetMgr     store.DocsetManager
 }
 
 type repoWritableChecker interface {
@@ -95,9 +95,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collection routes
-	if h.collectionMgr != nil && strings.HasPrefix(r.URL.Path, "/v1/collections") {
-		h.handleCollections(w, r)
+	// Docset routes
+	if h.docsetMgr != nil && strings.HasPrefix(r.URL.Path, "/v1/docsets") {
+		h.handleDocsets(w, r)
 		return
 	}
 
@@ -470,18 +470,18 @@ func (h *handler) dispatchDelete(r *http.Request, adapter store.Adapter, repo, o
 	}
 }
 
-// handleCollections routes collection API requests.
-func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
+// handleDocsets routes docset API requests.
+func (h *handler) handleDocsets(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
-	// POST /v1/collections — create collection
-	if path == "/v1/collections" && r.Method == http.MethodPost {
-		var req store.CreateCollectionRequest
+	// POST /v1/docsets — create docset
+	if path == "/v1/docsets" && r.Method == http.MethodPost {
+		var req store.CreateDocsetRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSONErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 			return
 		}
-		resp, err := h.collectionMgr.CreateCollection(r.Context(), req)
+		resp, err := h.docsetMgr.CreateDocset(r.Context(), req)
 		if err != nil {
 			writeJSONError(w, err)
 			return
@@ -490,9 +490,9 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// GET /v1/collections — list collections
-	if path == "/v1/collections" && r.Method == http.MethodGet {
-		resp, err := h.collectionMgr.ListCollections(r.Context())
+	// GET /v1/docsets — list docsets
+	if path == "/v1/docsets" && r.Method == http.MethodGet {
+		resp, err := h.docsetMgr.ListDocsets(r.Context())
 		if err != nil {
 			writeJSONError(w, err)
 			return
@@ -501,10 +501,10 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// GET /v1/collections/{name} — get collection
-	// DELETE /v1/collections/{name} — delete collection
-	if strings.HasPrefix(path, "/v1/collections/") && strings.Count(path, "/") == 3 {
-		name, err := url.PathUnescape(strings.TrimPrefix(path, "/v1/collections/"))
+	// GET /v1/docsets/{name} — get docset
+	// DELETE /v1/docsets/{name} — delete docset
+	if strings.HasPrefix(path, "/v1/docsets/") && strings.Count(path, "/") == 3 {
+		name, err := url.PathUnescape(strings.TrimPrefix(path, "/v1/docsets/"))
 		if err != nil || name == "" {
 			http.NotFound(w, r)
 			return
@@ -512,7 +512,7 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 
 		switch r.Method {
 		case http.MethodGet:
-			resp, err := h.collectionMgr.GetCollection(r.Context(), name)
+			resp, err := h.docsetMgr.GetDocset(r.Context(), name)
 			if err != nil {
 				writeJSONError(w, err)
 				return
@@ -520,7 +520,7 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, resp)
 			return
 		case http.MethodDelete:
-			if err := h.collectionMgr.DeleteCollection(r.Context(), name); err != nil {
+			if err := h.docsetMgr.DeleteDocset(r.Context(), name); err != nil {
 				writeJSONError(w, err)
 				return
 			}
@@ -532,10 +532,10 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// PUT /v1/collections/{name}/members — add member
-	// DELETE /v1/collections/{name}/members — remove member
-	if strings.HasPrefix(path, "/v1/collections/") && strings.HasSuffix(path, "/members") {
-		namePath := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/collections/"), "/members")
+	// PUT /v1/docsets/{name}/members — add member
+	// DELETE /v1/docsets/{name}/members — remove member
+	if strings.HasPrefix(path, "/v1/docsets/") && strings.HasSuffix(path, "/members") {
+		namePath := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/docsets/"), "/members")
 		name, err := url.PathUnescape(namePath)
 		if err != nil || name == "" {
 			http.NotFound(w, r)
@@ -544,13 +544,13 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 
 		switch r.Method {
 		case http.MethodPut:
-			var req store.AddMemberRequest
+			var req store.AddDocsetMemberRequest
 			req.Name = name
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				writeJSONErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 				return
 			}
-			resp, err := h.collectionMgr.AddMember(r.Context(), req)
+			resp, err := h.docsetMgr.AddDocsetMember(r.Context(), req)
 			if err != nil {
 				writeJSONError(w, err)
 				return
@@ -563,7 +563,7 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 				writeJSONErrorCode(w, http.StatusBadRequest, "BAD_REQUEST", "path is required")
 				return
 			}
-			if err := h.collectionMgr.RemoveMember(r.Context(), store.RemoveMemberRequest{
+			if err := h.docsetMgr.RemoveDocsetMember(r.Context(), store.RemoveDocsetMemberRequest{
 				Name: name,
 				Path: memberPath,
 			}); err != nil {
@@ -578,9 +578,9 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// GET /v1/collections/{name}/docs?path=/... — read member content
-	if strings.HasPrefix(path, "/v1/collections/") && strings.HasSuffix(path, "/docs") {
-		parts := strings.SplitN(strings.TrimPrefix(path, "/v1/collections/"), "/docs", 2)
+	// GET /v1/docsets/{name}/docs?path=/... — read member content
+	if strings.HasPrefix(path, "/v1/docsets/") && strings.HasSuffix(path, "/docs") {
+		parts := strings.SplitN(strings.TrimPrefix(path, "/v1/docsets/"), "/docs", 2)
 		if len(parts) == 0 || parts[0] == "" {
 			http.NotFound(w, r)
 			return
@@ -597,7 +597,7 @@ func (h *handler) handleCollections(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		resp, err := h.collectionMgr.GetMemberContent(r.Context(), store.GetMemberContentRequest{
+		resp, err := h.docsetMgr.GetDocsetMemberContent(r.Context(), store.GetDocsetMemberContentRequest{
 			Name: name,
 			Path: memberPath,
 		})
@@ -749,8 +749,8 @@ func mapError(err error) (int, string) {
 		return http.StatusConflict, "REPO_EXISTS"
 	case errors.Is(err, store.ErrUnknownSource):
 		return http.StatusNotFound, "UNKNOWN_SOURCE"
-	case errors.Is(err, store.ErrCollectionNotFound):
-		return http.StatusNotFound, "COLLECTION_NOT_FOUND"
+	case errors.Is(err, store.ErrDocsetNotFound):
+		return http.StatusNotFound, "DOCSET_NOT_FOUND"
 	case errors.Is(err, store.ErrReadOnlyMount):
 		return http.StatusForbidden, "FORBIDDEN"
 	case errors.Is(err, store.ErrIsDir), errors.Is(err, store.ErrNotDir),
@@ -765,12 +765,12 @@ func mapError(err error) (int, string) {
 		return http.StatusNotImplemented, "NOT_SUPPORTED"
 	case errors.Is(err, store.ErrConflict):
 		return http.StatusConflict, "CONFLICT"
-	case errors.Is(err, store.ErrNameExists):
-		return http.StatusConflict, "NAME_EXISTS"
-	case errors.Is(err, store.ErrMemberExists):
-		return http.StatusConflict, "MEMBER_EXISTS"
-	case errors.Is(err, store.ErrDocAlreadyInCollection):
-		return http.StatusConflict, "DOC_ALREADY_IN_COLLECTION"
+	case errors.Is(err, store.ErrDocsetNameExists):
+		return http.StatusConflict, "DOCSET_NAME_EXISTS"
+	case errors.Is(err, store.ErrDocsetMemberExists):
+		return http.StatusConflict, "DOCSET_MEMBER_EXISTS"
+	case errors.Is(err, store.ErrDocAlreadyInDocset):
+		return http.StatusConflict, "DOC_ALREADY_IN_DOCSET"
 	default:
 		return http.StatusInternalServerError, "INTERNAL_ERROR"
 	}

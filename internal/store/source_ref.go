@@ -34,8 +34,6 @@ func ParseSourceRef(raw string) (SourceRef, error) {
 	kind := SourceKind(scheme)
 	switch kind {
 	case SourceKindRepo, SourceKindDocs, SourceKindDocset:
-	case "collection":
-		return SourceRef{}, fmt.Errorf("collection mounts are not supported")
 	default:
 		return SourceRef{}, fmt.Errorf("unsupported source %q", raw)
 	}

@@ -19,8 +19,8 @@ func TestGCOrphanCondition(t *testing.T) {
 	if !strings.Contains(orphanCondition, "gxfs_doc_namespace_paths") {
 		t.Error("orphan condition missing gxfs_doc_namespace_paths check")
 	}
-	if !strings.Contains(orphanCondition, "gxfs_collection_docs") {
-		t.Error("orphan condition missing gxfs_collection_docs check")
+	if !strings.Contains(orphanCondition, "gxfs_docset_docs") {
+		t.Error("orphan condition missing gxfs_docset_docs check")
 	}
 	if !strings.Contains(orphanCondition, "NOT EXISTS") {
 		t.Error("orphan condition missing NOT EXISTS clause")

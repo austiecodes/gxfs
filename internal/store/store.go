@@ -6,27 +6,27 @@ import (
 )
 
 var (
-	ErrNotFound               = errors.New("path not found")
-	ErrIsDir                  = errors.New("is a directory")
-	ErrNotDir                 = errors.New("not a directory")
-	ErrContentNotReady        = errors.New("content not loaded")
-	ErrEmptyOld               = errors.New("old string cannot be empty")
-	ErrOldNotFound            = errors.New("old string not found")
-	ErrReadOnlyMount          = errors.New("read-only mount")
-	ErrCannotDeleteRoot       = errors.New("cannot delete root")
-	ErrUnknownRepo            = errors.New("unknown repo")
-	ErrRepoExists             = errors.New("repo already exists")
-	ErrUnknownSource          = errors.New("unknown source")
-	ErrEmptyQuery             = errors.New("search query cannot be empty")
-	ErrInvalidParam           = errors.New("invalid parameter")
-	ErrNotModified            = errors.New("not modified")
-	ErrConflict               = errors.New("conflict: content hash mismatch")
-	ErrNotSupported           = errors.New("operation not supported")
-	ErrInvalidName            = errors.New("invalid name: must be lowercase alphanumeric with - or _")
-	ErrNameExists             = errors.New("collection name already exists")
-	ErrCollectionNotFound     = errors.New("collection not found")
-	ErrMemberExists           = errors.New("member path already exists in collection")
-	ErrDocAlreadyInCollection = errors.New("document already in collection")
+	ErrNotFound           = errors.New("path not found")
+	ErrIsDir              = errors.New("is a directory")
+	ErrNotDir             = errors.New("not a directory")
+	ErrContentNotReady    = errors.New("content not loaded")
+	ErrEmptyOld           = errors.New("old string cannot be empty")
+	ErrOldNotFound        = errors.New("old string not found")
+	ErrReadOnlyMount      = errors.New("read-only mount")
+	ErrCannotDeleteRoot   = errors.New("cannot delete root")
+	ErrUnknownRepo        = errors.New("unknown repo")
+	ErrRepoExists         = errors.New("repo already exists")
+	ErrUnknownSource      = errors.New("unknown source")
+	ErrEmptyQuery         = errors.New("search query cannot be empty")
+	ErrInvalidParam       = errors.New("invalid parameter")
+	ErrNotModified        = errors.New("not modified")
+	ErrConflict           = errors.New("conflict: content hash mismatch")
+	ErrNotSupported       = errors.New("operation not supported")
+	ErrInvalidName        = errors.New("invalid name: must be lowercase alphanumeric with - or _")
+	ErrDocsetNameExists   = errors.New("docset name already exists")
+	ErrDocsetNotFound     = errors.New("docset not found")
+	ErrDocsetMemberExists = errors.New("member path already exists in docset")
+	ErrDocAlreadyInDocset = errors.New("document already in docset")
 )
 
 type Node struct {
@@ -379,83 +379,72 @@ type Globber interface {
 	Glob(ctx context.Context, req GlobRequest) (*GlobResponse, error)
 }
 
-// === Collection Types ===
-
-// Collection represents a curated set of documents across repos.
-type Collection struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
-
-// CollectionMember represents a document reference in a collection.
-type CollectionMember struct {
-	Path  string `json:"path"`   // path within the collection (e.g., "/guide.md")
+// DocsetMember represents a document reference in a docset.
+type DocsetMember struct {
+	Path  string `json:"path"`   // path within the docset (e.g., "/guide.md")
 	DocID string `json:"doc_id"` // reference to gxfs_docs.id
 }
 
-// CreateCollectionRequest is the input for creating a collection.
-type CreateCollectionRequest struct {
+// CreateDocsetRequest is the input for creating a docset.
+type CreateDocsetRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
-// CreateCollectionResponse is the output for creating a collection.
-type CreateCollectionResponse struct {
-	Collection Collection `json:"collection"`
+// CreateDocsetResponse is the output for creating a docset.
+type CreateDocsetResponse struct {
+	Docset Docset `json:"docset"`
 }
 
-// ListCollectionsResponse is the output for listing collections.
-type ListCollectionsResponse struct {
-	Collections []Collection `json:"collections"`
+// ListDocsetsResponse is the output for listing docsets.
+type ListDocsetsResponse struct {
+	Docsets []Docset `json:"docsets"`
 }
 
-// GetCollectionResponse is the output for getting a collection.
-type GetCollectionResponse struct {
-	Collection Collection         `json:"collection"`
-	Members    []CollectionMember `json:"members"`
+// GetDocsetResponse is the output for getting a docset.
+type GetDocsetResponse struct {
+	Docset  Docset         `json:"docset"`
+	Members []DocsetMember `json:"members"`
 }
 
-// AddMemberRequest is the input for adding a document to a collection.
-type AddMemberRequest struct {
-	Name      string `json:"name"`       // collection name
+// AddDocsetMemberRequest is the input for adding a document to a docset.
+type AddDocsetMemberRequest struct {
+	Name      string `json:"name"`       // docset name
 	SourceRef string `json:"source_ref"` // repo://repo-name/path
-	Path      string `json:"path"`       // path within collection
+	Path      string `json:"path"`       // path within docset
 }
 
-// AddMemberResponse is the output for adding a member.
-type AddMemberResponse struct {
-	Member CollectionMember `json:"member"`
+// AddDocsetMemberResponse is the output for adding a member.
+type AddDocsetMemberResponse struct {
+	Member DocsetMember `json:"member"`
 }
 
-// RemoveMemberRequest is the input for removing a document from a collection.
-type RemoveMemberRequest struct {
-	Name string `json:"name"` // collection name
-	Path string `json:"path"` // path within collection
+// RemoveDocsetMemberRequest is the input for removing a document from a docset.
+type RemoveDocsetMemberRequest struct {
+	Name string `json:"name"` // docset name
+	Path string `json:"path"` // path within docset
 }
 
-// GetMemberContentRequest is the input for reading a collection member's content.
-type GetMemberContentRequest struct {
-	Name string `json:"name"` // collection name
-	Path string `json:"path"` // path within collection
+// GetDocsetMemberContentRequest is the input for reading a docset member's content.
+type GetDocsetMemberContentRequest struct {
+	Name string `json:"name"` // docset name
+	Path string `json:"path"` // path within docset
 }
 
-// GetMemberContentResponse is the output for reading a collection member's content.
-type GetMemberContentResponse struct {
+// GetDocsetMemberContentResponse is the output for reading a docset member's content.
+type GetDocsetMemberContentResponse struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
 	Hash    string `json:"hash"`
 }
 
-// CollectionManager provides collection CRUD and membership operations.
-type CollectionManager interface {
-	CreateCollection(ctx context.Context, req CreateCollectionRequest) (*CreateCollectionResponse, error)
-	ListCollections(ctx context.Context) (*ListCollectionsResponse, error)
-	GetCollection(ctx context.Context, name string) (*GetCollectionResponse, error)
-	DeleteCollection(ctx context.Context, name string) error
-	AddMember(ctx context.Context, req AddMemberRequest) (*AddMemberResponse, error)
-	RemoveMember(ctx context.Context, req RemoveMemberRequest) error
-	GetMemberContent(ctx context.Context, req GetMemberContentRequest) (*GetMemberContentResponse, error)
+// DocsetManager provides docset CRUD and membership operations.
+type DocsetManager interface {
+	CreateDocset(ctx context.Context, req CreateDocsetRequest) (*CreateDocsetResponse, error)
+	ListDocsets(ctx context.Context) (*ListDocsetsResponse, error)
+	GetDocset(ctx context.Context, name string) (*GetDocsetResponse, error)
+	DeleteDocset(ctx context.Context, name string) error
+	AddDocsetMember(ctx context.Context, req AddDocsetMemberRequest) (*AddDocsetMemberResponse, error)
+	RemoveDocsetMember(ctx context.Context, req RemoveDocsetMemberRequest) error
+	GetDocsetMemberContent(ctx context.Context, req GetDocsetMemberContentRequest) (*GetDocsetMemberContentResponse, error)
 }

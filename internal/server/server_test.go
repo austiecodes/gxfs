@@ -1380,99 +1380,99 @@ func (n *noHashCatAdapter) Cat(context.Context, store.CatRequest) (*store.CatRes
 	return &store.CatResponse{Path: "/docs/readme.md", Content: "no hash"}, nil
 }
 
-// --- Collection route tests ---
+// --- Docset route tests ---
 
-type fakeCollectionManager struct {
-	collections      map[string]store.Collection
-	members          map[string][]store.CollectionMember // key: collection name
+type fakeDocsetManager struct {
+	docsets          map[string]store.Docset
+	members          map[string][]store.DocsetMember // key: docset name
 	createErr        error
 	getErr           error
 	listErr          error
 	deleteErr        error
 	addMemberErr     error
 	removeMemberErr  error
-	getContentResp   *store.GetMemberContentResponse
+	getContentResp   *store.GetDocsetMemberContentResponse
 	getContentErr    error
-	lastAddMemberReq store.AddMemberRequest
+	lastAddMemberReq store.AddDocsetMemberRequest
 }
 
-func newFakeCollectionManager() *fakeCollectionManager {
-	return &fakeCollectionManager{
-		collections: make(map[string]store.Collection),
-		members:     make(map[string][]store.CollectionMember),
+func newFakeDocsetManager() *fakeDocsetManager {
+	return &fakeDocsetManager{
+		docsets: make(map[string]store.Docset),
+		members: make(map[string][]store.DocsetMember),
 	}
 }
 
-func (f *fakeCollectionManager) CreateCollection(_ context.Context, req store.CreateCollectionRequest) (*store.CreateCollectionResponse, error) {
+func (f *fakeDocsetManager) CreateDocset(_ context.Context, req store.CreateDocsetRequest) (*store.CreateDocsetResponse, error) {
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
-	col := store.Collection{
+	col := store.Docset{
 		ID:          "test-id-" + req.Name,
 		Name:        req.Name,
 		Description: req.Description,
 		CreatedAt:   "2024-01-01T00:00:00Z",
 		UpdatedAt:   "2024-01-01T00:00:00Z",
 	}
-	f.collections[req.Name] = col
-	return &store.CreateCollectionResponse{Collection: col}, nil
+	f.docsets[req.Name] = col
+	return &store.CreateDocsetResponse{Docset: col}, nil
 }
 
-func (f *fakeCollectionManager) ListCollections(context.Context) (*store.ListCollectionsResponse, error) {
+func (f *fakeDocsetManager) ListDocsets(context.Context) (*store.ListDocsetsResponse, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
-	var cols []store.Collection
-	for _, col := range f.collections {
+	var cols []store.Docset
+	for _, col := range f.docsets {
 		cols = append(cols, col)
 	}
 	if cols == nil {
-		cols = []store.Collection{}
+		cols = []store.Docset{}
 	}
-	return &store.ListCollectionsResponse{Collections: cols}, nil
+	return &store.ListDocsetsResponse{Docsets: cols}, nil
 }
 
-func (f *fakeCollectionManager) GetCollection(_ context.Context, name string) (*store.GetCollectionResponse, error) {
+func (f *fakeDocsetManager) GetDocset(_ context.Context, name string) (*store.GetDocsetResponse, error) {
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	col, ok := f.collections[name]
+	col, ok := f.docsets[name]
 	if !ok {
-		return nil, store.ErrCollectionNotFound
+		return nil, store.ErrDocsetNotFound
 	}
 	members := f.members[name]
 	if members == nil {
-		members = []store.CollectionMember{}
+		members = []store.DocsetMember{}
 	}
-	return &store.GetCollectionResponse{Collection: col, Members: members}, nil
+	return &store.GetDocsetResponse{Docset: col, Members: members}, nil
 }
 
-func (f *fakeCollectionManager) DeleteCollection(_ context.Context, name string) error {
+func (f *fakeDocsetManager) DeleteDocset(_ context.Context, name string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
-	if _, ok := f.collections[name]; !ok {
-		return store.ErrCollectionNotFound
+	if _, ok := f.docsets[name]; !ok {
+		return store.ErrDocsetNotFound
 	}
-	delete(f.collections, name)
+	delete(f.docsets, name)
 	delete(f.members, name)
 	return nil
 }
 
-func (f *fakeCollectionManager) AddMember(_ context.Context, req store.AddMemberRequest) (*store.AddMemberResponse, error) {
+func (f *fakeDocsetManager) AddDocsetMember(_ context.Context, req store.AddDocsetMemberRequest) (*store.AddDocsetMemberResponse, error) {
 	f.lastAddMemberReq = req
 	if f.addMemberErr != nil {
 		return nil, f.addMemberErr
 	}
-	if _, ok := f.collections[req.Name]; !ok {
-		return nil, store.ErrCollectionNotFound
+	if _, ok := f.docsets[req.Name]; !ok {
+		return nil, store.ErrDocsetNotFound
 	}
-	member := store.CollectionMember{Path: req.Path, DocID: "doc-123"}
+	member := store.DocsetMember{Path: req.Path, DocID: "doc-123"}
 	f.members[req.Name] = append(f.members[req.Name], member)
-	return &store.AddMemberResponse{Member: member}, nil
+	return &store.AddDocsetMemberResponse{Member: member}, nil
 }
 
-func (f *fakeCollectionManager) RemoveMember(_ context.Context, req store.RemoveMemberRequest) error {
+func (f *fakeDocsetManager) RemoveDocsetMember(_ context.Context, req store.RemoveDocsetMemberRequest) error {
 	if f.removeMemberErr != nil {
 		return f.removeMemberErr
 	}
@@ -1486,17 +1486,17 @@ func (f *fakeCollectionManager) RemoveMember(_ context.Context, req store.Remove
 	return store.ErrNotFound
 }
 
-func (f *fakeCollectionManager) GetMemberContent(_ context.Context, req store.GetMemberContentRequest) (*store.GetMemberContentResponse, error) {
+func (f *fakeDocsetManager) GetDocsetMemberContent(_ context.Context, req store.GetDocsetMemberContentRequest) (*store.GetDocsetMemberContentResponse, error) {
 	if f.getContentErr != nil {
 		return nil, f.getContentErr
 	}
 	if f.getContentResp != nil {
 		return f.getContentResp, nil
 	}
-	return &store.GetMemberContentResponse{Path: req.Path, Content: "test content", Hash: "hash123"}, nil
+	return &store.GetDocsetMemberContentResponse{Path: req.Path, Content: "test content", Hash: "hash123"}, nil
 }
 
-func TestHandlerCollectionRoutes(t *testing.T) {
+func TestHandlerDocsetRoutes(t *testing.T) {
 	tests := []struct {
 		name       string
 		method     string
@@ -1506,50 +1506,50 @@ func TestHandlerCollectionRoutes(t *testing.T) {
 		checkBody  func(t *testing.T, body string)
 	}{
 		{
-			name:       "create collection",
+			name:       "create docset",
 			method:     http.MethodPost,
-			url:        "/v1/collections",
+			url:        "/v1/docsets",
 			body:       `{"name":"test-col","description":"test description"}`,
 			wantStatus: http.StatusOK, // server returns 200, not 201
 		},
 		{
-			name:       "list collections",
+			name:       "list docsets",
 			method:     http.MethodGet,
-			url:        "/v1/collections",
+			url:        "/v1/docsets",
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "get collection",
+			name:       "get docset",
 			method:     http.MethodGet,
-			url:        "/v1/collections/test-col",
+			url:        "/v1/docsets/test-col",
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "delete collection",
+			name:       "delete docset",
 			method:     http.MethodDelete,
-			url:        "/v1/collections/test-col",
+			url:        "/v1/docsets/test-col",
 			wantStatus: http.StatusNoContent,
 		},
 		{
 			name:       "add member",
 			method:     http.MethodPut,
-			url:        "/v1/collections/test-col/members",
+			url:        "/v1/docsets/test-col/members",
 			body:       `{"source_ref":"repo://test-repo/docs/readme.md","path":"/readme.md"}`,
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "get member content",
 			method:     http.MethodGet,
-			url:        "/v1/collections/test-col/docs?path=/readme.md",
+			url:        "/v1/docsets/test-col/docs?path=/readme.md",
 			wantStatus: http.StatusOK,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			colMgr := newFakeCollectionManager()
+			colMgr := newFakeDocsetManager()
 			// Pre-create test-col for get/delete/member tests
-			colMgr.collections["test-col"] = store.Collection{
+			colMgr.docsets["test-col"] = store.Docset{
 				ID:          "test-id",
 				Name:        "test-col",
 				Description: "test",
@@ -1557,7 +1557,7 @@ func TestHandlerCollectionRoutes(t *testing.T) {
 				UpdatedAt:   "2024-01-01T00:00:00Z",
 			}
 			// Pre-add member for remove and get content tests
-			colMgr.members["test-col"] = []store.CollectionMember{
+			colMgr.members["test-col"] = []store.DocsetMember{
 				{Path: "/readme.md", DocID: "doc-123"},
 			}
 
@@ -1571,7 +1571,7 @@ func TestHandlerCollectionRoutes(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 
-			NewHandlerWithCollections(&fakeAdapter{}, nil, colMgr).ServeHTTP(rec, req)
+			NewHandlerWithDocsets(&fakeAdapter{}, nil, colMgr).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tt.wantStatus, rec.Body.String())
@@ -1583,17 +1583,17 @@ func TestHandlerCollectionRoutes(t *testing.T) {
 	}
 }
 
-func TestHandlerCollectionRemoveMember(t *testing.T) {
-	colMgr := newFakeCollectionManager()
-	colMgr.collections["test-col"] = store.Collection{Name: "test-col"}
-	colMgr.members["test-col"] = []store.CollectionMember{
+func TestHandlerDocsetRemoveMember(t *testing.T) {
+	colMgr := newFakeDocsetManager()
+	colMgr.docsets["test-col"] = store.Docset{Name: "test-col"}
+	colMgr.members["test-col"] = []store.DocsetMember{
 		{Path: "/readme.md", DocID: "doc-123"},
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/collections/test-col/members?path=/readme.md", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/docsets/test-col/members?path=/readme.md", nil)
 	rec := httptest.NewRecorder()
 
-	NewHandlerWithCollections(&fakeAdapter{}, nil, colMgr).ServeHTTP(rec, req)
+	NewHandlerWithDocsets(&fakeAdapter{}, nil, colMgr).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
@@ -1604,10 +1604,10 @@ func TestHandlerCollectionRemoveMember(t *testing.T) {
 	}
 }
 
-func TestHandlerCollectionErrors(t *testing.T) {
+func TestHandlerDocsetErrors(t *testing.T) {
 	tests := []struct {
 		name       string
-		setup      func(colMgr *fakeCollectionManager)
+		setup      func(colMgr *fakeDocsetManager)
 		method     string
 		url        string
 		body       string
@@ -1616,68 +1616,68 @@ func TestHandlerCollectionErrors(t *testing.T) {
 	}{
 		{
 			name: "create duplicate name",
-			setup: func(colMgr *fakeCollectionManager) {
-				colMgr.createErr = store.ErrNameExists
+			setup: func(colMgr *fakeDocsetManager) {
+				colMgr.createErr = store.ErrDocsetNameExists
 			},
 			method:     http.MethodPost,
-			url:        "/v1/collections",
+			url:        "/v1/docsets",
 			body:       `{"name":"existing"}`,
 			wantStatus: http.StatusConflict,
-			wantCode:   "NAME_EXISTS",
+			wantCode:   "DOCSET_NAME_EXISTS",
 		},
 		{
 			name: "create invalid name",
-			setup: func(colMgr *fakeCollectionManager) {
+			setup: func(colMgr *fakeDocsetManager) {
 				colMgr.createErr = store.ErrInvalidName
 			},
 			method:     http.MethodPost,
-			url:        "/v1/collections",
+			url:        "/v1/docsets",
 			body:       `{"name":"Invalid-Name"}`,
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "BAD_REQUEST", // ErrInvalidName is mapped to BAD_REQUEST
 		},
 		{
 			name: "get not found",
-			setup: func(colMgr *fakeCollectionManager) {
-				colMgr.getErr = store.ErrCollectionNotFound
+			setup: func(colMgr *fakeDocsetManager) {
+				colMgr.getErr = store.ErrDocsetNotFound
 			},
 			method:     http.MethodGet,
-			url:        "/v1/collections/nonexistent",
+			url:        "/v1/docsets/nonexistent",
 			wantStatus: http.StatusNotFound,
-			wantCode:   "COLLECTION_NOT_FOUND",
+			wantCode:   "DOCSET_NOT_FOUND",
 		},
 		{
 			name: "add member duplicate path",
-			setup: func(colMgr *fakeCollectionManager) {
-				colMgr.collections["test-col"] = store.Collection{Name: "test-col"}
-				colMgr.addMemberErr = store.ErrMemberExists
+			setup: func(colMgr *fakeDocsetManager) {
+				colMgr.docsets["test-col"] = store.Docset{Name: "test-col"}
+				colMgr.addMemberErr = store.ErrDocsetMemberExists
 			},
 			method:     http.MethodPut,
-			url:        "/v1/collections/test-col/members",
+			url:        "/v1/docsets/test-col/members",
 			body:       `{"source_ref":"repo://test/readme.md","path":"/readme.md"}`,
 			wantStatus: http.StatusConflict,
-			wantCode:   "MEMBER_EXISTS",
+			wantCode:   "DOCSET_MEMBER_EXISTS",
 		},
 		{
 			name: "add member duplicate doc",
-			setup: func(colMgr *fakeCollectionManager) {
-				colMgr.collections["test-col"] = store.Collection{Name: "test-col"}
-				colMgr.addMemberErr = store.ErrDocAlreadyInCollection
+			setup: func(colMgr *fakeDocsetManager) {
+				colMgr.docsets["test-col"] = store.Docset{Name: "test-col"}
+				colMgr.addMemberErr = store.ErrDocAlreadyInDocset
 			},
 			method:     http.MethodPut,
-			url:        "/v1/collections/test-col/members",
+			url:        "/v1/docsets/test-col/members",
 			body:       `{"source_ref":"repo://test/readme.md","path":"/other.md"}`,
 			wantStatus: http.StatusConflict,
-			wantCode:   "DOC_ALREADY_IN_COLLECTION",
+			wantCode:   "DOC_ALREADY_IN_DOCSET",
 		},
 		{
 			name: "get member content not found",
-			setup: func(colMgr *fakeCollectionManager) {
-				colMgr.collections["test-col"] = store.Collection{Name: "test-col"}
+			setup: func(colMgr *fakeDocsetManager) {
+				colMgr.docsets["test-col"] = store.Docset{Name: "test-col"}
 				colMgr.getContentErr = store.ErrNotFound
 			},
 			method:     http.MethodGet,
-			url:        "/v1/collections/test-col/docs?path=/nonexistent.md",
+			url:        "/v1/docsets/test-col/docs?path=/nonexistent.md",
 			wantStatus: http.StatusNotFound,
 			wantCode:   "NOT_FOUND",
 		},
@@ -1685,7 +1685,7 @@ func TestHandlerCollectionErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			colMgr := newFakeCollectionManager()
+			colMgr := newFakeDocsetManager()
 			if tt.setup != nil {
 				tt.setup(colMgr)
 			}
@@ -1700,7 +1700,7 @@ func TestHandlerCollectionErrors(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 
-			NewHandlerWithCollections(&fakeAdapter{}, nil, colMgr).ServeHTTP(rec, req)
+			NewHandlerWithDocsets(&fakeAdapter{}, nil, colMgr).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tt.wantStatus, rec.Body.String())
@@ -1712,16 +1712,16 @@ func TestHandlerCollectionErrors(t *testing.T) {
 	}
 }
 
-func TestHandlerCollectionAddMemberRequest(t *testing.T) {
-	colMgr := newFakeCollectionManager()
-	colMgr.collections["test-col"] = store.Collection{Name: "test-col"}
+func TestHandlerDocsetAddMemberRequest(t *testing.T) {
+	colMgr := newFakeDocsetManager()
+	colMgr.docsets["test-col"] = store.Docset{Name: "test-col"}
 
 	body := `{"source_ref":"repo://my-repo/docs/readme.md","path":"/docs/readme.md"}`
-	req := httptest.NewRequest(http.MethodPut, "/v1/collections/test-col/members", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/v1/docsets/test-col/members", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	NewHandlerWithCollections(&fakeAdapter{}, nil, colMgr).ServeHTTP(rec, req)
+	NewHandlerWithDocsets(&fakeAdapter{}, nil, colMgr).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())

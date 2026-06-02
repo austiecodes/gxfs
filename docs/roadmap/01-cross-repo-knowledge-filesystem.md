@@ -58,7 +58,7 @@ selected mounts.
   supports exactly one configured repo.
 - The Postgres adapter uses the configured repo internally instead of honoring
   the request repo throughout the store layer.
-- There is no repo registry, namespace model, collection model, or policy for
+- There is no repo registry, namespace model, docset model, or policy for
   shared docs.
 - Performance is acceptable for small docs, but `grep` currently loads content
   into the Go process and searches in memory. Large libraries need indexed
@@ -144,7 +144,7 @@ mode = "writable"
 
 [[mounts]]
 local = "docs/gotchas/openai-go"
-remote = "collection://openai-go/v3/gotchas"
+remote = "docset://openai-go/v3/gotchas"
 mode = "readonly"
 source = "search"
 ```
@@ -194,8 +194,8 @@ Recommended direction:
 - Use `repo://self/<path>` for the current repo's own docs.
 - Use an explicit repo/path delimiter or structured fields if true cross-repo
   repo mounts are needed.
-- Prefer `collection://...` for reusable library or platform knowledge, such as
-  `collection://openai-go/v3/gotchas`, because these docs may combine official
+- Prefer `docset://...` for reusable library or platform knowledge, such as
+  `docset://openai-go/v3/gotchas`, because these docs may combine official
   docs, internal notes, and gotchas from multiple sources.
 
 ### `.gxfs/manifest.toml`
@@ -264,7 +264,7 @@ Design notes:
   - `gxfs search "openai-go function call" --json`
   - `gxfs search "openai-go function call" | gxfs mount --interactive`
   - `gxfs mount add docs://openai-go-sdk/gotchas docs/gotchas/openai-go`
-- Search should return document, collection, and suggested mount results.
+- Search should return document, docset, and suggested mount results.
 - Mounting updates `mounts.toml` and refreshes `manifest.toml`.
 
 ### Phase 4: Materialization
@@ -285,7 +285,7 @@ Design notes:
 
 - Replace the single adapter assumption with a registry:
   - repo name -> repo view
-  - collection name -> shared collection
+  - docset name -> shared docset
   - backend namespace -> store adapter
 - Ensure request repo is carried through the store request and honored by
   Postgres queries.
@@ -299,7 +299,7 @@ Design notes:
 - Add `/v1/search` for global or scoped discovery.
 - Support filters:
   - repo
-  - collection
+  - docset
   - language/library
   - doc type such as gotcha, how-to, API note, decision
   - tags
@@ -341,7 +341,7 @@ gxfs_docs(
 ```
 
 ```sql
-gxfs_collections(
+gxfs_docsets(
   id uuid primary key,
   name text not null unique,
   description text not null default '',
@@ -352,12 +352,12 @@ gxfs_collections(
 ```
 
 ```sql
-gxfs_collection_docs(
-  collection_id uuid not null references gxfs_collections(id),
+gxfs_docset_docs(
+  docset_id uuid not null references gxfs_docsets(id),
   doc_id uuid not null references gxfs_docs(id),
   path text not null,
-  primary key(collection_id, path),
-  unique(collection_id, doc_id)
+  primary key(docset_id, path),
+  unique(docset_id, doc_id)
 )
 ```
 
@@ -396,9 +396,9 @@ gxfs_doc_search(
 ### Mapping Rules
 
 - `gxfs_docs` owns content and revision.
-- `gxfs_collections` groups reusable knowledge, such as
+- `gxfs_docsets` groups reusable knowledge, such as
   `openai-go/v3/gotchas`.
-- `gxfs_collection_docs.path` is the canonical path inside a collection.
+- `gxfs_docset_docs.path` is the canonical path inside a docset.
 - `gxfs_repo_mounts` records how a repo sees shared or repo-local docs.
 - `gxfs_repo_docs` can be a denormalized resolved view for fast VFS operations.
 - A single doc can appear at many local paths through different mounts.
@@ -422,8 +422,8 @@ Suggested capabilities:
 - `repo:read`
 - `repo:write`
 - `repo:mount`
-- `collection:read`
-- `collection:write`
+- `docset:read`
+- `docset:write`
 - `admin`
 
 Mount mode should constrain operations:
@@ -470,8 +470,8 @@ fallback. The CLI should prefer conditional fetches:
 2. Add `.gxfs/mounts.toml` config and local-to-remote path resolver.
 3. Fix cache TTL semantics and tree concurrency risks.
 4. Decide the remote reference namespace for non-self repo refs and reusable
-   collections.
-5. Design and migrate the DB schema toward docs, collections, mounts, and
+   docsets.
+5. Design and migrate the DB schema toward docs, docsets, mounts, and
    revisions.
 6. Implement multi-repo server registry.
 7. Add `gxfs sync push` for existing repo docs.
@@ -484,13 +484,13 @@ fallback. The CLI should prefer conditional fetches:
 
 - Should `.gxfs/manifest.toml` be committed by default, ignored by default, or
   controlled per repo?
-- Should `gxfs search` search all public collections by default, or only
-  collections allowed by the current server policy?
+- Should `gxfs search` search all public docsets by default, or only
+  docsets allowed by the current server policy?
 - Should shared docs be edited from consuming repos, or only from their owning
-  collection namespace?
+  docset namespace?
 - If GXFS supports true cross-repo repo mounts, should the remote ref use query
   parameters, an explicit delimiter, or structured TOML fields?
-- Should reusable library knowledge always become collections, even when the
+- Should reusable library knowledge always become docsets, even when the
   source happens to live in a Git repo?
 - Should materialized docs include metadata in frontmatter, sidecar files, or
   only the manifest?

@@ -5,43 +5,23 @@ description: Use GXFS to browse, search, mount, synchronize, and update shared r
 
 # GXFS
 
-Use GXFS as a virtual filesystem for shared docs. Prefer the Unix-aligned commands first:
+Use GXFS as a virtual filesystem for shared docs. Start with the Unix-like surface:
 
 - `gxfs ls {{ .DocsPath }}` lists files and directories.
 - `gxfs cat {{ .DocsPath }}/foo.md` reads a file.
-- `gxfs grep "pattern" {{ .DocsPath }}` searches file contents. Use `-E` for regex.
+- `gxfs grep "pattern" {{ .DocsPath }}` searches file contents.
 - `gxfs find {{ .DocsPath }} --name "*.md"` finds paths by name.
 - `gxfs stat {{ .DocsPath }}/foo.md` inspects metadata.
 - `gxfs tree {{ .DocsPath }} -L 3` previews the directory shape.
-- `gxfs rm {{ .DocsPath }}/foo.md` deletes a file.
 
-For discovery beyond the mounted view:
+Read only the reference file for the workflow you need:
 
-- `gxfs search "query"` performs semantic or full-text search across the repo.
-- `gxfs glob "**/*.md"` matches virtual paths.
-- `gxfs repo ls` lists available repositories.
-- `gxfs mount sources` lists mountable `repo://` and `docs://` sources.
-
-Mount reusable docs explicitly when the answer should draw from shared knowledge:
-
-- `gxfs mount add repo://other-repo/docs libs/other-repo`
-- `gxfs mount add docs://openai-go-sdk/reference libs/openai-go`
-- `gxfs mount ls`
-- `gxfs mount rm libs/openai-go`
-- `gxfs mount attach openai-go --into libs/openai-go`
-
-Use `docs://<name>/<path>` for top-level reusable docs namespaces. A namespace such as `docs://openai-go-sdk/reference` can be mounted into many repos without copying content.
-
-Use `sync` subcommands when local markdown files need to match GXFS state:
-
-- `gxfs sync refresh {{ .DocsPath }}` updates the local manifest.
-- `gxfs sync materialize {{ .DocsPath }}` writes GXFS docs into local markdown files.
-- `gxfs sync dematerialize {{ .DocsPath }} --keep-files` marks files remote-only while keeping local files.
-
-For writes, prefer explicit commands:
-
-- `gxfs write {{ .DocsPath }}/foo.md "content"`
-- `gxfs edit {{ .DocsPath }}/foo.md --old "x" --new "y"`
-- `gxfs rm {{ .DocsPath }}/foo.md`
+- [Browsing mounted docs](references/browse.md): `ls`, `tree`, `cat`, `grep`, `find`, and `stat`.
+- [Discovery and remote preview](references/discovery.md): `search`, `locate`, `glob`, `repo ls`, `mount sources`, and direct `repo://` reads.
+- [Mounting shared docs](references/mounting.md): `repo://` and `docs://` mounts, mount modes, attach, list, and remove.
+- [Sync and materialization](references/sync.md): refresh manifests, materialize or dematerialize files, push/pull local docs.
+- [Writing docs](references/writing.md): `write`, `edit`, `rm`, writable mounts, and conflict-safe workflow.
+- [Setup, hooks, and operations](references/setup-hooks-ops.md): `init`, config files, agent hooks, server config, and GC.
+- [Docsets](references/docsets.md): optional curated document sets when the server enables them.
 
 Do not use removed compatibility aliases such as top-level `delete`, `refresh`, `materialize`, `dematerialize`, or `attach`. Use `rm`, `sync ...`, and `mount attach` instead.

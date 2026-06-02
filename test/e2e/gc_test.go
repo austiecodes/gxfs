@@ -143,12 +143,12 @@ func TestGCGracePeriod(t *testing.T) {
 	}
 }
 
-// TestGCCollectionRefs tests that docs referenced by collections are not deleted.
-func TestGCCollectionRefs(t *testing.T) {
+// TestGCDocsetRefs tests that docs referenced by docsets are not deleted.
+func TestGCDocsetRefs(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-gc-coll-test-%d", pgPort)
+	containerName := fmt.Sprintf("gxfs-gc-docset-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
 	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
@@ -161,38 +161,38 @@ func TestGCCollectionRefs(t *testing.T) {
 
 	applyMigrations(t, ctx, pool, cfg)
 
-	// Create a collection
-	var collectionID string
+	// Create a docset
+	var docsetID string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO gxfs_collections (id, name, description, visibility)
-		VALUES (gen_random_uuid(), 'test-collection', 'test', 'private')
+		INSERT INTO gxfs_docsets (id, name, description, visibility)
+		VALUES (gen_random_uuid(), 'test-docset', 'test', 'private')
 		RETURNING id
-	`).Scan(&collectionID)
+	`).Scan(&docsetID)
 	if err != nil {
-		t.Fatalf("create collection: %v", err)
+		t.Fatalf("create docset: %v", err)
 	}
 
 	// Create an orphan doc
 	var docID string
 	err = pool.QueryRow(ctx, `
 		INSERT INTO gxfs_docs (id, title, content, content_hash, updated_at)
-		VALUES (gen_random_uuid(), 'collection-doc', 'content', 'hash1', NOW() - INTERVAL '2 hours')
+		VALUES (gen_random_uuid(), 'docset-doc', 'content', 'hash1', NOW() - INTERVAL '2 hours')
 		RETURNING id
 	`).Scan(&docID)
 	if err != nil {
 		t.Fatalf("create doc: %v", err)
 	}
 
-	// Reference the doc from a collection
+	// Reference the doc from a docset
 	_, err = pool.Exec(ctx, `
-		INSERT INTO gxfs_collection_docs (collection_id, doc_id, path)
-		VALUES ($1, $2, '/collection-doc.md')
-	`, collectionID, docID)
+		INSERT INTO gxfs_docset_docs (docset_id, doc_id, path)
+		VALUES ($1, $2, '/docset-doc.md')
+	`, docsetID, docID)
 	if err != nil {
-		t.Fatalf("create collection_doc: %v", err)
+		t.Fatalf("create docset_doc: %v", err)
 	}
 
-	// GC should NOT delete this doc (it's referenced by a collection)
+	// GC should NOT delete this doc (it's referenced by a docset)
 	result, err := postgres.GC(ctx, pool, "public", postgres.GCRequest{
 		DryRun:     true,
 		GraceHours: 0, // Even with no grace, should be protected
@@ -202,7 +202,7 @@ func TestGCCollectionRefs(t *testing.T) {
 		t.Fatalf("GC: %v", err)
 	}
 	if result.Count != 0 {
-		t.Errorf("orphan count = %d, want 0 (collection ref should protect)", result.Count)
+		t.Errorf("orphan count = %d, want 0 (docset ref should protect)", result.Count)
 	}
 }
 

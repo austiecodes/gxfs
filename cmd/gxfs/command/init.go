@@ -2,13 +2,14 @@ package command
 
 import (
 	"bytes"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -63,6 +64,9 @@ var gxfsInstructionsTemplate string
 //go:embed instructions/skill.md
 var gxfsSkillTemplate string
 
+//go:embed instructions/skill/references/*.md
+var gxfsSkillReferenceTemplates embed.FS
+
 //go:embed instructions/pre_tool_use.sh
 var preToolUseHookScript string
 
@@ -83,7 +87,7 @@ func NewInitCommand() *cobra.Command {
 	var hookScope string
 	var registerRepo bool
 
-	instructionMode = "md"
+	instructionMode = "md,skill"
 	repoName = "github.com/user/repo"
 	serverAddr = "http://127.0.0.1:7635"
 	docsPath = "docs"
@@ -93,7 +97,7 @@ func NewInitCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init [path]",
 		Short: "Initialize .gxfs config in a repo",
-		Long:  "Initialize .gxfs/settings.toml and .gxfs/mounts.toml in the target directory and inject GXFS usage instructions into AGENTS.md by default.",
+		Long:  "Initialize .gxfs/settings.toml and .gxfs/mounts.toml in the target directory and add minimal agent instructions plus a local GXFS skill by default.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -340,9 +344,10 @@ func upsertInstructions(target, docsPath string) (string, error) {
 }
 
 func writeGXFSSkill(dir, docsPath string) (string, error) {
-	target := filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return "", fmt.Errorf("create %s: %w", filepath.Dir(target), err)
+	skillDir := filepath.Join(dir, ".gxfs", "skills", "gxfs")
+	target := filepath.Join(skillDir, "SKILL.md")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return "", fmt.Errorf("create %s: %w", skillDir, err)
 	}
 	content, err := renderGXFSSkill(docsPath)
 	if err != nil {
@@ -351,7 +356,43 @@ func writeGXFSSkill(dir, docsPath string) (string, error) {
 	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("write %s: %w", target, err)
 	}
+	if err := writeGXFSSkillReferences(skillDir, docsPath); err != nil {
+		return "", err
+	}
 	return target, nil
+}
+
+func writeGXFSSkillReferences(skillDir, docsPath string) error {
+	const sourceDir = "instructions/skill/references"
+	targetDir := filepath.Join(skillDir, "references")
+
+	entries, err := fs.ReadDir(gxfsSkillReferenceTemplates, sourceDir)
+	if err != nil {
+		return fmt.Errorf("read GXFS skill references: %w", err)
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", targetDir, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		sourcePath := path.Join(sourceDir, entry.Name())
+		raw, err := gxfsSkillReferenceTemplates.ReadFile(sourcePath)
+		if err != nil {
+			return fmt.Errorf("read GXFS skill reference %s: %w", sourcePath, err)
+		}
+		content, err := renderGXFSSkillReference(entry.Name(), string(raw), docsPath)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(targetDir, entry.Name())
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", target, err)
+		}
+	}
+	return nil
 }
 
 func replaceMarkedBlock(content, block string) string {
@@ -408,6 +449,23 @@ func renderGXFSSkill(docsPath string) (string, error) {
 		DocsPath: docsPath,
 	}); err != nil {
 		return "", fmt.Errorf("render GXFS skill template: %w", err)
+	}
+	return out.String(), nil
+}
+
+func renderGXFSSkillReference(name, raw, docsPath string) (string, error) {
+	tmpl, err := template.New("gxfs-skill-reference-" + name).Option("missingkey=error").Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse GXFS skill reference %s: %w", name, err)
+	}
+
+	var out bytes.Buffer
+	if err := tmpl.Execute(&out, struct {
+		DocsPath string
+	}{
+		DocsPath: docsPath,
+	}); err != nil {
+		return "", fmt.Errorf("render GXFS skill reference %s: %w", name, err)
 	}
 	return out.String(), nil
 }
