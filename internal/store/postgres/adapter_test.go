@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -253,6 +254,18 @@ begin
         on conflict do nothing;
     end if;
 end $$;`,
+		`-- Expose curated docsets through the same read binding shape used by
+-- document-backed repo and docs namespace adapters.
+create or replace view "public"."gxfs_docset_paths" as
+select
+    ds.name as docset,
+    dd.path,
+    dd.doc_id,
+    length(d.content)::bigint as size,
+    d.updated_at as mtime
+from "public"."gxfs_docset_docs" dd
+join "public"."gxfs_docsets" ds on ds.id = dd.docset_id
+join "public"."gxfs_docs" d on d.id = dd.doc_id;`,
 		`-- DB-backed repository registry.
 create table if not exists "public"."gxfs_repos" (
     name text primary key,
@@ -346,6 +359,20 @@ func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T)
 	}
 	if !strings.Contains(docStmt, `"gxfs_docsets"`) {
 		t.Fatalf("empty schema migration missing \"gxfs_docsets\"")
+	}
+
+	var docsetViewStmt string
+	for _, statement := range statements {
+		if strings.Contains(statement, `"gxfs_docset_paths"`) {
+			docsetViewStmt = statement
+			break
+		}
+	}
+	if docsetViewStmt == "" {
+		t.Fatalf("SchemaSQL() missing docset paths view migration: %v", statements)
+	}
+	if strings.Contains(docsetViewStmt, ".\"gxfs_docset_paths\"") {
+		t.Fatalf("empty schema migration has schema-qualified docset paths view ref: contains .\"gxfs_docset_paths\"")
 	}
 
 	// Must NOT start with a dot (e.g., `"gxfs_docs"` not `.gxfs_docs`).
@@ -576,6 +603,42 @@ func TestDocNamespaceBindingSQL(t *testing.T) {
 				if strings.Contains(sql, bad) {
 					t.Fatalf("%s() still contains repo binding %q: %q", tt.name, bad, sql)
 				}
+			}
+		})
+	}
+}
+
+func TestDocsetBindingReadSQL(t *testing.T) {
+	cfg := withDocsetBinding(Config{Repo: "docset"})
+	for _, tt := range []struct {
+		name      string
+		fn        func(Config) (string, error)
+		wantScope string
+	}{
+		{"DocListPathsSQL", DocListPathsSQL, "where docset = $1"},
+		{"DocCatSQL", DocCatSQL, "where rp.docset = $1"},
+		{"DocStatSQL", DocStatSQL, "where rp.docset = $1"},
+		{"DocStatDirSQL", DocStatDirSQL, "where docset = $1"},
+		{"DocSearchCountSQL", DocSearchCountSQL, "where rp.docset = $1"},
+		{"DocSearchDataSQL", DocSearchDataSQL, "where rp.docset = $1"},
+		{"DocLocateCountSQL", DocLocateCountSQL, "where rp.docset = $1"},
+		{"DocLocateDataSQL", DocLocateDataSQL, "where rp.docset = $1"},
+		{"DocBatchHashesSQL", DocBatchHashesSQL, "where rp.docset = $1"},
+		{"DocStreamGrepSQL", DocStreamGrepSQL, "where rp.docset = $1"},
+		{"DocGlobCountSQL", DocGlobCountSQL, "where docset = $1"},
+		{"DocGlobDataSQL", DocGlobDataSQL, "where docset = $1"},
+		{"DocGlobDataAllSQL", DocGlobDataAllSQL, "where docset = $1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, err := tt.fn(cfg)
+			if err != nil {
+				t.Fatalf("%s() error = %v", tt.name, err)
+			}
+			if !strings.Contains(sql, `"gxfs_docset_paths"`) {
+				t.Fatalf("%s() missing docset paths view: %q", tt.name, sql)
+			}
+			if !strings.Contains(sql, tt.wantScope) {
+				t.Fatalf("%s() missing docset scope %q: %q", tt.name, tt.wantScope, sql)
 			}
 		})
 	}
@@ -812,6 +875,25 @@ func TestDocAdapterConstructorsSetBindingMode(t *testing.T) {
 	}
 	if namespaceAdapter.cfg.DocBinding.ScopeColumn != docNamespaceScopeColumn {
 		t.Fatalf("NewDocsNamespaceAdapter scope column = %q, want %q", namespaceAdapter.cfg.DocBinding.ScopeColumn, docNamespaceScopeColumn)
+	}
+
+	docsetAdapter := NewDocsetReadAdapter(nil, Config{Repo: "docset"})
+	readOnly, ok := docsetAdapter.(*readOnlyAdapter)
+	if !ok {
+		t.Fatalf("NewDocsetReadAdapter type = %T, want *readOnlyAdapter", docsetAdapter)
+	}
+	inner, ok := readOnly.Adapter.(*DocAdapter)
+	if !ok {
+		t.Fatalf("NewDocsetReadAdapter inner type = %T, want *DocAdapter", readOnly.Adapter)
+	}
+	if inner.cfg.DocBinding.PathsTable != docsetPathsView {
+		t.Fatalf("NewDocsetReadAdapter paths table = %q, want %q", inner.cfg.DocBinding.PathsTable, docsetPathsView)
+	}
+	if inner.cfg.DocBinding.ScopeColumn != docsetScopeColumn {
+		t.Fatalf("NewDocsetReadAdapter scope column = %q, want %q", inner.cfg.DocBinding.ScopeColumn, docsetScopeColumn)
+	}
+	if _, err := docsetAdapter.Put(context.Background(), store.PutRequest{}); !errors.Is(err, store.ErrReadOnlyMount) {
+		t.Fatalf("NewDocsetReadAdapter Put error = %v, want ErrReadOnlyMount", err)
 	}
 }
 

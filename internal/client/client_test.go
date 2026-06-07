@@ -277,13 +277,38 @@ func TestClientAdapterForSourceRepoBuildsURL(t *testing.T) {
 	}
 }
 
-func TestClientAdapterForSourceDocsetNotSupported(t *testing.T) {
-	_, err := New("http://example.test").AdapterForSource(context.Background(), store.SourceRef{
+func TestClientAdapterForSourceDocsetBuildsURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/docset/tree" {
+			t.Fatalf("path = %q, want /v1/docset/tree", r.URL.Path)
+		}
+		if r.URL.Query().Get("name") != "best-practices" {
+			t.Fatalf("query name = %q, want best-practices", r.URL.Query().Get("name"))
+		}
+		if r.URL.Query().Get("path") != "/go" {
+			t.Fatalf("query path = %q, want /go", r.URL.Query().Get("path"))
+		}
+		_ = json.NewEncoder(w).Encode(store.TreeResponse{
+			Root: store.Node{Path: "/go", Name: "go", Kind: "dir"},
+			Text: "/go\n  errors.md\n",
+		})
+	}))
+	defer server.Close()
+
+	adapter, err := New(server.URL).AdapterForSource(context.Background(), store.SourceRef{
 		Kind: store.SourceKindDocset,
 		Name: "best-practices",
 	})
-	if !errors.Is(err, store.ErrNotSupported) {
-		t.Fatalf("AdapterForSource(docset) error = %v, want ErrNotSupported", err)
+	if err != nil {
+		t.Fatalf("AdapterForSource(docset) error = %v", err)
+	}
+
+	resp, err := adapter.Tree(context.Background(), store.TreeRequest{Path: "/go"})
+	if err != nil {
+		t.Fatalf("Tree() error = %v", err)
+	}
+	if resp.Root.Path != "/go" {
+		t.Fatalf("Tree() root path = %q, want /go", resp.Root.Path)
 	}
 }
 

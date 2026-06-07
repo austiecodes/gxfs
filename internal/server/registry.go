@@ -47,7 +47,7 @@ type DynamicRegistry struct {
 	mu      sync.RWMutex
 	repos   map[string]dynamicSourceEntry
 	docs    map[string]dynamicSourceEntry
-	docsets []store.Docset
+	docsets map[string]dynamicSourceEntry
 }
 
 var _ store.Adapter = (*DynamicRegistry)(nil)
@@ -70,6 +70,7 @@ func NewDynamicRegistry(ctx context.Context, catalog repoCatalog, namespaces nam
 		factory:    factory,
 		repos:      map[string]dynamicSourceEntry{},
 		docs:       map[string]dynamicSourceEntry{},
+		docsets:    map[string]dynamicSourceEntry{},
 	}
 	if err := r.Refresh(ctx); err != nil {
 		return nil, err
@@ -123,6 +124,7 @@ func (r *DynamicRegistry) Refresh(ctx context.Context) error {
 	r.mu.RLock()
 	currentRepos := r.repos
 	currentDocs := r.docs
+	currentDocsets := r.docsets
 	r.mu.RUnlock()
 
 	nextRepos := make(map[string]dynamicSourceEntry, len(repos))
@@ -166,14 +168,33 @@ func (r *DynamicRegistry) Refresh(ctx context.Context) error {
 		nextDocs[namespace.Name] = entry
 	}
 
-	sort.SliceStable(docsets, func(i, j int) bool {
-		return docsets[i].Name < docsets[j].Name
-	})
+	nextDocsets := make(map[string]dynamicSourceEntry, len(docsets))
+	for _, docset := range docsets {
+		if docset.Name == "" {
+			continue
+		}
+		source := DynamicSource{
+			Kind:        store.SourceKindDocset,
+			Name:        docset.Name,
+			Writable:    false,
+			Description: docset.Description,
+		}
+		entry, ok := currentDocsets[docset.Name]
+		if !ok {
+			adapter, err := r.factory(ctx, source)
+			if err != nil {
+				return fmt.Errorf("create docset adapter %q: %w", docset.Name, err)
+			}
+			entry = dynamicSourceEntry{adapter: adapter}
+		}
+		entry.source = source
+		nextDocsets[docset.Name] = entry
+	}
 
 	r.mu.Lock()
 	r.repos = nextRepos
 	r.docs = nextDocs
-	r.docsets = docsets
+	r.docsets = nextDocsets
 	r.mu.Unlock()
 	return nil
 }
@@ -271,16 +292,17 @@ func (r *DynamicRegistry) MountSources(ctx context.Context) ([]store.MountSource
 			Description: description,
 		})
 	}
-	for _, docset := range r.docsets {
-		ref := store.SourceRef{Kind: store.SourceKindDocset, Name: docset.Name}.String()
-		description := docset.Description
+	for _, entry := range r.docsets {
+		ref := store.SourceRef{Kind: store.SourceKindDocset, Name: entry.source.Name}.String()
+		description := entry.source.Description
 		if description == "" {
 			description = "curated docset"
 		}
 		sources = append(sources, store.MountSource{
 			Ref:         ref,
 			Kind:        store.SourceKindDocset,
-			Name:        docset.Name,
+			Name:        entry.source.Name,
+			Writable:    false,
 			Description: description,
 		})
 	}
@@ -297,7 +319,7 @@ func (r *DynamicRegistry) AdapterForSource(ctx context.Context, source store.Sou
 	case store.SourceKindDocs:
 		return r.docsAdapter(ctx, source.Name)
 	case store.SourceKindDocset:
-		return nil, fmt.Errorf("%w: %s", store.ErrNotSupported, source.Kind)
+		return r.docsetAdapter(ctx, source.Name)
 	default:
 		return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
 	}
@@ -329,6 +351,19 @@ func (r *DynamicRegistry) docsAdapter(ctx context.Context, name string) (store.A
 	return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, store.SourceRef{Kind: store.SourceKindDocs, Name: name}.String())
 }
 
+func (r *DynamicRegistry) docsetAdapter(ctx context.Context, name string) (store.Adapter, error) {
+	if adapter, ok := r.lookupDocset(name); ok {
+		return adapter, nil
+	}
+	if err := r.Refresh(ctx); err != nil {
+		return nil, err
+	}
+	if adapter, ok := r.lookupDocset(name); ok {
+		return adapter, nil
+	}
+	return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, store.SourceRef{Kind: store.SourceKindDocset, Name: name}.String())
+}
+
 func (r *DynamicRegistry) lookupRepo(repo string) (store.Adapter, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -340,6 +375,13 @@ func (r *DynamicRegistry) lookupDocs(name string) (store.Adapter, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	entry, ok := r.docs[name]
+	return entry.adapter, ok
+}
+
+func (r *DynamicRegistry) lookupDocset(name string) (store.Adapter, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.docsets[name]
 	return entry.adapter, ok
 }
 
@@ -541,7 +583,7 @@ func (r *DynamicRegistry) Glob(ctx context.Context, req store.GlobRequest) (*sto
 func (r *DynamicRegistry) Invalidate() {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, entries := range []map[string]dynamicSourceEntry{r.repos, r.docs} {
+	for _, entries := range []map[string]dynamicSourceEntry{r.repos, r.docs, r.docsets} {
 		for _, entry := range entries {
 			if invalidator, ok := entry.adapter.(store.CacheInvalidator); ok {
 				invalidator.Invalidate()

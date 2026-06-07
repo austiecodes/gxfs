@@ -3,6 +3,7 @@ package mount
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/austiecodes/gxfs/internal/config"
@@ -21,6 +22,25 @@ type fakeStore struct {
 	findByPath   map[string][]store.Node
 	grepByPath   map[string][]store.Match
 	hashesByPath map[string][]store.ContentHash
+}
+
+type sourceRoutingFakeStore struct {
+	*fakeStore
+	sources map[string]store.Adapter
+}
+
+func (f *sourceRoutingFakeStore) AdapterForSource(_ context.Context, source store.SourceRef) (store.Adapter, error) {
+	switch source.Kind {
+	case store.SourceKindRepo:
+		return f.fakeStore, nil
+	case store.SourceKindDocs, store.SourceKindDocset:
+		if adapter, ok := f.sources[string(source.Kind)+"://"+source.Name]; ok {
+			return adapter, nil
+		}
+		return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
+	default:
+		return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
+	}
 }
 
 func (f *fakeStore) LS(_ context.Context, req store.LSRequest) (*store.LSResponse, error) {
@@ -290,6 +310,56 @@ func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
 	}
 	if len(hashes.Hashes) != 1 || hashes.Hashes[0].Path != "/docs/openai-go-sdk/usage.md" {
 		t.Fatalf("hashes = %+v, want localized docs path", hashes.Hashes)
+	}
+}
+
+func TestAdapterRoutesDocsetSourceThroughSourceRouterReadonly(t *testing.T) {
+	resolver, err := NewResolver("gxfs", []config.MountConfig{
+		{Local: "docs/best-practices", Remote: "docset://best-practices/go", Mode: "readonly"},
+	})
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+	docsetStore := &fakeStore{
+		lsByPath: map[string][]store.Node{
+			"/go": {
+				{Path: "/go/errors.md", Name: "errors.md", Kind: "file"},
+			},
+		},
+	}
+	registry := &sourceRoutingFakeStore{
+		fakeStore: &fakeStore{},
+		sources: map[string]store.Adapter{
+			"docset://best-practices": docsetStore,
+		},
+	}
+	adapter := NewAdapter(registry, resolver)
+
+	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "docs/best-practices/errors.md"})
+	if err != nil {
+		t.Fatalf("Cat() error = %v", err)
+	}
+	if docsetStore.catReq.Repo != "best-practices" || docsetStore.catReq.Path != "/go/errors.md" {
+		t.Fatalf("docset cat req = %+v, want best-practices /go/errors.md", docsetStore.catReq)
+	}
+	if cat.Path != "/docs/best-practices/errors.md" {
+		t.Fatalf("cat path = %q, want localized docset path", cat.Path)
+	}
+
+	ls, err := adapter.LS(context.Background(), store.LSRequest{Repo: "gxfs", Path: "docs/best-practices"})
+	if err != nil {
+		t.Fatalf("LS() error = %v", err)
+	}
+	if len(docsetStore.lsReqs) != 1 || docsetStore.lsReqs[0].Repo != "best-practices" || docsetStore.lsReqs[0].Path != "/go" {
+		t.Fatalf("docset ls reqs = %+v, want best-practices /go", docsetStore.lsReqs)
+	}
+	if len(ls.Nodes) != 1 || ls.Nodes[0].Path != "/docs/best-practices/errors.md" {
+		t.Fatalf("ls nodes = %+v, want localized docset path", ls.Nodes)
+	}
+
+	_, err = adapter.Put(context.Background(), store.PutRequest{Repo: "gxfs", Path: "docs/best-practices/new.md", Content: "x"})
+	if !errors.Is(err, store.ErrReadOnlyMount) {
+		t.Fatalf("Put() error = %v, want ErrReadOnlyMount", err)
 	}
 }
 

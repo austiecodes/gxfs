@@ -56,6 +56,17 @@ func NewDocsNamespaceAdapter(pool *pgxpool.Pool, cfg Config) *DocAdapter {
 	return newDocAdapter(pool, withDocNamespaceBinding(cfg))
 }
 
+// NewDocsetReadAdapter creates a read-only adapter scoped by curated docset
+// membership paths. Docset contents are immutable through docset://; membership
+// changes go through the DocsetManager API.
+func NewDocsetReadAdapter(pool *pgxpool.Pool, cfg Config) store.Adapter {
+	return &readOnlyAdapter{
+		Adapter:    newDocAdapter(pool, withDocsetBinding(cfg)),
+		sourceKind: store.SourceKindDocset,
+		sourceName: cfg.Repo,
+	}
+}
+
 // NewDocNamespaceAdapter is an alias for NewDocsNamespaceAdapter.
 func NewDocNamespaceAdapter(pool *pgxpool.Pool, cfg Config) *DocAdapter {
 	return NewDocsNamespaceAdapter(pool, cfg)
@@ -135,6 +146,54 @@ func withDocRepoBinding(cfg Config) Config {
 func withDocNamespaceBinding(cfg Config) Config {
 	cfg.DocBinding = DocBindingConfig{PathsTable: docNamespacePathsTable, ScopeColumn: docNamespaceScopeColumn}
 	return cfg
+}
+
+func withDocsetBinding(cfg Config) Config {
+	cfg.DocBinding = DocBindingConfig{PathsTable: docsetPathsView, ScopeColumn: docsetScopeColumn}
+	return cfg
+}
+
+type readOnlyAdapter struct {
+	store.Adapter
+	sourceKind store.SourceKind
+	sourceName string
+}
+
+func (a *readOnlyAdapter) Put(context.Context, store.PutRequest) (*store.PutResponse, error) {
+	return nil, store.ErrReadOnlyMount
+}
+
+func (a *readOnlyAdapter) Delete(context.Context, store.DeleteRequest) (*store.DeleteResponse, error) {
+	return nil, store.ErrReadOnlyMount
+}
+
+func (a *readOnlyAdapter) Edit(context.Context, store.EditRequest) (*store.EditResponse, error) {
+	return nil, store.ErrReadOnlyMount
+}
+
+func (a *readOnlyAdapter) Locate(ctx context.Context, req store.LocateRequest) (*store.LocateResponse, error) {
+	resp, err := a.Adapter.Locate(ctx, req)
+	if err != nil || resp == nil || a.sourceKind == "" {
+		return resp, err
+	}
+	name := req.Repo
+	if name == "" {
+		name = a.sourceName
+	}
+	for i := range resp.Results {
+		resp.Results[i].Ref = store.SourceRef{
+			Kind: a.sourceKind,
+			Name: name,
+			Path: resp.Results[i].Path,
+		}.String()
+	}
+	return resp, nil
+}
+
+func (a *readOnlyAdapter) Invalidate() {
+	if invalidator, ok := a.Adapter.(store.CacheInvalidator); ok {
+		invalidator.Invalidate()
+	}
 }
 
 func (d *DocAdapter) repo(reqRepo string) string {

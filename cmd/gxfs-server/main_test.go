@@ -125,12 +125,15 @@ func TestAPIRoutesDispatchEscapedSlashRepoNames(t *testing.T) {
 	}
 }
 
-func TestAPIRoutesRegistersDocsNamespaceRoutes(t *testing.T) {
+func TestAPIRoutesRegistersSourceRoutes(t *testing.T) {
 	routes := apiRoutes(http.NotFoundHandler())
 	want := map[string]bool{
-		http.MethodGet + " /v1/docs/:op":    false,
-		http.MethodPut + " /v1/docs/:op":    false,
-		http.MethodDelete + " /v1/docs/:op": false,
+		http.MethodGet + " /v1/docs/:op":      false,
+		http.MethodPut + " /v1/docs/:op":      false,
+		http.MethodDelete + " /v1/docs/:op":   false,
+		http.MethodGet + " /v1/docset/:op":    false,
+		http.MethodPut + " /v1/docset/:op":    false,
+		http.MethodDelete + " /v1/docset/:op": false,
 	}
 	for _, route := range routes {
 		key := route.Method + " " + route.Path

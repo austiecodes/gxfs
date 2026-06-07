@@ -241,6 +241,7 @@ gxfs docset create best-practices --description "Reusable guidance"
 gxfs docset add best-practices /go/errors.md --source repo://shared-docs/go/errors.md
 gxfs docset show best-practices
 gxfs cat docset://best-practices/go/errors.md
+gxfs mount add docset://best-practices docs/best-practices
 gxfs docset rm best-practices /go/errors.md
 ```
 
@@ -470,7 +471,10 @@ digits, `-`, and `_`.
   document at a stable docset path.
 - `rm <name> <docset-path>`: remove a member.
 
-Use `gxfs cat docset://<name>/<path>` to read a docset member.
+Use `gxfs cat docset://<name>/<path>` to read a docset member. Use
+`gxfs mount add docset://<name> <local-path>` to mount a read-only view of the
+member tree. Change membership with `gxfs docset add` and `gxfs docset rm`;
+use `docs://...` namespaces for writable reusable documentation trees.
 
 `gxfs config doctor`
 

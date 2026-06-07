@@ -9,6 +9,8 @@ const (
 	docRepoScopeColumn      = "repo"
 	docNamespacePathsTable  = "gxfs_doc_namespace_paths"
 	docNamespaceScopeColumn = "namespace"
+	docsetPathsView         = "gxfs_docset_paths"
+	docsetScopeColumn       = "docset"
 )
 
 type docBindingSQL struct {

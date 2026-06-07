@@ -308,14 +308,12 @@ func (a *Adapter) adapterForSource(ctx context.Context, source store.SourceRef) 
 	switch source.Kind {
 	case store.SourceKindRepo:
 		return a.base, nil
-	case store.SourceKindDocs:
+	case store.SourceKindDocs, store.SourceKindDocset:
 		router, ok := a.base.(store.SourceRouter)
 		if !ok {
 			return nil, unsupportedSourceError(source)
 		}
 		return router.AdapterForSource(ctx, source)
-	case store.SourceKindDocset:
-		return nil, unsupportedSourceError(source)
 	default:
 		return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
 	}

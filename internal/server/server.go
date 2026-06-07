@@ -486,6 +486,10 @@ func (h *handler) handleDocsets(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, err)
 			return
 		}
+		if err := h.refreshAndInvalidateSources(r.Context()); err != nil {
+			writeJSONError(w, err)
+			return
+		}
 		writeJSON(w, resp)
 		return
 	}
@@ -524,6 +528,10 @@ func (h *handler) handleDocsets(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, err)
 				return
 			}
+			if err := h.refreshAndInvalidateSources(r.Context()); err != nil {
+				writeJSONError(w, err)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		default:
@@ -555,6 +563,10 @@ func (h *handler) handleDocsets(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, err)
 				return
 			}
+			if err := h.refreshAndInvalidateSources(r.Context()); err != nil {
+				writeJSONError(w, err)
+				return
+			}
 			writeJSON(w, resp)
 			return
 		case http.MethodDelete:
@@ -567,6 +579,10 @@ func (h *handler) handleDocsets(w http.ResponseWriter, r *http.Request) {
 				Name: name,
 				Path: memberPath,
 			}); err != nil {
+				writeJSONError(w, err)
+				return
+			}
+			if err := h.refreshAndInvalidateSources(r.Context()); err != nil {
 				writeJSONError(w, err)
 				return
 			}
@@ -612,6 +628,18 @@ func (h *handler) handleDocsets(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+func (h *handler) refreshAndInvalidateSources(ctx context.Context) error {
+	if refresher, ok := h.adapter.(interface{ Refresh(context.Context) error }); ok {
+		if err := refresher.Refresh(ctx); err != nil {
+			return err
+		}
+	}
+	if h.invalidator != nil {
+		h.invalidator.Invalidate()
+	}
+	return nil
+}
+
 func parseSourceRequest(u *url.URL) (source store.SourceRef, op string, ok bool) {
 	p := requestPath(u)
 	for _, candidate := range []struct {
@@ -621,6 +649,7 @@ func parseSourceRequest(u *url.URL) (source store.SourceRef, op string, ok bool)
 	}{
 		{prefix: "/v1/repos/", param: "repo", kind: store.SourceKindRepo},
 		{prefix: "/v1/docs/", param: "name", kind: store.SourceKindDocs},
+		{prefix: "/v1/docset/", param: "name", kind: store.SourceKindDocset},
 	} {
 		rest := strings.TrimPrefix(p, candidate.prefix)
 		if rest == p || rest == "" || strings.Contains(rest, "/") {

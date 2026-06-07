@@ -272,7 +272,9 @@ func (f *sourceRoutingFakeClient) AdapterForSource(_ context.Context, source sto
 			return adapter, nil
 		}
 	case store.SourceKindDocset:
-		return nil, store.ErrNotSupported
+		if adapter, ok := f.sources[sourceKey(source)]; ok {
+			return adapter, nil
+		}
 	}
 	return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
 }
@@ -2451,14 +2453,54 @@ func TestMountAddRejectsInvalidRemoteRef(t *testing.T) {
 	}
 }
 
-func TestMountAddRejectsDocsetRef(t *testing.T) {
+func TestMountAddWritesReadonlyDocsetSourceMount(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	docsetClient := &fakeClient{
+		statNode: &store.Node{Path: "/", Name: "best-practices", Kind: "dir"},
+	}
+	router := &sourceRoutingFakeClient{
+		fakeClient: &fakeClient{},
+		sources: map[string]store.Adapter{
+			"docset://best-practices": docsetClient,
+		},
+	}
+	cmd := newRootCommand(router, router, "gxfs", nil)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"mount", "add", "docset://best-practices", "docs/best-practices", "--no-refresh"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("mount add docset source error = %v", err)
+	}
+	if docsetClient.statReq.Repo != "best-practices" || docsetClient.statReq.Path != "/" {
+		t.Fatalf("docset stat req = %+v, want best-practices /", docsetClient.statReq)
+	}
+	mounts := readTextFile(t, filepath.Join(dir, ".gxfs", "mounts.toml"))
+	if !strings.Contains(mounts, "local = 'docs/best-practices'") {
+		t.Fatalf("mounts.toml missing docset local path: %s", mounts)
+	}
+	if !strings.Contains(mounts, "remote = 'docset://best-practices'") {
+		t.Fatalf("mounts.toml missing original docset source URI: %s", mounts)
+	}
+	if !strings.Contains(mounts, "mode = 'readonly'") {
+		t.Fatalf("mounts.toml missing readonly mode: %s", mounts)
+	}
+}
+
+func TestMountAddRejectsWritableDocsetRef(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	client := &fakeClient{}
 
-	_, err := executeWithClientErr(client, "mount", "add", "docset://stuff", "docs")
+	_, err := executeWithClientErr(client, "mount", "add", "docset://stuff", "docs", "--mode", "writable")
 	if err == nil {
-		t.Fatal("expected error for docset ref")
+		t.Fatal("expected error for writable docset ref")
+	}
+	if !strings.Contains(err.Error(), "docset mounts are read-only") {
+		t.Fatalf("error = %q, want read-only docset rejection", err.Error())
 	}
 }
 

@@ -65,6 +65,9 @@ func newMountAddCommand(rawAdapter store.Adapter, repo string) *cobra.Command {
 			if mode != "readonly" && mode != "writable" {
 				return fmt.Errorf("mode must be readonly or writable, got %q", mode)
 			}
+			if source.Kind == store.SourceKindDocset && mode == "writable" {
+				return fmt.Errorf("docset mounts are read-only")
+			}
 
 			if err := validateMountSource(cmd.Context(), rawAdapter, source, remoteRef); err != nil {
 				return err

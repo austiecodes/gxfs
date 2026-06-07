@@ -104,6 +104,8 @@ func (f *fakeAdapter) RecordUsageEvent(_ context.Context, event store.UsageEvent
 type fakeRegistryStore struct {
 	mu            sync.Mutex
 	repoSnapshots [][]store.RepoInfo
+	docNamespaces []store.DocNamespace
+	docsets       []store.Docset
 	registerErr   error
 	listCalls     int
 	registerCalls int
@@ -155,11 +157,11 @@ func (f *fakeRegistryStore) registerCallCount() int {
 }
 
 func (f *fakeRegistryStore) ListDocNamespaces(context.Context) ([]store.DocNamespace, error) {
-	return []store.DocNamespace{}, nil
+	return append([]store.DocNamespace(nil), f.docNamespaces...), nil
 }
 
 func (f *fakeRegistryStore) ListDocsets(context.Context) ([]store.Docset, error) {
-	return []store.Docset{}, nil
+	return append([]store.Docset(nil), f.docsets...), nil
 }
 
 func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
@@ -376,6 +378,36 @@ func TestDynamicRegistryRoutesUnifiedRoot(t *testing.T) {
 	}
 	if len(resp.Nodes) != 1 || resp.Nodes[0].Path != "/repos/austiecodes/xxxx/docs" {
 		t.Fatalf("LS response = %+v, want localized unified path", resp)
+	}
+}
+
+func TestDynamicRegistryRoutesDocsetSource(t *testing.T) {
+	catalog := &fakeRegistryStore{
+		docsets: []store.Docset{{Name: "best-practices", Description: "curated"}},
+	}
+	adapters := map[string]*fakeAdapter{}
+	registry, err := NewDynamicRegistry(context.Background(), catalog, catalog, func(_ context.Context, source DynamicSource) (store.Adapter, error) {
+		adapter := &fakeAdapter{}
+		adapters[string(source.Kind)+"://"+source.Name] = adapter
+		return adapter, nil
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicRegistry() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/docset/cat?name=best-practices&path=/go/errors.md", nil)
+	rec := httptest.NewRecorder()
+
+	NewHandler(registry, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	adapter := adapters["docset://best-practices"]
+	if adapter == nil {
+		t.Fatal("adapter for docset://best-practices was not created")
+	}
+	if adapter.catReq.Repo != "best-practices" || adapter.catReq.Path != "/go/errors.md" {
+		t.Fatalf("cat req = %+v, want best-practices /go/errors.md", adapter.catReq)
 	}
 }
 

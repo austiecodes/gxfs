@@ -128,13 +128,11 @@ func (c *Client) MountSources(ctx context.Context) ([]store.MountSource, error) 
 
 func (c *Client) AdapterForSource(_ context.Context, source store.SourceRef) (store.Adapter, error) {
 	switch source.Kind {
-	case store.SourceKindRepo, store.SourceKindDocs:
+	case store.SourceKindRepo, store.SourceKindDocs, store.SourceKindDocset:
 		cp := *c
 		cp.sourceKind = source.Kind
 		cp.sourceName = source.Name
 		return &cp, nil
-	case store.SourceKindDocset:
-		return nil, fmt.Errorf("%w: %s", store.ErrNotSupported, source.String())
 	default:
 		return nil, fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
 	}
@@ -560,10 +558,8 @@ func (c *Client) url(repo, op string, q url.Values) (string, error) {
 func (c *Client) sourceForRepo(repo string) (store.SourceRef, error) {
 	if c.sourceKind != "" {
 		switch c.sourceKind {
-		case store.SourceKindRepo, store.SourceKindDocs:
+		case store.SourceKindRepo, store.SourceKindDocs, store.SourceKindDocset:
 			return store.SourceRef{Kind: c.sourceKind, Name: c.sourceName}, nil
-		case store.SourceKindDocset:
-			return store.SourceRef{}, fmt.Errorf("%w: %s", store.ErrNotSupported, c.sourceKind)
 		default:
 			return store.SourceRef{}, fmt.Errorf("%w: %s", store.ErrUnknownSource, c.sourceKind)
 		}
@@ -594,7 +590,9 @@ func (c *Client) urlForSource(source store.SourceRef, op string, q url.Values) (
 		escapedPath = escapedPrefix + "/v1/docs/" + url.PathEscape(op)
 		q.Set("name", source.Name)
 	case store.SourceKindDocset:
-		return "", fmt.Errorf("%w: %s", store.ErrNotSupported, source.String())
+		decodedPath = decodedPrefix + "/v1/docset/" + op
+		escapedPath = escapedPrefix + "/v1/docset/" + url.PathEscape(op)
+		q.Set("name", source.Name)
 	default:
 		return "", fmt.Errorf("%w: %s", store.ErrUnknownSource, source.String())
 	}

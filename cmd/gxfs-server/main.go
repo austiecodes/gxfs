@@ -64,6 +64,8 @@ func dynamicRegistryFromServerConfig(ctx context.Context, cfg config.ServerConfi
 			}
 		case store.SourceKindDocs:
 			return postgres.NewDocsNamespaceAdapter(pool, sourceCfg), nil
+		case store.SourceKindDocset:
+			return postgres.NewDocsetReadAdapter(pool, sourceCfg), nil
 		default:
 			return nil, fmt.Errorf("%w: %s", store.ErrNotSupported, source.Kind)
 		}
@@ -179,6 +181,7 @@ func apiRoutes(handler http.Handler) []rest.Route {
 		routes = append(routes,
 			rest.Route{Method: method, Path: "/v1/repos/:op", Handler: handler.ServeHTTP},
 			rest.Route{Method: method, Path: "/v1/docs/:op", Handler: handler.ServeHTTP},
+			rest.Route{Method: method, Path: "/v1/docset/:op", Handler: handler.ServeHTTP},
 		)
 	}
 	return routes

@@ -25,6 +25,7 @@ type migrationData struct {
 	DocNamespacePathsTable       string
 	DocsetsTable                 string
 	DocsetDocsTable              string
+	DocsetPathsView              string
 	LegacyCollectionsTable       string
 	LegacyCollectionDocsTable    string
 	LegacyCollectionsRegClass    string
@@ -166,6 +167,10 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 	if err != nil {
 		return migrationData{}, err
 	}
+	docsetPathsView, err := quoteTable(cfg.Schema, "gxfs_docset_paths")
+	if err != nil {
+		return migrationData{}, err
+	}
 	legacyCollectionsTable, err := quoteTable(cfg.Schema, "gxfs_collections")
 	if err != nil {
 		return migrationData{}, err
@@ -193,6 +198,7 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 		DocNamespacePathsTable:       docNamespacePathsTable,
 		DocsetsTable:                 docsetsTable,
 		DocsetDocsTable:              docsetDocsTable,
+		DocsetPathsView:              docsetPathsView,
 		LegacyCollectionsTable:       legacyCollectionsTable,
 		LegacyCollectionDocsTable:    legacyCollectionDocsTable,
 		LegacyCollectionsRegClass:    legacyCollectionsRegClass,
