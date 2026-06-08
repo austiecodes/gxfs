@@ -1,0 +1,27 @@
+[package]
+name = "gxfs"
+version.workspace = true
+edition.workspace = true
+description = "A Unix-style virtual filesystem for shared docs"
+license.workspace = true
+
+[[bin]]
+name = "gxfs"
+path = "src/main.rs"
+
+[features]
+default = ["server", "postgres"]
+server = ["dep:axum", "dep:tower-http"]
+postgres = ["dep:gxfs-postgres"]
+
+[dependencies]
+gxfs-core.workspace = true
+gxfs-postgres = { workspace = true, optional = true }
+clap.workspace = true
+tokio.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+axum = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
