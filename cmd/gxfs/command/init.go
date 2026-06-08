@@ -499,7 +499,11 @@ func renderGXFSSkillReference(name, raw, docsPath string) (string, error) {
 // project-level .claude/settings.json. It merges with existing settings without
 // overwriting other hooks or settings.
 func UpsertClaudeProjectHooks(dir string) error {
-	return upsertClaudeHooks(filepath.Join(dir, ".claude"))
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("resolve project dir: %w", err)
+	}
+	return upsertClaudeHooks(filepath.Join(absDir, ".claude"))
 }
 
 // UpsertClaudeUserHooks writes SessionStart and PreToolUse hooks into the
