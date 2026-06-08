@@ -97,7 +97,7 @@ func NewInitCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init [path]",
 		Short: "Initialize .gxfs config in a repo",
-		Long:  "Initialize .gxfs/settings.toml and .gxfs/mounts.toml in the target directory and add minimal agent instructions plus a local GXFS skill by default.",
+		Long:  "Initialize .gxfs/settings.toml and .gxfs/mounts.toml in the target directory, add agent instructions, install the GXFS skill to ~/.claude/skills/gxfs/ and ~/.codex/skills/gxfs/, and set up hooks in both user config dirs by default.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
@@ -195,38 +195,45 @@ func NewInitCommand() *cobra.Command {
 				}
 			}
 			if !noInstructions && modes.skill {
-				skillPath, err := writeGXFSSkill(dir, docsPath)
+				skillPaths, err := writeGXFSSkillToUserDir(docsPath)
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "updated GXFS skill in %s\n", skillPath)
+				for _, p := range skillPaths {
+					fmt.Fprintf(cmd.OutOrStdout(), "updated GXFS skill in %s\n", p)
+				}
 			}
 
-			if hookTarget == "claude" && hookScope == "project" {
-				if err := UpsertClaudeProjectHooks(dir); err != nil {
-					return err
+			if !noInstructions {
+				installClaude := hookTarget == "" || hookTarget == "claude"
+				installCodex := hookTarget == "" || hookTarget == "codex"
+
+				if installClaude && hookScope == "project" {
+					if err := UpsertClaudeProjectHooks(dir); err != nil {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "updated .claude/settings.json\n")
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "updated .claude/settings.json\n")
-			}
-			if hookTarget == "claude" && hookScope == "user" {
-				if err := UpsertClaudeUserHooks(); err != nil {
-					return err
+				if installClaude && hookScope == "user" {
+					if err := UpsertClaudeUserHooks(); err != nil {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "updated ~/.claude/settings.json\n")
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "updated ~/.claude/settings.json\n")
-			}
-			if hookTarget == "codex" && hookScope == "project" {
-				if err := UpsertCodexProjectHooks(dir); err != nil {
-					return err
+				if installCodex && hookScope == "project" {
+					if err := UpsertCodexProjectHooks(dir); err != nil {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "updated .codex/hooks.json\n")
+					fmt.Fprintf(cmd.OutOrStdout(), "Codex requires reviewing new project hooks. Run Codex and use /hooks to trust them.\n")
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "updated .codex/hooks.json\n")
-				fmt.Fprintf(cmd.OutOrStdout(), "Codex requires reviewing new project hooks. Run Codex and use /hooks to trust them.\n")
-			}
-			if hookTarget == "codex" && hookScope == "user" {
-				if err := UpsertCodexUserHooks(); err != nil {
-					return err
+				if installCodex && hookScope == "user" {
+					if err := UpsertCodexUserHooks(); err != nil {
+						return err
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "updated ~/.codex/hooks.json\n")
+					fmt.Fprintf(cmd.OutOrStdout(), "Codex requires reviewing new user hooks. Run Codex and use /hooks to trust them.\n")
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "updated ~/.codex/hooks.json\n")
-				fmt.Fprintf(cmd.OutOrStdout(), "Codex requires reviewing new user hooks. Run Codex and use /hooks to trust them.\n")
 			}
 
 			if registerRepo {
@@ -252,8 +259,8 @@ func NewInitCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&registerRepo, "register", false, "register the repository with gxfs-server")
 	cmd.Flags().StringVar(&docsPath, "docs", docsPath, "local docs root")
 	cmd.Flags().StringVar(&authMode, "auth", authMode, "auth mode: bearer or none")
-	cmd.Flags().StringVar(&hookTarget, "hook", "", "agent hook target: claude or codex")
-	cmd.Flags().StringVar(&hookScope, "scope", hookScope, "hook installation scope: user or project")
+	cmd.Flags().StringVar(&hookTarget, "hook", "", "restrict hooks to one agent: claude or codex (default: both)")
+	cmd.Flags().StringVar(&hookScope, "scope", hookScope, "hook scope: user or project")
 	return cmd
 }
 
@@ -343,8 +350,7 @@ func upsertInstructions(target, docsPath string) (string, error) {
 	return actual, nil
 }
 
-func writeGXFSSkill(dir, docsPath string) (string, error) {
-	skillDir := filepath.Join(dir, ".gxfs", "skills", "gxfs")
+func writeSkillToDir(skillDir, docsPath string) (string, error) {
 	target := filepath.Join(skillDir, "SKILL.md")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		return "", fmt.Errorf("create %s: %w", skillDir, err)
@@ -360,6 +366,25 @@ func writeGXFSSkill(dir, docsPath string) (string, error) {
 		return "", err
 	}
 	return target, nil
+}
+
+func writeGXFSSkillToUserDir(docsPath string) ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve user home: %w", err)
+	}
+	var paths []string
+	for _, dir := range []string{
+		filepath.Join(home, ".claude", "skills", "gxfs-skill"),
+		filepath.Join(home, ".codex", "skills", "gxfs-skill"),
+	} {
+		p, err := writeSkillToDir(dir, docsPath)
+		if err != nil {
+			return paths, err
+		}
+		paths = append(paths, p)
+	}
+	return paths, nil
 }
 
 func writeGXFSSkillReferences(skillDir, docsPath string) error {

@@ -1907,10 +1907,10 @@ func executeInit(t *testing.T, args ...string) string {
 	return out.String()
 }
 
-func readGXFSSkillBundle(t *testing.T, dir string) string {
+func readGXFSSkillBundle(t *testing.T, home string) string {
 	t.Helper()
 
-	skillDir := filepath.Join(dir, ".gxfs", "skills", "gxfs")
+	skillDir := filepath.Join(home, ".claude", "skills", "gxfs-skill")
 	var bundle strings.Builder
 	bundle.WriteString(readTextFile(t, filepath.Join(skillDir, "SKILL.md")))
 
@@ -1932,6 +1932,8 @@ func readGXFSSkillBundle(t *testing.T, dir string) string {
 }
 
 func TestInitWritesSettingsAgentsInstructionsAndSkill(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	got := executeInit(t, dir)
 
@@ -1964,7 +1966,7 @@ func TestInitWritesSettingsAgentsInstructionsAndSkill(t *testing.T) {
 	if !strings.Contains(agents, command.GXFSInstructionsStart) || !strings.Contains(agents, command.GXFSInstructionsEnd) {
 		t.Fatalf("AGENTS.md missing GXFS markers: %q", agents)
 	}
-	if !strings.Contains(agents, "gxfs tree docs -L 3") || !strings.Contains(agents, ".gxfs/skills/gxfs/SKILL.md") {
+	if !strings.Contains(agents, "gxfs tree docs -L 3") || !strings.Contains(agents, "~/.claude/skills/gxfs-skill/SKILL.md") {
 		t.Fatalf("AGENTS.md missing instruction content: %q", agents)
 	}
 	if strings.Contains(agents, "gxfs mount add") || strings.Contains(agents, "gxfs sync") || strings.Contains(agents, "gxfs write") {
@@ -1976,22 +1978,24 @@ func TestInitWritesSettingsAgentsInstructionsAndSkill(t *testing.T) {
 	if !strings.Contains(got, "updated GXFS skill in") {
 		t.Fatalf("init output = %q, want skill update", got)
 	}
-	skill := readTextFile(t, filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md"))
+	skill := readTextFile(t, filepath.Join(home, ".claude", "skills", "gxfs-skill", "SKILL.md"))
 	if !strings.Contains(skill, "references/discovery.md") || !strings.Contains(skill, "references/mounting.md") {
 		t.Fatalf("SKILL.md missing reference index: %q", skill)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "references", "browse.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "gxfs-skill", "references", "browse.md")); err != nil {
 		t.Fatalf("browse reference stat error = %v", err)
 	}
 }
 
 func TestInitModeSkillWritesSkillOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	got := executeInit(t, "--mode", "skill", "--docs", "knowledge", dir)
 
-	skillPath := filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")
+	skillPath := filepath.Join(home, ".claude", "skills", "gxfs-skill", "SKILL.md")
 	skill := readTextFile(t, skillPath)
-	bundle := readGXFSSkillBundle(t, dir)
+	bundle := readGXFSSkillBundle(t, home)
 	if !strings.Contains(skill, `references/discovery.md`) || !strings.Contains(skill, `references/setup-hooks-ops.md`) {
 		t.Fatalf("SKILL.md missing reference index: %q", skill)
 	}
@@ -2032,6 +2036,8 @@ func TestInitModeSkillWritesSkillOnly(t *testing.T) {
 }
 
 func TestInitModeMdSkillWritesMarkdownAndSkill(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	got := executeInit(t, "--mode", "md, skill", dir)
 
@@ -2039,7 +2045,7 @@ func TestInitModeMdSkillWritesMarkdownAndSkill(t *testing.T) {
 	if !strings.Contains(agents, command.GXFSInstructionsStart) {
 		t.Fatalf("AGENTS.md missing GXFS instructions: %q", agents)
 	}
-	bundle := readGXFSSkillBundle(t, dir)
+	bundle := readGXFSSkillBundle(t, home)
 	if !strings.Contains(bundle, `gxfs mount sources`) || !strings.Contains(bundle, `docs://openai-go-sdk/reference`) {
 		t.Fatalf("generated skill bundle missing GXFS content: %q", bundle)
 	}
@@ -2049,17 +2055,19 @@ func TestInitModeMdSkillWritesMarkdownAndSkill(t *testing.T) {
 }
 
 func TestInitModeMdWritesMarkdownOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	got := executeInit(t, "--mode", "md", dir)
 
 	agents := readTextFile(t, filepath.Join(dir, "AGENTS.md"))
-	if !strings.Contains(agents, ".gxfs/skills/gxfs/SKILL.md") || !strings.Contains(agents, "when present") {
+	if !strings.Contains(agents, "~/.claude/skills/gxfs-skill/SKILL.md") {
 		t.Fatalf("AGENTS.md missing conditional skill guidance: %q", agents)
 	}
 	if strings.Contains(agents, "gxfs mount add") || strings.Contains(agents, "gxfs sync") || strings.Contains(agents, "gxfs write") {
 		t.Fatalf("AGENTS.md should stay minimal in md mode, got: %q", agents)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "gxfs-skill", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatalf("SKILL.md exists after --mode md, err=%v", err)
 	}
 	if !strings.Contains(got, "updated GXFS instructions in") || strings.Contains(got, "updated GXFS skill in") {
@@ -2081,6 +2089,8 @@ func TestInitRejectsUnsupportedMode(t *testing.T) {
 }
 
 func TestInitReplacesExistingInstructions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	executeInit(t, dir)
 	executeInit(t, dir)
@@ -2095,6 +2105,8 @@ func TestInitReplacesExistingInstructions(t *testing.T) {
 }
 
 func TestInitAgentClaudeWritesClaudeMD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	executeInit(t, "--agent", "claude", dir)
 
@@ -2122,6 +2134,8 @@ func TestInitClaudeFlagRemoved(t *testing.T) {
 }
 
 func TestInitNoInstructionsOnlyWritesSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	executeInit(t, "--no-instructions", dir)
 
@@ -2134,19 +2148,21 @@ func TestInitNoInstructionsOnlyWritesSettings(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
 		t.Fatalf("AGENTS.md exists after --no-instructions, err=%v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "gxfs-skill", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatalf("SKILL.md exists after --no-instructions, err=%v", err)
 	}
 }
 
 func TestInitNoInstructionsSkipsSkillMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	executeInit(t, "--no-instructions", "--mode", "skill", dir)
 
 	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "settings.toml")); err != nil {
 		t.Fatalf("settings.toml stat error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".gxfs", "skills", "gxfs", "SKILL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "gxfs-skill", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatalf("SKILL.md exists after --no-instructions --mode skill, err=%v", err)
 	}
 }
@@ -2387,6 +2403,8 @@ func TestInitRejectsInvalidRepoNamesBeforeWriting(t *testing.T) {
 }
 
 func TestInitReportsResolvedSymlinkTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	claudePath := filepath.Join(dir, "CLAUDE.md")
 	if err := os.WriteFile(claudePath, []byte("# Claude\n"), 0o644); err != nil {
@@ -3956,6 +3974,8 @@ func TestCodexHooksInvalidJSON(t *testing.T) {
 }
 
 func TestInitHookCodexProject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	cmd := command.NewInitCommand()
 	cmd.SetArgs([]string{"--hook", "codex", "--scope", "project", dir})
@@ -4008,6 +4028,8 @@ func TestInitHookCodexDefaultUserScope(t *testing.T) {
 }
 
 func TestInitHookClaudeProject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	dir := t.TempDir()
 	cmd := command.NewInitCommand()
 	cmd.SetArgs([]string{"--hook", "claude", "--scope", "project", dir})
