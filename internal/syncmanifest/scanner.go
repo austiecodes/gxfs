@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 type LocalFile struct {

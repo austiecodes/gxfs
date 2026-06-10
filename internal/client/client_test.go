@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 func TestClientLSBuildsURLAndDecodesResponse(t *testing.T) {
@@ -18,8 +18,8 @@ func TestClientLSBuildsURLAndDecodesResponse(t *testing.T) {
 		if r.URL.Path != "/v1/repos/ls" {
 			t.Fatalf("path = %q, want /v1/repos/ls", r.URL.Path)
 		}
-		if r.URL.Query().Get("repo") != "gxfs" {
-			t.Fatalf("query repo = %q, want gxfs", r.URL.Query().Get("repo"))
+		if r.URL.Query().Get("repo") != "rolio" {
+			t.Fatalf("query repo = %q, want rolio", r.URL.Query().Get("repo"))
 		}
 		if r.URL.Query().Get("path") != "/docs" {
 			t.Fatalf("query path = %q, want /docs", r.URL.Query().Get("path"))
@@ -30,7 +30,7 @@ func TestClientLSBuildsURLAndDecodesResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := New(server.URL).LS(context.Background(), store.LSRequest{Repo: "gxfs", Path: "/docs"})
+	resp, err := New(server.URL).LS(context.Background(), store.LSRequest{Repo: "rolio", Path: "/docs"})
 	if err != nil {
 		t.Fatalf("LS() error = %v", err)
 	}
@@ -103,7 +103,7 @@ func TestClientMountSourcesBuildsURLAndDecodesResponse(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string][]store.MountSource{
 			"sources": {
-				{Ref: "repo://gxfs", Kind: store.SourceKindRepo, Name: "gxfs"},
+				{Ref: "repo://rolio", Kind: store.SourceKindRepo, Name: "rolio"},
 				{Ref: "repo://github%2Fopenai-go", Kind: store.SourceKindRepo, Name: "github/openai-go"},
 			},
 		})
@@ -114,7 +114,7 @@ func TestClientMountSourcesBuildsURLAndDecodesResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MountSources() error = %v", err)
 	}
-	if len(sources) != 2 || sources[0].Ref != "repo://gxfs" || sources[1].Name != "github/openai-go" {
+	if len(sources) != 2 || sources[0].Ref != "repo://rolio" || sources[1].Name != "github/openai-go" {
 		t.Fatalf("MountSources() = %+v, want decoded sources", sources)
 	}
 }
@@ -157,14 +157,14 @@ func TestClientRecordUsageEventPostsJSON(t *testing.T) {
 		if r.URL.Path != "/v1/usage-events" {
 			t.Fatalf("path = %q, want /v1/usage-events", r.URL.Path)
 		}
-		if got := r.Header.Get("X-Gxfs-Log-Id"); got != "log-1" {
-			t.Fatalf("X-Gxfs-Log-Id = %q, want log-1", got)
+		if got := r.Header.Get("X-Rolio-Log-Id"); got != "log-1" {
+			t.Fatalf("X-Rolio-Log-Id = %q, want log-1", got)
 		}
 		var body store.UsageEvent
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body.Command != "search" || body.ClientRepo != "gxfs" || body.DurationMs != 42 {
+		if body.Command != "search" || body.ClientRepo != "rolio" || body.DurationMs != 42 {
 			t.Fatalf("body = %+v, want search usage event", body)
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -176,7 +176,7 @@ func TestClientRecordUsageEventPostsJSON(t *testing.T) {
 	cli.SetLogID("log-1")
 	resp, err := cli.RecordUsageEvent(context.Background(), store.UsageEvent{
 		LogID:      "log-1",
-		ClientRepo: "gxfs",
+		ClientRepo: "rolio",
 		Command:    "search",
 		DurationMs: 42,
 	})
@@ -248,8 +248,8 @@ func TestClientAdapterForSourceRepoBuildsURL(t *testing.T) {
 		if r.URL.Path != "/v1/repos/stat" {
 			t.Fatalf("path = %q, want /v1/repos/stat", r.URL.Path)
 		}
-		if r.URL.Query().Get("repo") != "gxfs" {
-			t.Fatalf("query repo = %q, want gxfs", r.URL.Query().Get("repo"))
+		if r.URL.Query().Get("repo") != "rolio" {
+			t.Fatalf("query repo = %q, want rolio", r.URL.Query().Get("repo"))
 		}
 		if r.URL.Query().Get("path") != "/docs" {
 			t.Fatalf("query path = %q, want /docs", r.URL.Query().Get("path"))
@@ -262,7 +262,7 @@ func TestClientAdapterForSourceRepoBuildsURL(t *testing.T) {
 
 	adapter, err := New(server.URL).AdapterForSource(context.Background(), store.SourceRef{
 		Kind: store.SourceKindRepo,
-		Name: "gxfs",
+		Name: "rolio",
 	})
 	if err != nil {
 		t.Fatalf("AdapterForSource(repo) error = %v", err)
@@ -388,7 +388,7 @@ func TestClientGrepPassesPatternAndRegex(t *testing.T) {
 			t.Fatalf("path = %q, want grep endpoint", r.URL.Path)
 		}
 		q := r.URL.Query()
-		if q.Get("repo") != "gxfs" || q.Get("path") != "/" || q.Get("pattern") != "type Adapter" || q.Get("regex") != "true" {
+		if q.Get("repo") != "rolio" || q.Get("path") != "/" || q.Get("pattern") != "type Adapter" || q.Get("regex") != "true" {
 			t.Fatalf("query = %s, want path/pattern/regex", r.URL.RawQuery)
 		}
 		_ = json.NewEncoder(w).Encode(store.GrepResponse{
@@ -398,7 +398,7 @@ func TestClientGrepPassesPatternAndRegex(t *testing.T) {
 	defer server.Close()
 
 	resp, err := New(server.URL).Grep(context.Background(), store.GrepRequest{
-		Repo: "gxfs", Path: "/", Pattern: "type Adapter", Regex: true,
+		Repo: "rolio", Path: "/", Pattern: "type Adapter", Regex: true,
 	})
 	if err != nil {
 		t.Fatalf("Grep() error = %v", err)
@@ -508,7 +508,7 @@ func TestClientReturnsHTTPErrorBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := New(server.URL).Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "/missing"})
+	_, err := New(server.URL).Cat(context.Background(), store.CatRequest{Repo: "rolio", Path: "/missing"})
 	if err == nil {
 		t.Fatal("Cat() error = nil, want HTTP error")
 	}
@@ -667,8 +667,8 @@ func TestClientSearchParams(t *testing.T) {
 			t.Fatalf("path = %q, want /v1/repos/search", r.URL.Path)
 		}
 		q := r.URL.Query()
-		if q.Get("repo") != "gxfs" {
-			t.Fatalf("query repo = %q, want gxfs", q.Get("repo"))
+		if q.Get("repo") != "rolio" {
+			t.Fatalf("query repo = %q, want rolio", q.Get("repo"))
 		}
 		if q.Get("q") != "openai-go" {
 			t.Fatalf("query q = %q, want openai-go", q.Get("q"))
@@ -687,7 +687,7 @@ func TestClientSearchParams(t *testing.T) {
 	defer server.Close()
 
 	resp, err := New(server.URL).Search(context.Background(), store.SearchRequest{
-		Repo:  "gxfs",
+		Repo:  "rolio",
 		Query: "openai-go",
 		Path:  "/docs",
 		Limit: 10,
@@ -713,7 +713,7 @@ func TestClientCatWithoutIfNoneMatch(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL)
-	resp, err := c.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "/docs/readme.md"})
+	resp, err := c.Cat(context.Background(), store.CatRequest{Repo: "rolio", Path: "/docs/readme.md"})
 	if err != nil {
 		t.Fatalf("Cat error: %v", err)
 	}
@@ -739,7 +739,7 @@ func TestClientCatWithIfNoneMatchSendsHeader(t *testing.T) {
 
 	c := New(srv.URL)
 	_, err := c.Cat(context.Background(), store.CatRequest{
-		Repo:        "gxfs",
+		Repo:        "rolio",
 		Path:        "/docs/readme.md",
 		IfNoneMatch: "sha256:abc",
 	})
@@ -761,7 +761,7 @@ func TestClientCat304ReturnsErrNotModified(t *testing.T) {
 
 	c := New(srv.URL)
 	resp, err := c.Cat(context.Background(), store.CatRequest{
-		Repo:        "gxfs",
+		Repo:        "rolio",
 		Path:        "/docs/readme.md",
 		IfNoneMatch: "sha256:abc",
 	})
@@ -787,7 +787,7 @@ func TestClientCatErrorParsesJSONMessage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := New(server.URL).Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "/missing.md"})
+	_, err := New(server.URL).Cat(context.Background(), store.CatRequest{Repo: "rolio", Path: "/missing.md"})
 	if err == nil {
 		t.Fatal("expected error for 404, got nil")
 	}
@@ -810,7 +810,7 @@ func TestClient404MappedToErrNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := New(server.URL).Stat(context.Background(), store.StatRequest{Repo: "gxfs", Path: "/missing.md"})
+	_, err := New(server.URL).Stat(context.Background(), store.StatRequest{Repo: "rolio", Path: "/missing.md"})
 	if err == nil {
 		t.Fatal("expected error for 404, got nil")
 	}

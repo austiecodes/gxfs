@@ -9,23 +9,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 // BackfillResult reports the outcome of a document table backfill.
 type BackfillResult struct {
-	DocsInserted   int // total docs upserted into gxfs_docs
-	PathsInserted  int // total repo_paths upserted into gxfs_repo_paths
+	DocsInserted   int // total docs upserted into rolio_docs
+	PathsInserted  int // total repo_paths upserted into rolio_repo_paths
 	HashesComputed int // docs where content_hash was NULL and had to be computed
 }
 
 // BackfillDocs migrates all file data from the legacy path-centric tables
 // (vfs_nodes, vfs_content, vfs_repo_nodes) into the new document-centric
-// tables (gxfs_docs, gxfs_repo_paths).
+// tables (rolio_docs, rolio_repo_paths).
 //
 // The operation is idempotent: running it multiple times produces the same
-// result thanks to legacy_path UNIQUE on gxfs_docs and (repo, path) PRIMARY
-// KEY on gxfs_repo_paths.
+// result thanks to legacy_path UNIQUE on rolio_docs and (repo, path) PRIMARY
+// KEY on rolio_repo_paths.
 //
 // Each logical file gets its own doc row (no content dedup). Directories are
 // not migrated — they are implicit from path prefixes in the new schema.
@@ -208,7 +208,7 @@ func backfillSourceSQL(cfg Config) (string, error) {
 // "latest import snapshot", not a user edit. Revision tracking begins when
 // production writes go through the new doc adapter (post Phase 1A).
 func backfillDocInsertSQL(cfg Config) (string, error) {
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -227,7 +227,7 @@ func backfillDocInsertSQL(cfg Config) (string, error) {
 // Idempotent via (repo, path) PRIMARY KEY: on conflict, updates doc_id, size,
 // and mtime.
 func backfillPathInsertSQL(cfg Config) (string, error) {
-	pathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	pathsTable, err := quoteTable(cfg.Schema, "rolio_repo_paths")
 	if err != nil {
 		return "", err
 	}

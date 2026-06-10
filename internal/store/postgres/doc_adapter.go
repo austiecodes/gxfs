@@ -16,8 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/austiecodes/gxfs/internal/store"
-	"github.com/austiecodes/gxfs/internal/vfs"
+	"github.com/austiecodes/rolio/internal/store"
+	"github.com/austiecodes/rolio/internal/vfs"
 )
 
 // DocAdapter implements store.Adapter over the document-centric tables.
@@ -26,10 +26,10 @@ import (
 //  1. Structure queries (LS, Find, Stat, Tree): build a vfs.Tree from
 //     the configured doc binding table, then delegate to vfs.Tree methods.
 //     This guarantees exact behavioral compatibility with the old adapter.
-//  2. Content queries (Cat, Search, BatchHashes, Grep): query gxfs_docs
+//  2. Content queries (Cat, Search, BatchHashes, Grep): query rolio_docs
 //     directly for content, hashes, and full-text search.
 //
-// Write methods (Put, Delete, Edit) operate on gxfs_docs plus the configured
+// Write methods (Put, Delete, Edit) operate on rolio_docs plus the configured
 // binding table within transactions. Delete removes the binding only (doc
 // preserved for potential cross-scope references). Put/Edit increment revision.
 type DocAdapter struct {

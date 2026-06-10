@@ -10,10 +10,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
-// DocsetAdapter implements store.DocsetManager over gxfs_docsets and gxfs_docset_docs.
+// DocsetAdapter implements store.DocsetManager over rolio_docsets and rolio_docset_docs.
 type DocsetAdapter struct {
 	pool   *pgxpool.Pool
 	schema string
@@ -30,22 +30,22 @@ func NewDocsetAdapter(pool *pgxpool.Pool, schema string) *DocsetAdapter {
 }
 
 func (c *DocsetAdapter) docsetsTable() string {
-	tbl, _ := quoteTable(c.schema, "gxfs_docsets")
+	tbl, _ := quoteTable(c.schema, "rolio_docsets")
 	return tbl
 }
 
 func (c *DocsetAdapter) docsetDocsTable() string {
-	tbl, _ := quoteTable(c.schema, "gxfs_docset_docs")
+	tbl, _ := quoteTable(c.schema, "rolio_docset_docs")
 	return tbl
 }
 
 func (c *DocsetAdapter) docsTable() string {
-	tbl, _ := quoteTable(c.schema, "gxfs_docs")
+	tbl, _ := quoteTable(c.schema, "rolio_docs")
 	return tbl
 }
 
 func (c *DocsetAdapter) repoPathsTable() string {
-	tbl, _ := quoteTable(c.schema, "gxfs_repo_paths")
+	tbl, _ := quoteTable(c.schema, "rolio_repo_paths")
 	return tbl
 }
 
@@ -358,7 +358,7 @@ func isDuplicateKeyError(err error) bool {
 
 // isPathConflict checks if the duplicate key error is for the path constraint.
 func isPathConflict(err error) bool {
-	return err != nil && containsErrorMsg(err, "gxfs_docset_docs_pkey")
+	return err != nil && containsErrorMsg(err, "rolio_docset_docs_pkey")
 }
 
 func containsErrorMsg(err error, substr string) bool {

@@ -22,20 +22,20 @@
 #
 # Prerequisites:
 #   - PostgreSQL running on localhost:5432
-#   - gxfs-server binary built (go build ./cmd/gxfs-server)
+#   - rolio-server binary built (go build ./cmd/rolio-server)
 #
 # Usage:
-#   ./verify-docset.sh [path-to-gxfs-server-binary]
+#   ./verify-docset.sh [path-to-rolio-server-binary]
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
-BINARY="${1:-$(cd "${SCRIPT_DIR}/../.." && pwd)/bin/gxfs-server}"
+BINARY="${1:-$(cd "${SCRIPT_DIR}/../.." && pwd)/bin/rolio-server}"
 if [ ! -x "$BINARY" ]; then
     # Try go build
-    echo "Building gxfs-server..."
-    (cd "${SCRIPT_DIR}/../.." && go build -o bin/gxfs-server ./cmd/gxfs-server)
-    BINARY="${SCRIPT_DIR}/../../bin/gxfs-server"
+    echo "Building rolio-server..."
+    (cd "${SCRIPT_DIR}/../.." && go build -o bin/rolio-server ./cmd/rolio-server)
+    BINARY="${SCRIPT_DIR}/../../bin/rolio-server"
 fi
 
 echo "=== Phase #16: Docset API E2E Verification ==="
@@ -150,7 +150,7 @@ assert_status "Delete docset" "204" "$STATUS"
 curl_get "${SERVER_ADDR}/v1/docsets/best-practices"
 assert_status "Docset gone" "404" "$STATUS"
 # Verify members table is clean
-MEMBER_COUNT=$(db_exec "SELECT COUNT(*) FROM gxfs_docset_docs;")
+MEMBER_COUNT=$(db_exec "SELECT COUNT(*) FROM rolio_docset_docs;")
 if [ "$MEMBER_COUNT" = "0" ]; then
     printf "${GREEN}PASS${NC} Docset members cleaned up (count=0)\n"
     PASS_COUNT=$((PASS_COUNT + 1))
@@ -202,13 +202,13 @@ if [ -z "$DOC_ID" ] || [ "$DOC_ID" = "None" ]; then
     FAIL_COUNT=$((FAIL_COUNT + 1))
 else
 # Remove repo_path reference (simulating a delete that would orphan the doc)
-db_exec "DELETE FROM gxfs_repo_paths WHERE doc_id = '${DOC_ID}';"
+db_exec "DELETE FROM rolio_repo_paths WHERE doc_id = '${DOC_ID}';"
 # Age the doc past grace period
-db_exec "UPDATE gxfs_docs SET updated_at = NOW() - INTERVAL '2 hours' WHERE id = '${DOC_ID}';"
+db_exec "UPDATE rolio_docs SET updated_at = NOW() - INTERVAL '2 hours' WHERE id = '${DOC_ID}';"
 # Run GC via server binary
-GC_OUTPUT=$(GXFS_SERVER_CONFIG="$SERVER_CONFIG" "$BINARY" gc --force 2>&1 || true)
+GC_OUTPUT=$(ROLIO_SERVER_CONFIG="$SERVER_CONFIG" "$BINARY" gc --force 2>&1 || true)
 # Doc should still exist (protected by docset membership)
-DOC_EXISTS=$(db_exec "SELECT COUNT(*) FROM gxfs_docs WHERE id = '${DOC_ID}';")
+DOC_EXISTS=$(db_exec "SELECT COUNT(*) FROM rolio_docs WHERE id = '${DOC_ID}';")
 if [ "$DOC_EXISTS" = "1" ]; then
     printf "${GREEN}PASS${NC} GC protection: docset membership prevents orphan GC\n"
     PASS_COUNT=$((PASS_COUNT + 1))

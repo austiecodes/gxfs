@@ -1,13 +1,13 @@
 # e2e/verify — Manual E2E Verification Scripts
 
-Shell-based end-to-end verification scripts for gxfs-server. These scripts
+Shell-based end-to-end verification scripts for rolio-server. These scripts
 test real server behavior against a real PostgreSQL database (no mocks).
 
 ## Prerequisites
 
 - PostgreSQL running on `localhost:5432`
 - Your OS user can `createdb` (for test DB setup/teardown)
-- Go toolchain (scripts auto-build `gxfs-server` if not found)
+- Go toolchain (scripts auto-build `rolio-server` if not found)
 - `curl`, `python3` (for JSON parsing)
 
 ## Directory Structure
@@ -45,7 +45,7 @@ done
 Pass a custom binary path:
 
 ```bash
-./verify-docset.sh /path/to/gxfs-server
+./verify-docset.sh /path/to/rolio-server
 ```
 
 ## Configuration
@@ -55,16 +55,16 @@ Environment variables (all optional, with defaults):
 | Variable      | Default          | Description                    |
 |---------------|------------------|--------------------------------|
 | VERIFY_PORT   | 17635            | Server listen port             |
-| VERIFY_DB     | gxfs_verify      | Test database name             |
+| VERIFY_DB     | rolio_verify      | Test database name             |
 | VERIFY_USER   | $(whoami)        | PostgreSQL user                |
-| VERIFY_DIR    | /tmp/gxfs-verify | Working directory for configs  |
+| VERIFY_DIR    | /tmp/rolio-verify | Working directory for configs  |
 
 ## What These Scripts Do
 
 Each script:
 
 1. **Resets** the test database (DROP + CREATE)
-2. **Starts** a fresh `gxfs-server` instance with a generated config
+2. **Starts** a fresh `rolio-server` instance with a generated config
 3. **Seeds** test data via the server API
 4. **Executes** each scenario (curl requests + assertions)
 5. **Prints** PASS/FAIL per assertion with a final summary

@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/austiecodes/gxfs/internal/store/postgres"
+	"github.com/austiecodes/rolio/internal/store/postgres"
 )
 
 // TestGCDryRunForce tests the GC dry-run and force modes.
@@ -18,10 +18,10 @@ func TestGCDryRunForce(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-gc-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-gc-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := e2ePostgresConfig(dsn, "test-repo")
@@ -53,7 +53,7 @@ func TestGCDryRunForce(t *testing.T) {
 
 	// Verify orphans still exist after dry-run
 	var countAfterDryRun int
-	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM gxfs_docs WHERE id NOT IN (SELECT doc_id FROM gxfs_repo_paths WHERE doc_id IS NOT NULL)").Scan(&countAfterDryRun)
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM rolio_docs WHERE id NOT IN (SELECT doc_id FROM rolio_repo_paths WHERE doc_id IS NOT NULL)").Scan(&countAfterDryRun)
 	if err != nil {
 		t.Fatalf("count after dry-run: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestGCDryRunForce(t *testing.T) {
 
 	// Verify orphans are gone
 	var countAfterForce int
-	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM gxfs_docs WHERE id NOT IN (SELECT doc_id FROM gxfs_repo_paths WHERE doc_id IS NOT NULL)").Scan(&countAfterForce)
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM rolio_docs WHERE id NOT IN (SELECT doc_id FROM rolio_repo_paths WHERE doc_id IS NOT NULL)").Scan(&countAfterForce)
 	if err != nil {
 		t.Fatalf("count after force: %v", err)
 	}
@@ -89,10 +89,10 @@ func TestGCGracePeriod(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-gc-grace-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-gc-grace-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := e2ePostgresConfig(dsn, "test-repo")
@@ -104,7 +104,7 @@ func TestGCGracePeriod(t *testing.T) {
 
 	// Insert an orphan doc with old updated_at (simulating an old orphan)
 	_, err := pool.Exec(ctx, `
-		INSERT INTO gxfs_docs (id, title, content, content_hash, updated_at)
+		INSERT INTO rolio_docs (id, title, content, content_hash, updated_at)
 		VALUES (gen_random_uuid(), 'old-orphan', 'old content', 'hash1', NOW() - INTERVAL '2 hours')
 	`)
 	if err != nil {
@@ -113,7 +113,7 @@ func TestGCGracePeriod(t *testing.T) {
 
 	// Insert an orphan doc with recent updated_at (should be protected by grace period)
 	_, err = pool.Exec(ctx, `
-		INSERT INTO gxfs_docs (id, title, content, content_hash, updated_at)
+		INSERT INTO rolio_docs (id, title, content, content_hash, updated_at)
 		VALUES (gen_random_uuid(), 'recent-orphan', 'recent content', 'hash2', NOW())
 	`)
 	if err != nil {
@@ -134,7 +134,7 @@ func TestGCGracePeriod(t *testing.T) {
 
 	// Verify recent doc still exists
 	var remaining int
-	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM gxfs_docs WHERE title = 'recent-orphan'").Scan(&remaining)
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM rolio_docs WHERE title = 'recent-orphan'").Scan(&remaining)
 	if err != nil {
 		t.Fatalf("count remaining: %v", err)
 	}
@@ -148,10 +148,10 @@ func TestGCDocsetRefs(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-gc-docset-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-gc-docset-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := e2ePostgresConfig(dsn, "test-repo")
@@ -164,7 +164,7 @@ func TestGCDocsetRefs(t *testing.T) {
 	// Create a docset
 	var docsetID string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO gxfs_docsets (id, name, description, visibility)
+		INSERT INTO rolio_docsets (id, name, description, visibility)
 		VALUES (gen_random_uuid(), 'test-docset', 'test', 'private')
 		RETURNING id
 	`).Scan(&docsetID)
@@ -175,7 +175,7 @@ func TestGCDocsetRefs(t *testing.T) {
 	// Create an orphan doc
 	var docID string
 	err = pool.QueryRow(ctx, `
-		INSERT INTO gxfs_docs (id, title, content, content_hash, updated_at)
+		INSERT INTO rolio_docs (id, title, content, content_hash, updated_at)
 		VALUES (gen_random_uuid(), 'docset-doc', 'content', 'hash1', NOW() - INTERVAL '2 hours')
 		RETURNING id
 	`).Scan(&docID)
@@ -185,7 +185,7 @@ func TestGCDocsetRefs(t *testing.T) {
 
 	// Reference the doc from a docset
 	_, err = pool.Exec(ctx, `
-		INSERT INTO gxfs_docset_docs (docset_id, doc_id, path)
+		INSERT INTO rolio_docset_docs (docset_id, doc_id, path)
 		VALUES ($1, $2, '/docset-doc.md')
 	`, docsetID, docID)
 	if err != nil {
@@ -211,10 +211,10 @@ func TestGCRepoPathRefs(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-gc-repo-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-gc-repo-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := e2ePostgresConfig(dsn, "test-repo")
@@ -227,7 +227,7 @@ func TestGCRepoPathRefs(t *testing.T) {
 	// Create a doc with a repo_path reference
 	var docID string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO gxfs_docs (id, title, content, content_hash, updated_at)
+		INSERT INTO rolio_docs (id, title, content, content_hash, updated_at)
 		VALUES (gen_random_uuid(), 'active-doc', 'content', 'hash1', NOW() - INTERVAL '2 hours')
 		RETURNING id
 	`).Scan(&docID)
@@ -236,7 +236,7 @@ func TestGCRepoPathRefs(t *testing.T) {
 	}
 
 	_, err = pool.Exec(ctx, `
-		INSERT INTO gxfs_repo_paths (repo, path, doc_id, size, mtime)
+		INSERT INTO rolio_repo_paths (repo, path, doc_id, size, mtime)
 		VALUES ('test-repo', '/active-doc.md', $1, 100, NOW())
 	`, docID)
 	if err != nil {
@@ -264,7 +264,7 @@ func insertOrphanDocs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cou
 
 	for i := 0; i < count; i++ {
 		_, err := pool.Exec(ctx, `
-			INSERT INTO gxfs_docs (id, title, legacy_path, content, content_hash, updated_at)
+			INSERT INTO rolio_docs (id, title, legacy_path, content, content_hash, updated_at)
 			VALUES (gen_random_uuid(), $1, $2, 'orphan content', $3, NOW() - INTERVAL '2 hours')
 		`, fmt.Sprintf("orphan-%d", i), fmt.Sprintf("/orphan-%d.md", i), fmt.Sprintf("hash-%d", i))
 		if err != nil {

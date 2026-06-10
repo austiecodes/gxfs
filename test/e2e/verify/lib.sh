@@ -17,11 +17,11 @@ SKIP_COUNT=0
 
 # --- Config ---
 VERIFY_PORT="${VERIFY_PORT:-17635}"
-VERIFY_DB="${VERIFY_DB:-gxfs_verify}"
+VERIFY_DB="${VERIFY_DB:-rolio_verify}"
 VERIFY_USER="${VERIFY_USER:-$(whoami)}"
-VERIFY_DIR="${VERIFY_DIR:-/tmp/gxfs-verify}"
+VERIFY_DIR="${VERIFY_DIR:-/tmp/rolio-verify}"
 SERVER_ADDR="http://127.0.0.1:${VERIFY_PORT}"
-REPO1="github.com/test/gxfs-test-repo"
+REPO1="github.com/test/rolio-test-repo"
 REPO2="github.com/test/other-repo"
 SERVER_PID=""
 SERVER_LOG="${VERIFY_DIR}/server.log"
@@ -188,7 +188,7 @@ register_repo() {
 start_server() {
     local binary="$1"
     write_server_config
-    GXFS_SERVER_CONFIG="$SERVER_CONFIG" "$binary" > "$SERVER_LOG" 2>&1 &
+    ROLIO_SERVER_CONFIG="$SERVER_CONFIG" "$binary" > "$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
     # Wait for server to be ready
     local retries=30

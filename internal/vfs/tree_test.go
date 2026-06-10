@@ -10,7 +10,7 @@ func newTestTree(t *testing.T) *Tree {
 	t.Helper()
 
 	tree, err := New([]File{
-		{Path: "/docs/readme.md", Content: "# Readme\nhello gxfs\n"},
+		{Path: "/docs/readme.md", Content: "# Readme\nhello rolio\n"},
 		{Path: "/docs/go/main.go", Content: "package main\n\ntype Adapter interface{}\n"},
 		{Path: "/api.md", Content: "api docs\n"},
 	})
@@ -76,7 +76,7 @@ func TestCatReturnsExactContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cat() error = %v", err)
 	}
-	want := "# Readme\nhello gxfs\n"
+	want := "# Readme\nhello rolio\n"
 	if got != want {
 		t.Fatalf("Cat() = %q, want %q", got, want)
 	}

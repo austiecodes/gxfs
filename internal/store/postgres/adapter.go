@@ -15,8 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/austiecodes/gxfs/internal/store"
-	"github.com/austiecodes/gxfs/internal/vfs"
+	"github.com/austiecodes/rolio/internal/store"
+	"github.com/austiecodes/rolio/internal/vfs"
 )
 
 type Config struct {

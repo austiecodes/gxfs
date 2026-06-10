@@ -28,7 +28,7 @@ func TestScanLocalDirComputesHashAndRelativePaths(t *testing.T) {
 }
 
 func TestManifestSaveLoadAndUpsert(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".gxfs", "manifest.toml")
+	path := filepath.Join(t.TempDir(), ".rolio", "manifest.toml")
 	manifest := Upsert(Manifest{}, []Entry{
 		{Local: "docs/b.md", RemoteDoc: "repo://self/docs/b.md", ContentHash: "sha256:b"},
 		{Local: "docs/a.md", RemoteDoc: "repo://self/docs/a.md", ContentHash: "sha256:a"},

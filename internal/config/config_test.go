@@ -20,14 +20,14 @@ func writeConfig(t *testing.T, name, content string) string {
 func TestLoadCLIConfig(t *testing.T) {
 	path := writeConfig(t, "settings.toml", `
 version = 1
-repo = "gxfs"
+repo = "rolio"
 
 [server]
 addr = "http://127.0.0.1:7635"
 
 [auth]
 mode = "bearer"
-token_env = "GXFS_TOKEN"
+token_env = "ROLIO_TOKEN"
 
 [mount]
 include = ["/go", "/docs"]
@@ -46,13 +46,13 @@ materialize = "explicit"
 	if err != nil {
 		t.Fatalf("LoadCLI() error = %v", err)
 	}
-	if cfg.Version != 1 || cfg.Repo != "gxfs" || cfg.Server.Addr != "http://127.0.0.1:7635" {
+	if cfg.Version != 1 || cfg.Repo != "rolio" || cfg.Server.Addr != "http://127.0.0.1:7635" {
 		t.Fatalf("LoadCLI() = %+v, want version, repo and server", cfg)
 	}
 	if len(cfg.Mount.Include) != 2 || cfg.Mount.Exclude[1] != "generated/**" {
 		t.Fatalf("LoadCLI().Mount = %+v, want include/exclude", cfg.Mount)
 	}
-	if cfg.Auth.Mode != "bearer" || cfg.Auth.TokenEnv != "GXFS_TOKEN" {
+	if cfg.Auth.Mode != "bearer" || cfg.Auth.TokenEnv != "ROLIO_TOKEN" {
 		t.Fatalf("LoadCLI().Auth = %+v, want bearer token env", cfg.Auth)
 	}
 	if cfg.Cache.MetadataTTL != "5m" || cfg.Cache.ContentTTL != "24h" || cfg.Cache.Materialize != "explicit" {
@@ -65,7 +65,7 @@ materialize = "explicit"
 
 func TestLoadCLIConfigDefaultsDocsPath(t *testing.T) {
 	path := writeConfig(t, "settings.toml", `
-repo = "gxfs"
+repo = "rolio"
 
 [server]
 addr = "http://127.0.0.1:7635"
@@ -91,7 +91,7 @@ addr = "http://127.0.0.1:7635"
 
 func TestLoadCLIConfigCleansLegacyDocsPath(t *testing.T) {
 	path := writeConfig(t, "settings.toml", `
-repo = "gxfs"
+repo = "rolio"
 
 [server]
 addr = "http://127.0.0.1:7635"
@@ -111,7 +111,7 @@ path = "/internal-docs"
 
 func TestLoadCLIRejectsBackendConfig(t *testing.T) {
 	path := writeConfig(t, "settings.toml", `
-repo = "gxfs"
+repo = "rolio"
 
 [server]
 addr = "http://127.0.0.1:7635"
@@ -128,7 +128,7 @@ type = "postgres"
 
 func TestLoadCLIRejectsUnsupportedAuthMode(t *testing.T) {
 	path := writeConfig(t, "settings.toml", `
-repo = "gxfs"
+repo = "rolio"
 
 [server]
 addr = "http://127.0.0.1:7635"
@@ -145,7 +145,7 @@ mode = "jwt"
 
 func TestLoadCLIRejectsUnsupportedMaterialize(t *testing.T) {
 	path := writeConfig(t, "settings.toml", `
-repo = "gxfs"
+repo = "rolio"
 
 [server]
 addr = "http://127.0.0.1:7635"
@@ -207,7 +207,7 @@ mode = "admin"
 }
 
 func TestDefaultMountsFromCLIConfig(t *testing.T) {
-	cfg := CLIConfig{Repo: "gxfs", Docs: Docs{Path: "docs"}}
+	cfg := CLIConfig{Repo: "rolio", Docs: Docs{Path: "docs"}}
 	mounts := DefaultMounts(cfg)
 	if mounts.Version != 1 || len(mounts.Mounts) != 1 {
 		t.Fatalf("DefaultMounts() = %+v, want one mount", mounts)
@@ -219,7 +219,7 @@ func TestDefaultMountsFromCLIConfig(t *testing.T) {
 }
 
 func TestLoadServerConfigExpandsEnv(t *testing.T) {
-	t.Setenv("GXFS_POSTGRES_DSN", "postgres://user:pass@localhost/gxfs")
+	t.Setenv("ROLIO_POSTGRES_DSN", "postgres://user:pass@localhost/rolio")
 
 	path := writeConfig(t, "server.toml", `
 addr = ":7635"
@@ -228,7 +228,7 @@ addr = ":7635"
 type = "postgres"
 
 [backend.postgres]
-dsn = "${GXFS_POSTGRES_DSN}"
+dsn = "${ROLIO_POSTGRES_DSN}"
 schema = "public"
 `)
 
@@ -239,7 +239,7 @@ schema = "public"
 	if cfg.Addr != ":7635" || cfg.Backend.Type != "postgres" {
 		t.Fatalf("LoadServer() = %+v, want addr and postgres backend", cfg)
 	}
-	if cfg.Backend.Postgres.DSN != "postgres://user:pass@localhost/gxfs" {
+	if cfg.Backend.Postgres.DSN != "postgres://user:pass@localhost/rolio" {
 		t.Fatalf("dsn = %q, want expanded env", cfg.Backend.Postgres.DSN)
 	}
 	if cfg.Registry.RefreshInterval != "10s" {
@@ -255,7 +255,7 @@ addr = ":7635"
 type = "postgres"
 
 [backend.postgres]
-dsn = "postgres://localhost/gxfs"
+dsn = "postgres://localhost/rolio"
 schema = "public"
 nodes_table = "my_nodes"
 content_table = "my_content"
@@ -300,13 +300,13 @@ func TestLoadServerRejectsLegacyRegistrySections(t *testing.T) {
 addr = ":7635"
 
 [[repos]]
-name = "gxfs"
+name = "rolio"
 
 [backend]
 type = "doc_postgres"
 
 [backend.postgres]
-dsn = "postgres://localhost/gxfs"
+dsn = "postgres://localhost/rolio"
 `,
 			wantErr: "server config repos are no longer supported",
 		},
@@ -322,7 +322,7 @@ name = "shared"
 type = "doc_postgres"
 
 [backend.postgres]
-dsn = "postgres://localhost/gxfs"
+dsn = "postgres://localhost/rolio"
 `,
 			wantErr: "server config docs namespaces are no longer supported",
 		},

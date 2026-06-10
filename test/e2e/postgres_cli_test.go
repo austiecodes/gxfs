@@ -17,24 +17,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
-func TestGXFSPostgresServerCLI(t *testing.T) {
+func TestROLIOPostgresServerCLI(t *testing.T) {
 	requireDocker(t)
 
 	repoRoot := repositoryRoot(t)
 	tmp := t.TempDir()
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-e2e-%d-%d", os.Getpid(), time.Now().UnixNano())
+	containerName := fmt.Sprintf("rolio-e2e-%d-%d", os.Getpid(), time.Now().UnixNano())
 	startPostgres(t, containerName, pgPort)
 	seedPostgres(t, containerName)
 
-	cliPath := filepath.Join(tmp, "gxfs")
-	serverPath := filepath.Join(tmp, "gxfs-server")
-	buildBinary(t, repoRoot, cliPath, "./cmd/gxfs")
-	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
+	cliPath := filepath.Join(tmp, "rolio")
+	serverPath := filepath.Join(tmp, "rolio-server")
+	buildBinary(t, repoRoot, cliPath, "./cmd/rolio")
+	buildBinary(t, repoRoot, serverPath, "./cmd/rolio-server")
 
 	serverPort := freePort(t)
 	serverConfig := filepath.Join(tmp, "conf", "server.toml")
@@ -44,9 +44,9 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
 	registerRepo(t, serverPort, "e2e-test")
 
-	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
-	cliMounts := filepath.Join(tmp, ".gxfs", "mounts.toml")
-	os.MkdirAll(filepath.Join(tmp, ".gxfs"), 0o755)
+	cliConfig := filepath.Join(tmp, ".rolio", "settings.toml")
+	cliMounts := filepath.Join(tmp, ".rolio", "mounts.toml")
+	os.MkdirAll(filepath.Join(tmp, ".rolio"), 0o755)
 	writeFile(t, cliConfig, cliConfigText(serverPort))
 	writeFile(t, cliMounts, cliMountsText())
 
@@ -78,7 +78,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		{
 			name: "cat returns exact content",
 			args: []string{"cat", "/docs/readme.md"},
-			want: "# GXFS Docs\nThis document mentions Adapter.\n",
+			want: "# ROLIO Docs\nThis document mentions Adapter.\n",
 		},
 		{
 			name: "grep searches postgres-backed content",
@@ -106,7 +106,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := runCLI(t, repoRoot, cliPath, cliConfig, tt.args...)
 			if got != tt.want {
-				t.Fatalf("gxfs %s output = %q, want %q", strings.Join(tt.args, " "), got, tt.want)
+				t.Fatalf("rolio %s output = %q, want %q", strings.Join(tt.args, " "), got, tt.want)
 			}
 		})
 	}
@@ -166,27 +166,27 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 
 	t.Run("sync push uploads local docs and writes manifest", func(t *testing.T) {
 		projectDir := filepath.Join(tmp, "sync-project")
-		if err := os.MkdirAll(filepath.Join(projectDir, ".gxfs"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(projectDir, ".rolio"), 0o755); err != nil {
 			t.Fatalf("mkdir sync project config: %v", err)
 		}
 		if err := os.MkdirAll(filepath.Join(projectDir, "docs", "sync"), 0o755); err != nil {
 			t.Fatalf("mkdir sync docs: %v", err)
 		}
-		syncConfig := filepath.Join(projectDir, ".gxfs", "settings.toml")
-		syncMounts := filepath.Join(projectDir, ".gxfs", "mounts.toml")
+		syncConfig := filepath.Join(projectDir, ".rolio", "settings.toml")
+		syncMounts := filepath.Join(projectDir, ".rolio", "mounts.toml")
 		writeFile(t, syncConfig, cliConfigText(serverPort))
 		writeFile(t, syncMounts, cliMountsText())
 		writeFile(t, filepath.Join(projectDir, "docs", "sync", "a.md"), "synced alpha")
 
 		got := runCLIInDir(t, projectDir, cliPath, syncConfig, "sync", "push", "docs")
-		if !strings.Contains(got, "pushed 1 file") || !strings.Contains(got, "updated .gxfs/manifest.toml") {
+		if !strings.Contains(got, "pushed 1 file") || !strings.Contains(got, "updated .rolio/manifest.toml") {
 			t.Fatalf("sync push output = %q, want pushed count and manifest update", got)
 		}
 		cat := runCLIInDir(t, projectDir, cliPath, syncConfig, "cat", "/docs/sync/a.md")
 		if cat != "synced alpha" {
 			t.Fatalf("cat after sync push = %q, want synced alpha", cat)
 		}
-		manifest, err := os.ReadFile(filepath.Join(projectDir, ".gxfs", "manifest.toml"))
+		manifest, err := os.ReadFile(filepath.Join(projectDir, ".rolio", "manifest.toml"))
 		if err != nil {
 			t.Fatalf("read manifest: %v", err)
 		}
@@ -199,11 +199,11 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/pull/a.md", "pulled alpha")
 
 		projectDir := filepath.Join(tmp, "pull-project")
-		if err := os.MkdirAll(filepath.Join(projectDir, ".gxfs"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(projectDir, ".rolio"), 0o755); err != nil {
 			t.Fatalf("mkdir pull project config: %v", err)
 		}
-		pullConfig := filepath.Join(projectDir, ".gxfs", "settings.toml")
-		pullMounts := filepath.Join(projectDir, ".gxfs", "mounts.toml")
+		pullConfig := filepath.Join(projectDir, ".rolio", "settings.toml")
+		pullMounts := filepath.Join(projectDir, ".rolio", "mounts.toml")
 		writeFile(t, pullConfig, cliConfigText(serverPort))
 		writeFile(t, pullMounts, cliMountsText())
 
@@ -215,7 +215,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		if materialized != "pulled alpha" {
 			t.Fatalf("materialized file = %q, want pulled alpha", materialized)
 		}
-		manifest, err := os.ReadFile(filepath.Join(projectDir, ".gxfs", "manifest.toml"))
+		manifest, err := os.ReadFile(filepath.Join(projectDir, ".rolio", "manifest.toml"))
 		if err != nil {
 			t.Fatalf("read manifest: %v", err)
 		}
@@ -228,11 +228,11 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		runCLI(t, repoRoot, cliPath, cliConfig, "write", "/docs/materialize/a.md", "materialize alpha")
 
 		projectDir := filepath.Join(tmp, "materialize-project")
-		if err := os.MkdirAll(filepath.Join(projectDir, ".gxfs"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(projectDir, ".rolio"), 0o755); err != nil {
 			t.Fatalf("mkdir materialize project config: %v", err)
 		}
-		matConfig := filepath.Join(projectDir, ".gxfs", "settings.toml")
-		matMounts := filepath.Join(projectDir, ".gxfs", "mounts.toml")
+		matConfig := filepath.Join(projectDir, ".rolio", "settings.toml")
+		matMounts := filepath.Join(projectDir, ".rolio", "mounts.toml")
 		writeFile(t, matConfig, cliConfigText(serverPort))
 		writeFile(t, matMounts, cliMountsText())
 
@@ -264,7 +264,7 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(projectDir, "docs", "materialize")); err != nil {
 			t.Fatalf("request root dir stat error = %v, want preserved", err)
 		}
-		manifest, err := os.ReadFile(filepath.Join(projectDir, ".gxfs", "manifest.toml"))
+		manifest, err := os.ReadFile(filepath.Join(projectDir, ".rolio", "manifest.toml"))
 		if err != nil {
 			t.Fatalf("read manifest: %v", err)
 		}
@@ -274,20 +274,20 @@ func TestGXFSPostgresServerCLI(t *testing.T) {
 	})
 }
 
-func TestGXFSPostgresAutoMigratesEmptyDatabase(t *testing.T) {
+func TestROLIOPostgresAutoMigratesEmptyDatabase(t *testing.T) {
 	requireDocker(t)
 
 	repoRoot := repositoryRoot(t)
 	tmp := t.TempDir()
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-e2e-migrate-%d-%d", os.Getpid(), time.Now().UnixNano())
+	containerName := fmt.Sprintf("rolio-e2e-migrate-%d-%d", os.Getpid(), time.Now().UnixNano())
 	startPostgres(t, containerName, pgPort)
 
-	cliPath := filepath.Join(tmp, "gxfs")
-	serverPath := filepath.Join(tmp, "gxfs-server")
-	buildBinary(t, repoRoot, cliPath, "./cmd/gxfs")
-	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
+	cliPath := filepath.Join(tmp, "rolio")
+	serverPath := filepath.Join(tmp, "rolio-server")
+	buildBinary(t, repoRoot, cliPath, "./cmd/rolio")
+	buildBinary(t, repoRoot, serverPath, "./cmd/rolio-server")
 
 	serverPort := freePort(t)
 	serverConfig := filepath.Join(tmp, "conf", "server.toml")
@@ -297,9 +297,9 @@ func TestGXFSPostgresAutoMigratesEmptyDatabase(t *testing.T) {
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
 	registerRepo(t, serverPort, "e2e-test")
 
-	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
-	cliMounts := filepath.Join(tmp, ".gxfs", "mounts.toml")
-	os.MkdirAll(filepath.Join(tmp, ".gxfs"), 0o755)
+	cliConfig := filepath.Join(tmp, ".rolio", "settings.toml")
+	cliMounts := filepath.Join(tmp, ".rolio", "mounts.toml")
+	os.MkdirAll(filepath.Join(tmp, ".rolio"), 0o755)
 	writeFile(t, cliConfig, cliConfigText(serverPort))
 	writeFile(t, cliMounts, cliMountsText())
 
@@ -310,20 +310,20 @@ func TestGXFSPostgresAutoMigratesEmptyDatabase(t *testing.T) {
 	}
 }
 
-func TestGXFSPostgresServerRoutesMultipleRepos(t *testing.T) {
+func TestROLIOPostgresServerRoutesMultipleRepos(t *testing.T) {
 	requireDocker(t)
 
 	repoRoot := repositoryRoot(t)
 	tmp := t.TempDir()
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-e2e-multirepo-%d-%d", os.Getpid(), time.Now().UnixNano())
+	containerName := fmt.Sprintf("rolio-e2e-multirepo-%d-%d", os.Getpid(), time.Now().UnixNano())
 	startPostgres(t, containerName, pgPort)
 
-	cliPath := filepath.Join(tmp, "gxfs")
-	serverPath := filepath.Join(tmp, "gxfs-server")
-	buildBinary(t, repoRoot, cliPath, "./cmd/gxfs")
-	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
+	cliPath := filepath.Join(tmp, "rolio")
+	serverPath := filepath.Join(tmp, "rolio-server")
+	buildBinary(t, repoRoot, cliPath, "./cmd/rolio")
+	buildBinary(t, repoRoot, serverPath, "./cmd/rolio-server")
 
 	serverPort := freePort(t)
 	serverConfig := filepath.Join(tmp, "conf", "server.toml")
@@ -334,10 +334,10 @@ func TestGXFSPostgresServerRoutesMultipleRepos(t *testing.T) {
 	registerRepo(t, serverPort, "alpha")
 	registerRepo(t, serverPort, "beta")
 
-	alphaConfig := filepath.Join(tmp, "alpha", ".gxfs", "settings.toml")
-	alphaMounts := filepath.Join(tmp, "alpha", ".gxfs", "mounts.toml")
-	betaConfig := filepath.Join(tmp, "beta", ".gxfs", "settings.toml")
-	betaMounts := filepath.Join(tmp, "beta", ".gxfs", "mounts.toml")
+	alphaConfig := filepath.Join(tmp, "alpha", ".rolio", "settings.toml")
+	alphaMounts := filepath.Join(tmp, "alpha", ".rolio", "mounts.toml")
+	betaConfig := filepath.Join(tmp, "beta", ".rolio", "settings.toml")
+	betaMounts := filepath.Join(tmp, "beta", ".rolio", "mounts.toml")
 	os.MkdirAll(filepath.Dir(alphaConfig), 0o755)
 	os.MkdirAll(filepath.Dir(betaConfig), 0o755)
 	writeFile(t, alphaConfig, cliConfigTextForRepo(serverPort, "alpha"))
@@ -367,20 +367,20 @@ func TestGXFSPostgresServerRoutesMultipleRepos(t *testing.T) {
 	}
 }
 
-func TestGXFSPostgresDocsNamespaceMountE2E(t *testing.T) {
+func TestROLIOPostgresDocsNamespaceMountE2E(t *testing.T) {
 	requireDocker(t)
 
 	repoRoot := repositoryRoot(t)
 	tmp := t.TempDir()
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-docs-namespace-e2e-%d-%d", os.Getpid(), time.Now().UnixNano())
+	containerName := fmt.Sprintf("rolio-docs-namespace-e2e-%d-%d", os.Getpid(), time.Now().UnixNano())
 	startPostgres(t, containerName, pgPort)
 
-	cliPath := filepath.Join(tmp, "gxfs")
-	serverPath := filepath.Join(tmp, "gxfs-server")
-	buildBinary(t, repoRoot, cliPath, "./cmd/gxfs")
-	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
+	cliPath := filepath.Join(tmp, "rolio")
+	serverPath := filepath.Join(tmp, "rolio-server")
+	buildBinary(t, repoRoot, cliPath, "./cmd/rolio")
+	buildBinary(t, repoRoot, serverPath, "./cmd/rolio-server")
 
 	serverPort := freePort(t)
 	serverConfig := filepath.Join(tmp, "conf", "docs-namespace.toml")
@@ -392,11 +392,11 @@ func TestGXFSPostgresDocsNamespaceMountE2E(t *testing.T) {
 	seedDocsNamespace(t, containerName, "shared", "/reference/guide.md", "Shared namespace guide\n")
 
 	projectDir := filepath.Join(tmp, "docs-namespace-project")
-	if err := os.MkdirAll(filepath.Join(projectDir, ".gxfs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(projectDir, ".rolio"), 0o755); err != nil {
 		t.Fatalf("mkdir project config: %v", err)
 	}
-	cliConfig := filepath.Join(projectDir, ".gxfs", "settings.toml")
-	cliMounts := filepath.Join(projectDir, ".gxfs", "mounts.toml")
+	cliConfig := filepath.Join(projectDir, ".rolio", "settings.toml")
+	cliMounts := filepath.Join(projectDir, ".rolio", "mounts.toml")
 	writeFile(t, cliConfig, cliConfigText(serverPort))
 	writeFile(t, cliMounts, cliMountsText())
 
@@ -423,7 +423,7 @@ func TestGXFSPostgresDocsNamespaceMountE2E(t *testing.T) {
 	if !strings.Contains(refresh, "refreshed 1 file") {
 		t.Fatalf("sync refresh output = %q, want refreshed count", refresh)
 	}
-	manifest := readFile(t, filepath.Join(projectDir, ".gxfs", "manifest.toml"))
+	manifest := readFile(t, filepath.Join(projectDir, ".rolio", "manifest.toml"))
 	if !strings.Contains(manifest, "remote_doc = 'docs://shared/reference/guide.md'") {
 		t.Fatalf("manifest = %s, want docs:// remote_doc", manifest)
 	}
@@ -473,7 +473,7 @@ func requireDocker(t *testing.T) {
 func startPostgres(t *testing.T, containerName string, port int) {
 	t.Helper()
 
-	image := os.Getenv("GXFS_E2E_POSTGRES_IMAGE")
+	image := os.Getenv("ROLIO_E2E_POSTGRES_IMAGE")
 	if image == "" {
 		image = "postgres:18-alpine"
 	}
@@ -484,9 +484,9 @@ func startPostgres(t *testing.T, containerName string, port int) {
 	output, err := run(ctx, "", nil,
 		"docker", "run", "-d", "--rm",
 		"--name", containerName,
-		"-e", "POSTGRES_USER=gxfs",
-		"-e", "POSTGRES_PASSWORD=gxfs",
-		"-e", "POSTGRES_DB=gxfs",
+		"-e", "POSTGRES_USER=rolio",
+		"-e", "POSTGRES_PASSWORD=rolio",
+		"-e", "POSTGRES_DB=rolio",
 		"-p", fmt.Sprintf("127.0.0.1:%d:5432", port),
 		image,
 	)
@@ -512,7 +512,7 @@ func waitForPostgres(t *testing.T, containerName string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		output, err := run(ctx, "", nil,
 			"docker", "exec", containerName,
-			"psql", "-U", "gxfs", "-d", "gxfs", "-v", "ON_ERROR_STOP=1", "-c", "select 1",
+			"psql", "-U", "rolio", "-d", "rolio", "-v", "ON_ERROR_STOP=1", "-c", "select 1",
 		)
 		cancel()
 		if err == nil {
@@ -557,8 +557,8 @@ insert into vfs_nodes(path, kind, size, updated_at) values
 	('/src/main.go', 'file', 28, '2026-01-03T00:00:00Z');
 
 insert into vfs_content(path, content) values
-	('/README.md', 'GXFS root readme' || chr(10)),
-	('/docs/readme.md', '# GXFS Docs' || chr(10) || 'This document mentions Adapter.' || chr(10)),
+	('/README.md', 'ROLIO root readme' || chr(10)),
+	('/docs/readme.md', '# ROLIO Docs' || chr(10) || 'This document mentions Adapter.' || chr(10)),
 	('/docs/api/reference.md', 'API reference' || chr(10)),
 	('/docs/.secret.md', 'hidden docs' || chr(10)),
 	('/src/main.go', 'package main' || chr(10) || 'func main() {}' || chr(10));
@@ -579,7 +579,7 @@ insert into vfs_repo_nodes(repo, path) values
 
 	output, err := run(ctx, "", strings.NewReader(sql),
 		"docker", "exec", "-i", containerName,
-		"psql", "-U", "gxfs", "-d", "gxfs", "-v", "ON_ERROR_STOP=1",
+		"psql", "-U", "rolio", "-d", "rolio", "-v", "ON_ERROR_STOP=1",
 	)
 	if err != nil {
 		t.Fatalf("seed postgres: %v: %s", err, output)
@@ -591,16 +591,16 @@ func seedDocsNamespace(t *testing.T, containerName, namespace, docPath, content 
 
 	hash := store.HashContent(content)
 	sql := fmt.Sprintf(`
-insert into gxfs_doc_namespaces(name, description, writable)
+insert into rolio_doc_namespaces(name, description, writable)
 values (%s, 'Shared e2e docs namespace', true)
 on conflict (name) do update set writable = excluded.writable;
 
 with doc as (
-	insert into gxfs_docs(title, content, content_hash, updated_at)
+	insert into rolio_docs(title, content, content_hash, updated_at)
 	values (%s, %s, %s, '2026-01-06T00:00:00Z')
 	returning id
 )
-insert into gxfs_doc_namespace_paths(namespace, path, doc_id, size, mtime)
+insert into rolio_doc_namespace_paths(namespace, path, doc_id, size, mtime)
 select %s, %s, id, %d, '2026-01-06T00:00:00Z' from doc;
 `, sqlLiteral(namespace), sqlLiteral(filepath.Base(docPath)), sqlLiteral(content), sqlLiteral(hash), sqlLiteral(namespace), sqlLiteral(docPath), len(content))
 
@@ -609,7 +609,7 @@ select %s, %s, id, %d, '2026-01-06T00:00:00Z' from doc;
 
 	output, err := run(ctx, "", strings.NewReader(sql),
 		"docker", "exec", "-i", containerName,
-		"psql", "-U", "gxfs", "-d", "gxfs", "-v", "ON_ERROR_STOP=1",
+		"psql", "-U", "rolio", "-d", "rolio", "-v", "ON_ERROR_STOP=1",
 	)
 	if err != nil {
 		t.Fatalf("seed docs namespace: %v: %s", err, output)
@@ -638,14 +638,14 @@ func startServer(t *testing.T, repoRoot, serverPath, configPath string, port int
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, serverPath)
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "GXFS_SERVER_CONFIG="+configPath)
+	cmd.Env = append(os.Environ(), "ROLIO_SERVER_CONFIG="+configPath)
 	var output strings.Builder
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		t.Fatalf("start gxfs-server: %v", err)
+		t.Fatalf("start rolio-server: %v", err)
 	}
 
 	t.Cleanup(func() {
@@ -692,7 +692,7 @@ func waitForServer(t *testing.T, healthURL string, cmd *exec.Cmd, output *string
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			t.Fatalf("gxfs-server exited before readiness: %s", output.String())
+			t.Fatalf("rolio-server exited before readiness: %s", output.String())
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -710,7 +710,7 @@ func waitForServer(t *testing.T, healthURL string, cmd *exec.Cmd, output *string
 		cancel()
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("gxfs-server did not become ready: %s", output.String())
+	t.Fatalf("rolio-server did not become ready: %s", output.String())
 }
 
 func runCLI(t *testing.T, repoRoot, cliPath, configPath string, args ...string) string {
@@ -724,9 +724,9 @@ func runCLIInDir(t *testing.T, dir, cliPath, configPath string, args ...string) 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	output, err := runWithEnv(ctx, dir, append(os.Environ(), "GXFS_CONFIG="+configPath), nil, cliPath, args...)
+	output, err := runWithEnv(ctx, dir, append(os.Environ(), "ROLIO_CONFIG="+configPath), nil, cliPath, args...)
 	if err != nil {
-		t.Fatalf("gxfs %s: %v: %s", strings.Join(args, " "), err, output)
+		t.Fatalf("rolio %s: %v: %s", strings.Join(args, " "), err, output)
 	}
 	return output
 }
@@ -769,7 +769,7 @@ func readFile(t *testing.T, path string) string {
 }
 
 func serverConfigText(serverPort, pgPort int) string {
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	return fmt.Sprintf(`addr = "127.0.0.1:%d"
 
 [backend]
@@ -791,7 +791,7 @@ mtime_column = "updated_at"
 }
 
 func multiRepoServerConfigText(serverPort, pgPort int) string {
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	return fmt.Sprintf(`addr = "127.0.0.1:%d"
 
 [backend]
@@ -813,7 +813,7 @@ mtime_column = "updated_at"
 }
 
 func docsNamespaceServerConfigText(serverPort, pgPort int) string {
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	return fmt.Sprintf(`addr = "127.0.0.1:%d"
 
 [backend]
@@ -887,7 +887,7 @@ func freePort(t *testing.T) int {
 // --- doc_postgres server config ---
 
 func docPostgresServerConfigText(serverPort, pgPort int) string {
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	return fmt.Sprintf(`addr = "127.0.0.1:%d"
 
 [backend]
@@ -908,7 +908,7 @@ mtime_column = "updated_at"
 `, serverPort, dsn)
 }
 
-// TestDocPostgresServerE2E verifies that gxfs-server with type = "doc_postgres"
+// TestDocPostgresServerE2E verifies that rolio-server with type = "doc_postgres"
 // correctly auto-migrates, backfills legacy data, and serves full CRUD through CLI.
 // Also verifies backfill idempotency on restart and old postgres regression.
 func TestDocPostgresServerE2E(t *testing.T) {
@@ -918,16 +918,16 @@ func TestDocPostgresServerE2E(t *testing.T) {
 	tmp := t.TempDir()
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-doc-postgres-e2e-%d-%d", os.Getpid(), time.Now().UnixNano())
+	containerName := fmt.Sprintf("rolio-doc-postgres-e2e-%d-%d", os.Getpid(), time.Now().UnixNano())
 	startPostgres(t, containerName, pgPort)
 
 	// Seed legacy data so backfill has something to migrate.
 	seedPostgres(t, containerName)
 
-	cliPath := filepath.Join(tmp, "gxfs")
-	serverPath := filepath.Join(tmp, "gxfs-server")
-	buildBinary(t, repoRoot, cliPath, "./cmd/gxfs")
-	buildBinary(t, repoRoot, serverPath, "./cmd/gxfs-server")
+	cliPath := filepath.Join(tmp, "rolio")
+	serverPath := filepath.Join(tmp, "rolio-server")
+	buildBinary(t, repoRoot, cliPath, "./cmd/rolio")
+	buildBinary(t, repoRoot, serverPath, "./cmd/rolio-server")
 
 	// --- Phase 1: Start server with doc_postgres, verify legacy data readable ---
 	serverPort := freePort(t)
@@ -938,9 +938,9 @@ func TestDocPostgresServerE2E(t *testing.T) {
 	startServer(t, repoRoot, serverPath, serverConfig, serverPort)
 	registerRepo(t, serverPort, "e2e-test")
 
-	cliConfig := filepath.Join(tmp, ".gxfs", "settings.toml")
-	cliMounts := filepath.Join(tmp, ".gxfs", "mounts.toml")
-	os.MkdirAll(filepath.Join(tmp, ".gxfs"), 0o755)
+	cliConfig := filepath.Join(tmp, ".rolio", "settings.toml")
+	cliMounts := filepath.Join(tmp, ".rolio", "mounts.toml")
+	os.MkdirAll(filepath.Join(tmp, ".rolio"), 0o755)
 	writeFile(t, cliConfig, cliConfigText(serverPort))
 	writeFile(t, cliMounts, cliMountsText())
 
@@ -982,9 +982,9 @@ func TestDocPostgresServerE2E(t *testing.T) {
 
 	// Search should work (doc_postgres uses content_search tsvector).
 	t.Run("Search", func(t *testing.T) {
-		out := runCLI(t, repoRoot, cliPath, cliConfig, "search", "GXFS")
+		out := runCLI(t, repoRoot, cliPath, cliConfig, "search", "ROLIO")
 		if out == "" {
-			t.Fatal("search GXFS returned nothing")
+			t.Fatal("search ROLIO returned nothing")
 		}
 	})
 
@@ -997,7 +997,7 @@ func TestDocPostgresServerE2E(t *testing.T) {
 
 		startServer(t, repoRoot, serverPath, restartConfig, restartPort)
 
-		restartCLIConfig := filepath.Join(tmp, ".gxfs", "restart-settings.toml")
+		restartCLIConfig := filepath.Join(tmp, ".rolio", "restart-settings.toml")
 		writeFile(t, restartCLIConfig, cliConfigText(restartPort))
 
 		// Data should still be intact after restart (backfill idempotent).
@@ -1022,7 +1022,7 @@ func TestDocPostgresServerE2E(t *testing.T) {
 
 		startServer(t, repoRoot, serverPath, regConfig, regPort)
 
-		regCLIConfig := filepath.Join(tmp, ".gxfs", "reg-settings.toml")
+		regCLIConfig := filepath.Join(tmp, ".rolio", "reg-settings.toml")
 		writeFile(t, regCLIConfig, cliConfigText(regPort))
 
 		// Old postgres should still work (same mounts → paths under /docs).

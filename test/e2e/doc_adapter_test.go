@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/austiecodes/gxfs/internal/store"
-	"github.com/austiecodes/gxfs/internal/store/postgres"
+	"github.com/austiecodes/rolio/internal/store"
+	"github.com/austiecodes/rolio/internal/store/postgres"
 )
 
 // TestDocAdapterIntegration verifies the read-only DocAdapter returns results
@@ -19,15 +19,15 @@ import (
 // Strategy: run BackfillDocs, then create both old Adapter and DocAdapter,
 // and compare their responses for LS/Cat/Stat/Find/Search/BatchHashes/Grep/Tree.
 // The old Adapter reads from vfs_nodes/vfs_content, the DocAdapter reads from
-// gxfs_docs/gxfs_repo_paths. Results must be equivalent.
+// rolio_docs/rolio_repo_paths. Results must be equivalent.
 func TestDocAdapterIntegration(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-doc-adapter-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-doc-adapter-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := postgres.Config{
@@ -631,10 +631,10 @@ func TestDocAdapterMirrorRepo(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-doc-adapter-mirror-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-doc-adapter-mirror-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := postgres.Config{
@@ -698,10 +698,10 @@ func TestDocAdapterWritePath(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-doc-write-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-doc-write-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := postgres.Config{
@@ -887,8 +887,8 @@ func TestDocAdapterWritePath(t *testing.T) {
 		}
 
 		// Check revision via direct query.
-		docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
-		pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+		docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
+		pathsTable := quoteTableForTest(cfg.Schema, "rolio_repo_paths")
 		var rev1 int
 		if err := pool.QueryRow(ctx, fmt.Sprintf(
 			"select d.revision from %s rp join %s d on rp.doc_id = d.id where rp.repo = 'test-repo' and rp.path = '/revision-test.txt'",
@@ -948,8 +948,8 @@ func TestDocAdapterWritePath(t *testing.T) {
 		}
 
 		// Get the doc_id.
-		pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
-		docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
+		pathsTable := quoteTableForTest(cfg.Schema, "rolio_repo_paths")
+		docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
 		var docID string
 		if err := pool.QueryRow(ctx, fmt.Sprintf(
 			"select d.id::text from %s rp join %s d on rp.doc_id = d.id where rp.repo = 'test-repo' and rp.path = '/orphan-test.txt'",
@@ -1040,10 +1040,10 @@ func TestDocAdapterCacheInvalidation(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-doc-cache-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-doc-cache-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := postgres.Config{

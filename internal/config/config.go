@@ -133,7 +133,7 @@ func LoadCLI(path string) (CLIConfig, error) {
 		return CLIConfig{}, fmt.Errorf("unsupported auth.mode %q", cfg.Auth.Mode)
 	}
 	if cfg.Auth.Mode == "bearer" && cfg.Auth.TokenEnv == "" {
-		cfg.Auth.TokenEnv = "GXFS_TOKEN"
+		cfg.Auth.TokenEnv = "ROLIO_TOKEN"
 	}
 	if cfg.Cache.MetadataTTL == "" {
 		cfg.Cache.MetadataTTL = "5m"

@@ -2,7 +2,7 @@
 
 package e2e_test
 
-import "github.com/austiecodes/gxfs/internal/store/postgres"
+import "github.com/austiecodes/rolio/internal/store/postgres"
 
 func e2ePostgresConfig(dsn, repo string) postgres.Config {
 	return postgres.Config{

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/austiecodes/gxfs/internal/store"
-	"github.com/austiecodes/gxfs/internal/vfs"
+	"github.com/austiecodes/rolio/internal/store"
+	"github.com/austiecodes/rolio/internal/vfs"
 )
 
 var _ store.Adapter = (*Adapter)(nil)
@@ -14,7 +14,7 @@ func newAdapter(t *testing.T) *Adapter {
 	t.Helper()
 
 	tree, err := vfs.New([]vfs.File{
-		{Path: "/docs/readme.md", Content: "# Readme\nhello gxfs\n"},
+		{Path: "/docs/readme.md", Content: "# Readme\nhello rolio\n"},
 		{Path: "/docs/main.go", Content: "package docs\n\ntype Adapter interface{}\n"},
 	})
 	if err != nil {
@@ -26,7 +26,7 @@ func newAdapter(t *testing.T) *Adapter {
 func TestAdapterDelegatesLS(t *testing.T) {
 	adapter := newAdapter(t)
 
-	resp, err := adapter.LS(context.Background(), store.LSRequest{Repo: "gxfs", Path: "/docs"})
+	resp, err := adapter.LS(context.Background(), store.LSRequest{Repo: "rolio", Path: "/docs"})
 	if err != nil {
 		t.Fatalf("LS() error = %v", err)
 	}
@@ -38,15 +38,15 @@ func TestAdapterDelegatesLS(t *testing.T) {
 func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 	adapter := newAdapter(t)
 
-	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "/docs/readme.md"})
+	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "rolio", Path: "/docs/readme.md"})
 	if err != nil {
 		t.Fatalf("Cat() error = %v", err)
 	}
-	if cat.Path != "/docs/readme.md" || cat.Content != "# Readme\nhello gxfs\n" {
+	if cat.Path != "/docs/readme.md" || cat.Content != "# Readme\nhello rolio\n" {
 		t.Fatalf("Cat() = %+v, want readme content", cat)
 	}
 
-	grep, err := adapter.Grep(context.Background(), store.GrepRequest{Repo: "gxfs", Path: "/", Pattern: "Adapter"})
+	grep, err := adapter.Grep(context.Background(), store.GrepRequest{Repo: "rolio", Path: "/", Pattern: "Adapter"})
 	if err != nil {
 		t.Fatalf("Grep() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 		t.Fatalf("Grep() = %+v, want Adapter match in main.go", grep.Matches)
 	}
 
-	find, err := adapter.Find(context.Background(), store.FindRequest{Repo: "gxfs", Path: "/", Name: "*.go"})
+	find, err := adapter.Find(context.Background(), store.FindRequest{Repo: "rolio", Path: "/", Name: "*.go"})
 	if err != nil {
 		t.Fatalf("Find() error = %v", err)
 	}
@@ -62,7 +62,7 @@ func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 		t.Fatalf("Find() = %+v, want main.go", find.Nodes)
 	}
 
-	tree, err := adapter.Tree(context.Background(), store.TreeRequest{Repo: "gxfs", Path: "/", Depth: 1})
+	tree, err := adapter.Tree(context.Background(), store.TreeRequest{Repo: "rolio", Path: "/", Depth: 1})
 	if err != nil {
 		t.Fatalf("Tree() error = %v", err)
 	}
@@ -70,7 +70,7 @@ func TestAdapterDelegatesCatGrepFindTreeAndStat(t *testing.T) {
 		t.Fatalf("Tree() = %+v, want root tree depth 1", tree)
 	}
 
-	stat, err := adapter.Stat(context.Background(), store.StatRequest{Repo: "gxfs", Path: "/docs"})
+	stat, err := adapter.Stat(context.Background(), store.StatRequest{Repo: "rolio", Path: "/docs"})
 	if err != nil {
 		t.Fatalf("Stat() error = %v", err)
 	}

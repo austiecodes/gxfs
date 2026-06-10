@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/austiecodes/gxfs/internal/config"
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/config"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 func TestResolverUsesLongestLocalPrefix(t *testing.T) {
@@ -37,7 +37,7 @@ func TestResolverUsesLongestLocalPrefix(t *testing.T) {
 }
 
 func TestResolverRejectsWriteToReadOnlyMount(t *testing.T) {
-	r, err := NewResolver("gxfs", []config.MountConfig{
+	r, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs/shared", Remote: "repo://self/shared", Mode: "readonly"},
 	})
 	if err != nil {
@@ -51,14 +51,14 @@ func TestResolverRejectsWriteToReadOnlyMount(t *testing.T) {
 }
 
 func TestResolverMapsRemotePathBackToLocal(t *testing.T) {
-	r, err := NewResolver("gxfs", []config.MountConfig{
+	r, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs", Remote: "repo://self/remote-docs", Mode: "writable"},
 	})
 	if err != nil {
 		t.Fatalf("NewResolver() error = %v", err)
 	}
 
-	local, ok := r.ToLocal("gxfs", "/remote-docs/guide.md")
+	local, ok := r.ToLocal("rolio", "/remote-docs/guide.md")
 	if !ok {
 		t.Fatal("ToLocal() ok = false, want true")
 	}
@@ -68,7 +68,7 @@ func TestResolverMapsRemotePathBackToLocal(t *testing.T) {
 }
 
 func TestResolverAcceptsDocsetRemote(t *testing.T) {
-	r, err := NewResolver("gxfs", []config.MountConfig{
+	r, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs/shared", Remote: "docset://openai-go/v3/gotchas", Mode: "readonly"},
 	})
 	if err != nil {
@@ -114,7 +114,7 @@ func TestSourceRefParseAndFormat(t *testing.T) {
 }
 
 func TestResolverSupportsDocsSourceRefs(t *testing.T) {
-	r, err := NewResolver("gxfs", []config.MountConfig{
+	r, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs/openai-go-sdk", Remote: "docs://openai-go-sdk", Mode: "readonly"},
 	})
 	if err != nil {
@@ -142,7 +142,7 @@ func TestResolverSupportsDocsSourceRefs(t *testing.T) {
 }
 
 func TestResolverRejectsRepoSelfWithoutPath(t *testing.T) {
-	_, err := NewResolver("gxfs", []config.MountConfig{
+	_, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs", Remote: "repo://self", Mode: "writable"},
 	})
 	if err == nil {
@@ -303,7 +303,7 @@ func TestParseRemoteRefRoundTripWithSlashInRepo(t *testing.T) {
 }
 
 func TestResolverDetectsVirtualDirsFromMountPaths(t *testing.T) {
-	r, err := NewResolver("gxfs", []config.MountConfig{
+	r, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs/gotchas/openai-go", Remote: "repo://self/shared/openai-go", Mode: "readonly"},
 	})
 	if err != nil {

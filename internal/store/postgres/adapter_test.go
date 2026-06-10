@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/austiecodes/gxfs/internal/store"
-	"github.com/austiecodes/gxfs/internal/vfs"
+	"github.com/austiecodes/rolio/internal/store"
+	"github.com/austiecodes/rolio/internal/vfs"
 )
 
 var _ store.Adapter = (*Adapter)(nil)
@@ -157,7 +157,7 @@ create index if not exists idx_content_search on "public"."vfs_content" using gi
 -- Core document table: one row per logical file (not per content blob).
 -- legacy_path tracks the original vfs_nodes path for idempotent backfill.
 -- Nullable: future docs created outside the legacy migration have no legacy_path.
-create table if not exists "public"."gxfs_docs" (
+create table if not exists "public"."rolio_docs" (
     id uuid primary key default gen_random_uuid(),
     legacy_path text,
     title text not null default '',
@@ -170,33 +170,33 @@ create table if not exists "public"."gxfs_docs" (
 );
 
 -- Idempotent backfill: unique legacy_path only where present.
-create unique index if not exists idx_docs_legacy_path on "public"."gxfs_docs" (legacy_path) where legacy_path is not null;
+create unique index if not exists idx_docs_legacy_path on "public"."rolio_docs" (legacy_path) where legacy_path is not null;
 
 -- Full-text search GIN index on content_search
-create index if not exists idx_docs_content_search on "public"."gxfs_docs" using gin (content_search);
+create index if not exists idx_docs_content_search on "public"."rolio_docs" using gin (content_search);
 
 -- Index on content_hash for BatchHashes lookups
-create index if not exists idx_docs_content_hash on "public"."gxfs_docs" (content_hash);
+create index if not exists idx_docs_content_hash on "public"."rolio_docs" (content_hash);
 
 -- Repo → Doc mapping: replaces vfs_nodes + vfs_repo_nodes for file paths.
 -- Directories are implicit from path prefix (no dir rows needed).
-create table if not exists "public"."gxfs_repo_paths" (
+create table if not exists "public"."rolio_repo_paths" (
     repo text not null,
     path text not null,
-    doc_id uuid not null references "public"."gxfs_docs"(id),
+    doc_id uuid not null references "public"."rolio_docs"(id),
     size bigint not null default 0,
     mtime timestamptz not null default now(),
     primary key (repo, path)
 );
 
 -- Index for prefix queries (LS/Find/BatchHashes)
-create index if not exists idx_repo_paths_prefix on "public"."gxfs_repo_paths" (repo, path text_pattern_ops);
+create index if not exists idx_repo_paths_prefix on "public"."rolio_repo_paths" (repo, path text_pattern_ops);
 
 -- Index for finding all paths pointing to a doc (for orphan detection)
-create index if not exists idx_repo_paths_doc_id on "public"."gxfs_repo_paths" (doc_id);
+create index if not exists idx_repo_paths_doc_id on "public"."rolio_repo_paths" (doc_id);
 
 -- First-class docs namespaces: independent writable views over shared docs.
-create table if not exists "public"."gxfs_doc_namespaces" (
+create table if not exists "public"."rolio_doc_namespaces" (
     name text primary key,
     description text not null default '',
     writable bool not null default false,
@@ -205,23 +205,23 @@ create table if not exists "public"."gxfs_doc_namespaces" (
 );
 
 -- Namespace → Doc mapping: directories are implicit from path prefix.
-create table if not exists "public"."gxfs_doc_namespace_paths" (
-    namespace text not null references "public"."gxfs_doc_namespaces"(name) on delete cascade,
+create table if not exists "public"."rolio_doc_namespace_paths" (
+    namespace text not null references "public"."rolio_doc_namespaces"(name) on delete cascade,
     path text not null,
-    doc_id uuid not null references "public"."gxfs_docs"(id),
+    doc_id uuid not null references "public"."rolio_docs"(id),
     size bigint not null default 0,
     mtime timestamptz not null default now(),
     primary key (namespace, path)
 );
 
 -- Index for namespace prefix queries.
-create index if not exists idx_doc_namespace_paths_prefix on "public"."gxfs_doc_namespace_paths" (namespace, path text_pattern_ops);
+create index if not exists idx_doc_namespace_paths_prefix on "public"."rolio_doc_namespace_paths" (namespace, path text_pattern_ops);
 
 -- Index for finding namespace paths pointing to a doc (for orphan detection).
-create index if not exists idx_doc_namespace_paths_doc_id on "public"."gxfs_doc_namespace_paths" (doc_id);
+create index if not exists idx_doc_namespace_paths_doc_id on "public"."rolio_doc_namespace_paths" (doc_id);
 
 -- Docsets: empty tables, no API in Phase 1A
-create table if not exists "public"."gxfs_docsets" (
+create table if not exists "public"."rolio_docsets" (
     id uuid primary key default gen_random_uuid(),
     name text not null unique,
     description text not null default '',
@@ -230,9 +230,9 @@ create table if not exists "public"."gxfs_docsets" (
     updated_at timestamptz not null default now()
 );
 
-create table if not exists "public"."gxfs_docset_docs" (
-    docset_id uuid not null references "public"."gxfs_docsets"(id),
-    doc_id uuid not null references "public"."gxfs_docs"(id),
+create table if not exists "public"."rolio_docset_docs" (
+    docset_id uuid not null references "public"."rolio_docsets"(id),
+    doc_id uuid not null references "public"."rolio_docs"(id),
     path text not null,
     primary key (docset_id, path),
     unique (docset_id, doc_id)
@@ -240,34 +240,34 @@ create table if not exists "public"."gxfs_docset_docs" (
 		`-- Phase 1B: preserve curated sets when upgrading from collection-backed tables.
 do $$
 begin
-    if to_regclass('public.gxfs_collections') is not null then
-        insert into "public"."gxfs_docsets" (id, name, description, visibility, created_at, updated_at)
+    if to_regclass('public.rolio_collections') is not null then
+        insert into "public"."rolio_docsets" (id, name, description, visibility, created_at, updated_at)
         select id, name, description, visibility, created_at, updated_at
-        from "public"."gxfs_collections"
+        from "public"."rolio_collections"
         on conflict do nothing;
     end if;
 
-    if to_regclass('public.gxfs_collection_docs') is not null then
-        insert into "public"."gxfs_docset_docs" (docset_id, doc_id, path)
+    if to_regclass('public.rolio_collection_docs') is not null then
+        insert into "public"."rolio_docset_docs" (docset_id, doc_id, path)
         select collection_id, doc_id, path
-        from "public"."gxfs_collection_docs"
+        from "public"."rolio_collection_docs"
         on conflict do nothing;
     end if;
 end $$;`,
 		`-- Expose curated docsets through the same read binding shape used by
 -- document-backed repo and docs namespace adapters.
-create or replace view "public"."gxfs_docset_paths" as
+create or replace view "public"."rolio_docset_paths" as
 select
     ds.name as docset,
     dd.path,
     dd.doc_id,
     length(d.content)::bigint as size,
     d.updated_at as mtime
-from "public"."gxfs_docset_docs" dd
-join "public"."gxfs_docsets" ds on ds.id = dd.docset_id
-join "public"."gxfs_docs" d on d.id = dd.doc_id;`,
+from "public"."rolio_docset_docs" dd
+join "public"."rolio_docsets" ds on ds.id = dd.docset_id
+join "public"."rolio_docs" d on d.id = dd.doc_id;`,
 		`-- DB-backed repository registry.
-create table if not exists "public"."gxfs_repos" (
+create table if not exists "public"."rolio_repos" (
     name text primary key,
     writable bool not null default false,
     created_at timestamptz not null default now(),
@@ -276,12 +276,12 @@ create table if not exists "public"."gxfs_repos" (
 );
 
 -- Preserve existing repo namespaces discovered from document path bindings.
-insert into "public"."gxfs_repos" (name)
+insert into "public"."rolio_repos" (name)
 select distinct repo
-from "public"."gxfs_repo_paths"
+from "public"."rolio_repo_paths"
 where repo <> ''
 on conflict (name) do nothing;`,
-		`create table if not exists "public"."gxfs_usage_events" (
+		`create table if not exists "public"."rolio_usage_events" (
     id uuid primary key default gen_random_uuid(),
     created_at timestamptz not null default now(),
     log_id text,
@@ -294,11 +294,11 @@ on conflict (name) do nothing;`,
     payload jsonb not null default '{}'::jsonb
 );
 
-create index if not exists idx_usage_events_created_at on "public"."gxfs_usage_events" (created_at);
-create index if not exists idx_usage_events_log_id on "public"."gxfs_usage_events" (log_id) where log_id is not null;
-create index if not exists idx_usage_events_session_id on "public"."gxfs_usage_events" (session_id) where session_id is not null;
-create index if not exists idx_usage_events_client_repo on "public"."gxfs_usage_events" (client_repo) where client_repo is not null;
-create index if not exists idx_usage_events_command on "public"."gxfs_usage_events" (command);`,
+create index if not exists idx_usage_events_created_at on "public"."rolio_usage_events" (created_at);
+create index if not exists idx_usage_events_log_id on "public"."rolio_usage_events" (log_id) where log_id is not null;
+create index if not exists idx_usage_events_session_id on "public"."rolio_usage_events" (session_id) where session_id is not null;
+create index if not exists idx_usage_events_client_repo on "public"."rolio_usage_events" (client_repo) where client_repo is not null;
+create index if not exists idx_usage_events_command on "public"."rolio_usage_events" (command);`,
 	}
 	if len(statements) != len(want) {
 		t.Fatalf("SchemaSQL() len = %d, want %d: %v", len(statements), len(want), statements)
@@ -312,7 +312,7 @@ create index if not exists idx_usage_events_command on "public"."gxfs_usage_even
 
 func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T) {
 	statements, err := SchemaSQL(Config{
-		Schema:         "", // empty schema — should not produce ".gxfs_docs"
+		Schema:         "", // empty schema — should not produce ".rolio_docs"
 		NodesTable:     "vfs_nodes",
 		ContentTable:   "vfs_content",
 		RepoNodesTable: "vfs_repo_nodes",
@@ -330,7 +330,7 @@ func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T)
 	// Find the doc tables migration.
 	var docStmt string
 	for _, statement := range statements {
-		if strings.Contains(statement, `"gxfs_docs"`) {
+		if strings.Contains(statement, `"rolio_docs"`) {
 			docStmt = statement
 			break
 		}
@@ -339,31 +339,31 @@ func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T)
 		t.Fatalf("SchemaSQL() missing doc tables migration: %v", statements)
 	}
 
-	// Must NOT contain ".gxfs_docs" (which would happen with empty SchemaName).
-	if strings.Contains(docStmt, ".gxfs_docs") && !strings.Contains(docStmt, `".gxfs_docs"`) {
-		t.Fatalf("empty schema migration contains bare .gxfs_docs — schema quoting broken")
+	// Must NOT contain ".rolio_docs" (which would happen with empty SchemaName).
+	if strings.Contains(docStmt, ".rolio_docs") && !strings.Contains(docStmt, `".rolio_docs"`) {
+		t.Fatalf("empty schema migration contains bare .rolio_docs — schema quoting broken")
 	}
 
 	// Must contain properly quoted table names without schema prefix.
-	if !strings.Contains(docStmt, `"gxfs_docs"`) {
-		t.Fatalf("empty schema migration missing \"gxfs_docs\" — got: %s", docStmt[:200])
+	if !strings.Contains(docStmt, `"rolio_docs"`) {
+		t.Fatalf("empty schema migration missing \"rolio_docs\" — got: %s", docStmt[:200])
 	}
-	if !strings.Contains(docStmt, `"gxfs_repo_paths"`) {
-		t.Fatalf("empty schema migration missing \"gxfs_repo_paths\"")
+	if !strings.Contains(docStmt, `"rolio_repo_paths"`) {
+		t.Fatalf("empty schema migration missing \"rolio_repo_paths\"")
 	}
-	if !strings.Contains(docStmt, `"gxfs_doc_namespaces"`) {
-		t.Fatalf("empty schema migration missing \"gxfs_doc_namespaces\"")
+	if !strings.Contains(docStmt, `"rolio_doc_namespaces"`) {
+		t.Fatalf("empty schema migration missing \"rolio_doc_namespaces\"")
 	}
-	if !strings.Contains(docStmt, `"gxfs_doc_namespace_paths"`) {
-		t.Fatalf("empty schema migration missing \"gxfs_doc_namespace_paths\"")
+	if !strings.Contains(docStmt, `"rolio_doc_namespace_paths"`) {
+		t.Fatalf("empty schema migration missing \"rolio_doc_namespace_paths\"")
 	}
-	if !strings.Contains(docStmt, `"gxfs_docsets"`) {
-		t.Fatalf("empty schema migration missing \"gxfs_docsets\"")
+	if !strings.Contains(docStmt, `"rolio_docsets"`) {
+		t.Fatalf("empty schema migration missing \"rolio_docsets\"")
 	}
 
 	var docsetViewStmt string
 	for _, statement := range statements {
-		if strings.Contains(statement, `"gxfs_docset_paths"`) {
+		if strings.Contains(statement, `"rolio_docset_paths"`) {
 			docsetViewStmt = statement
 			break
 		}
@@ -371,19 +371,19 @@ func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T)
 	if docsetViewStmt == "" {
 		t.Fatalf("SchemaSQL() missing docset paths view migration: %v", statements)
 	}
-	if strings.Contains(docsetViewStmt, ".\"gxfs_docset_paths\"") {
-		t.Fatalf("empty schema migration has schema-qualified docset paths view ref: contains .\"gxfs_docset_paths\"")
+	if strings.Contains(docsetViewStmt, ".\"rolio_docset_paths\"") {
+		t.Fatalf("empty schema migration has schema-qualified docset paths view ref: contains .\"rolio_docset_paths\"")
 	}
 
-	// Must NOT start with a dot (e.g., `"gxfs_docs"` not `.gxfs_docs`).
-	if strings.Contains(docStmt, ".\"gxfs_docs\"") {
+	// Must NOT start with a dot (e.g., `"rolio_docs"` not `.rolio_docs`).
+	if strings.Contains(docStmt, ".\"rolio_docs\"") {
 		// Double-check it's not schema-qualified (which is wrong for empty schema).
-		t.Fatalf("empty schema migration has schema-qualified table ref: contains .\"gxfs_docs\"")
+		t.Fatalf("empty schema migration has schema-qualified table ref: contains .\"rolio_docs\"")
 	}
 
 	var repoRegistryStmt string
 	for _, statement := range statements {
-		if strings.Contains(statement, `"gxfs_repos"`) {
+		if strings.Contains(statement, `"rolio_repos"`) {
 			repoRegistryStmt = statement
 			break
 		}
@@ -391,8 +391,8 @@ func TestSchemaSQLWithEmptySchemaRendersDocTablesWithoutLeadingDot(t *testing.T)
 	if repoRegistryStmt == "" {
 		t.Fatalf("SchemaSQL() missing repo registry migration: %v", statements)
 	}
-	if strings.Contains(repoRegistryStmt, ".\"gxfs_repos\"") {
-		t.Fatalf("empty schema migration has schema-qualified repo registry table ref: contains .\"gxfs_repos\"")
+	if strings.Contains(repoRegistryStmt, ".\"rolio_repos\"") {
+		t.Fatalf("empty schema migration has schema-qualified repo registry table ref: contains .\"rolio_repos\"")
 	}
 }
 
@@ -490,7 +490,7 @@ func TestBackfillDocInsertSQL(t *testing.T) {
 		t.Fatalf("backfillDocInsertSQL() error = %v", err)
 	}
 
-	want := `insert into "myschema"."gxfs_docs"(legacy_path, title, content, content_hash) ` +
+	want := `insert into "myschema"."rolio_docs"(legacy_path, title, content, content_hash) ` +
 		`values($1, $2, $3, $4) ` +
 		`on conflict(legacy_path) where legacy_path is not null ` +
 		`do update set title = excluded.title, content = excluded.content, ` +
@@ -507,7 +507,7 @@ func TestBackfillPathInsertSQL(t *testing.T) {
 		t.Fatalf("backfillPathInsertSQL() error = %v", err)
 	}
 
-	want := `insert into "myschema"."gxfs_repo_paths"(repo, path, doc_id, size, mtime) ` +
+	want := `insert into "myschema"."rolio_repo_paths"(repo, path, doc_id, size, mtime) ` +
 		`values($1, $2, $3, $4, $5) ` +
 		`on conflict(repo, path) do update set doc_id = excluded.doc_id, size = excluded.size, mtime = excluded.mtime`
 	if sql != want {
@@ -536,7 +536,7 @@ func TestDocListPathsSQL(t *testing.T) {
 		t.Fatalf("DocListPathsSQL() error = %v", err)
 	}
 
-	want := `select path, size, mtime from "docschema"."gxfs_repo_paths" where repo = $1 and path like $2 order by path`
+	want := `select path, size, mtime from "docschema"."rolio_repo_paths" where repo = $1 and path like $2 order by path`
 	if sql != want {
 		t.Fatalf("DocListPathsSQL() = %q, want %q", sql, want)
 	}
@@ -548,7 +548,7 @@ func TestDocListPathsSQLNoSchema(t *testing.T) {
 		t.Fatalf("DocListPathsSQL() error = %v", err)
 	}
 
-	want := `select path, size, mtime from "gxfs_repo_paths" where repo = $1 and path like $2 order by path`
+	want := `select path, size, mtime from "rolio_repo_paths" where repo = $1 and path like $2 order by path`
 	if sql != want {
 		t.Fatalf("DocListPathsSQL() = %q, want %q", sql, want)
 	}
@@ -588,7 +588,7 @@ func TestDocNamespaceBindingSQL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s() error = %v", tt.name, err)
 			}
-			if !strings.Contains(sql, `"docschema"."gxfs_doc_namespace_paths"`) {
+			if !strings.Contains(sql, `"docschema"."rolio_doc_namespace_paths"`) {
 				t.Fatalf("%s() missing docs namespace table: %q", tt.name, sql)
 			}
 			if !strings.Contains(sql, tt.wantScope) {
@@ -599,7 +599,7 @@ func TestDocNamespaceBindingSQL(t *testing.T) {
 					t.Fatalf("%s() missing %q: %q", tt.name, want, sql)
 				}
 			}
-			for _, bad := range []string{`"gxfs_repo_paths"`, " repo = $1", "rp.repo = $1", "p.repo = $1", "on conflict(repo, path)"} {
+			for _, bad := range []string{`"rolio_repo_paths"`, " repo = $1", "rp.repo = $1", "p.repo = $1", "on conflict(repo, path)"} {
 				if strings.Contains(sql, bad) {
 					t.Fatalf("%s() still contains repo binding %q: %q", tt.name, bad, sql)
 				}
@@ -634,7 +634,7 @@ func TestDocsetBindingReadSQL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s() error = %v", tt.name, err)
 			}
-			if !strings.Contains(sql, `"gxfs_docset_paths"`) {
+			if !strings.Contains(sql, `"rolio_docset_paths"`) {
 				t.Fatalf("%s() missing docset paths view: %q", tt.name, sql)
 			}
 			if !strings.Contains(sql, tt.wantScope) {
@@ -650,7 +650,7 @@ func TestDocCatSQL(t *testing.T) {
 		t.Fatalf("DocCatSQL() error = %v", err)
 	}
 
-	want := `select d.content, d.content_hash from "docschema"."gxfs_repo_paths" rp join "docschema"."gxfs_docs" d on rp.doc_id = d.id where rp.repo = $1 and rp.path = $2`
+	want := `select d.content, d.content_hash from "docschema"."rolio_repo_paths" rp join "docschema"."rolio_docs" d on rp.doc_id = d.id where rp.repo = $1 and rp.path = $2`
 	if sql != want {
 		t.Fatalf("DocCatSQL() = %q, want %q", sql, want)
 	}
@@ -662,7 +662,7 @@ func TestDocStatSQL(t *testing.T) {
 		t.Fatalf("DocStatSQL() error = %v", err)
 	}
 
-	want := `select rp.path, rp.size, rp.mtime, d.content_hash from "docschema"."gxfs_repo_paths" rp join "docschema"."gxfs_docs" d on rp.doc_id = d.id where rp.repo = $1 and rp.path = $2`
+	want := `select rp.path, rp.size, rp.mtime, d.content_hash from "docschema"."rolio_repo_paths" rp join "docschema"."rolio_docs" d on rp.doc_id = d.id where rp.repo = $1 and rp.path = $2`
 	if sql != want {
 		t.Fatalf("DocStatSQL() = %q, want %q", sql, want)
 	}
@@ -674,7 +674,7 @@ func TestDocStatDirSQL(t *testing.T) {
 		t.Fatalf("DocStatDirSQL() error = %v", err)
 	}
 
-	want := `select count(*) from "docschema"."gxfs_repo_paths" where repo = $1 and path like $2`
+	want := `select count(*) from "docschema"."rolio_repo_paths" where repo = $1 and path like $2`
 	if sql != want {
 		t.Fatalf("DocStatDirSQL() = %q, want %q", sql, want)
 	}
@@ -698,10 +698,10 @@ func TestDocSearchCountSQL(t *testing.T) {
 		t.Fatalf("DocSearchCountSQL() missing path filter: %q", sql)
 	}
 	// Tables must be schema-qualified.
-	if !strings.Contains(sql, `"docschema"."gxfs_repo_paths"`) {
+	if !strings.Contains(sql, `"docschema"."rolio_repo_paths"`) {
 		t.Fatalf("DocSearchCountSQL() missing schema-qualified paths table: %q", sql)
 	}
-	if !strings.Contains(sql, `"docschema"."gxfs_docs"`) {
+	if !strings.Contains(sql, `"docschema"."rolio_docs"`) {
 		t.Fatalf("DocSearchCountSQL() missing schema-qualified docs table: %q", sql)
 	}
 }
@@ -730,7 +730,7 @@ func TestDocBatchHashesSQL(t *testing.T) {
 		t.Fatalf("DocBatchHashesSQL() error = %v", err)
 	}
 
-	want := `select rp.path, d.content_hash from "docschema"."gxfs_repo_paths" rp join "docschema"."gxfs_docs" d on rp.doc_id = d.id ` +
+	want := `select rp.path, d.content_hash from "docschema"."rolio_repo_paths" rp join "docschema"."rolio_docs" d on rp.doc_id = d.id ` +
 		`where rp.repo = $1 and d.content_hash is not null ` +
 		`and ($2 = '' or rp.path = $2 or rp.path like $2 || '/%%') ` +
 		`order by rp.path`
@@ -745,7 +745,7 @@ func TestDocStreamGrepSQL(t *testing.T) {
 		t.Fatalf("DocStreamGrepSQL() error = %v", err)
 	}
 
-	want := `select rp.path, d.content from "docschema"."gxfs_repo_paths" rp join "docschema"."gxfs_docs" d on rp.doc_id = d.id ` +
+	want := `select rp.path, d.content from "docschema"."rolio_repo_paths" rp join "docschema"."rolio_docs" d on rp.doc_id = d.id ` +
 		`where rp.repo = $1 and rp.path like $2 ` +
 		`order by rp.path`
 	if sql != want {
@@ -791,7 +791,7 @@ func TestDocQuerySQLRejectsUnsafeSchema(t *testing.T) {
 
 func TestDocQuerySQLRejectsUnsafeBinding(t *testing.T) {
 	for _, cfg := range []Config{
-		{DocBinding: DocBindingConfig{PathsTable: "gxfs_repo_paths; drop table users", ScopeColumn: docRepoScopeColumn}},
+		{DocBinding: DocBindingConfig{PathsTable: "rolio_repo_paths; drop table users", ScopeColumn: docRepoScopeColumn}},
 		{DocBinding: DocBindingConfig{PathsTable: docRepoPathsTable, ScopeColumn: "repo; drop table users"}},
 		{DocBinding: DocBindingConfig{PathsTable: docRepoPathsTable}},
 		{DocBinding: DocBindingConfig{ScopeColumn: docRepoScopeColumn}},
@@ -812,7 +812,7 @@ func TestDocInsertSQL(t *testing.T) {
 	if !strings.Contains(sql, "returning id") {
 		t.Fatalf("DocInsertSQL() missing returning id: %q", sql)
 	}
-	if !strings.Contains(sql, `"docschema"."gxfs_docs"`) {
+	if !strings.Contains(sql, `"docschema"."rolio_docs"`) {
 		t.Fatalf("DocInsertSQL() missing schema-qualified table: %q", sql)
 	}
 }

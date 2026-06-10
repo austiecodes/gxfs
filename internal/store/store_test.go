@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 type fakeAdapter struct{}
@@ -64,8 +64,8 @@ func (fakeAdapter) Locate(_ context.Context, _ store.LocateRequest) (*store.Loca
 var _ store.Adapter = fakeAdapter{}
 
 func TestCapabilityRequestTypesCarryRepoAndPath(t *testing.T) {
-	req := store.LSRequest{Repo: "gxfs", Path: "/docs"}
-	if req.Repo != "gxfs" || req.Path != "/docs" {
+	req := store.LSRequest{Repo: "rolio", Path: "/docs"}
+	if req.Repo != "rolio" || req.Path != "/docs" {
 		t.Fatalf("LSRequest = %+v, want repo and path preserved", req)
 	}
 }

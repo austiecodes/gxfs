@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 var (
@@ -47,7 +47,7 @@ func recordUsageEvent(ctx context.Context, pool *pgxpool.Pool, cfg Config, event
 		return nil, fmt.Errorf("%w: payload must be valid JSON", store.ErrInvalidParam)
 	}
 
-	table, err := quoteTable(cfg.Schema, "gxfs_usage_events")
+	table, err := quoteTable(cfg.Schema, "rolio_usage_events")
 	if err != nil {
 		return nil, err
 	}

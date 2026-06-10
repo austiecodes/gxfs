@@ -1,4 +1,4 @@
-module github.com/austiecodes/gxfs
+module github.com/austiecodes/rolio
 
 go 1.25.0
 

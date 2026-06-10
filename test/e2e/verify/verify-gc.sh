@@ -11,19 +11,19 @@
 #
 # Prerequisites:
 #   - PostgreSQL running on localhost:5432
-#   - gxfs-server binary built
+#   - rolio-server binary built
 #
 # Usage:
-#   ./verify-gc.sh [path-to-gxfs-server-binary]
+#   ./verify-gc.sh [path-to-rolio-server-binary]
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
-BINARY="${1:-$(cd "${SCRIPT_DIR}/../.." && pwd)/bin/gxfs-server}"
+BINARY="${1:-$(cd "${SCRIPT_DIR}/../.." && pwd)/bin/rolio-server}"
 if [ ! -x "$BINARY" ]; then
-    echo "Building gxfs-server..."
-    (cd "${SCRIPT_DIR}/../.." && go build -o bin/gxfs-server ./cmd/gxfs-server)
-    BINARY="${SCRIPT_DIR}/../../bin/gxfs-server"
+    echo "Building rolio-server..."
+    (cd "${SCRIPT_DIR}/../.." && go build -o bin/rolio-server ./cmd/rolio-server)
+    BINARY="${SCRIPT_DIR}/../../bin/rolio-server"
 fi
 
 echo "=== Phase #17: Orphan Doc GC E2E Verification ==="
@@ -45,9 +45,9 @@ curl_put "$(repo_url "$REPO1" write "path=/docs/orphan2.md")" \
 echo "Seed complete."
 
 # Get doc IDs
-ORPHAN1_ID=$(db_exec "SELECT doc_id FROM gxfs_repo_paths WHERE path = '/docs/orphan1.md' AND repo = '${REPO1}';")
-ORPHAN2_ID=$(db_exec "SELECT doc_id FROM gxfs_repo_paths WHERE path = '/docs/orphan2.md' AND repo = '${REPO1}';")
-KEEP_ID=$(db_exec "SELECT doc_id FROM gxfs_repo_paths WHERE path = '/docs/keep-me.md' AND repo = '${REPO1}';")
+ORPHAN1_ID=$(db_exec "SELECT doc_id FROM rolio_repo_paths WHERE path = '/docs/orphan1.md' AND repo = '${REPO1}';")
+ORPHAN2_ID=$(db_exec "SELECT doc_id FROM rolio_repo_paths WHERE path = '/docs/orphan2.md' AND repo = '${REPO1}';")
+KEEP_ID=$(db_exec "SELECT doc_id FROM rolio_repo_paths WHERE path = '/docs/keep-me.md' AND repo = '${REPO1}';")
 
 # Validate IDs extracted
 for var_name in ORPHAN1_ID ORPHAN2_ID KEEP_ID; do
@@ -58,15 +58,15 @@ for var_name in ORPHAN1_ID ORPHAN2_ID KEEP_ID; do
     fi
 done
 # Remove repo_path references to create orphans
-db_exec "DELETE FROM gxfs_repo_paths WHERE doc_id IN ('${ORPHAN1_ID}', '${ORPHAN2_ID}');"
+db_exec "DELETE FROM rolio_repo_paths WHERE doc_id IN ('${ORPHAN1_ID}', '${ORPHAN2_ID}');"
 # Age orphans past grace period
-db_exec "UPDATE gxfs_docs SET updated_at = NOW() - INTERVAL '2 hours' WHERE id IN ('${ORPHAN1_ID}', '${ORPHAN2_ID}');"
+db_exec "UPDATE rolio_docs SET updated_at = NOW() - INTERVAL '2 hours' WHERE id IN ('${ORPHAN1_ID}', '${ORPHAN2_ID}');"
 
 echo ""
 
 # --- Scenario 1: Dry-run preview ---
 echo "--- Scenario 1: Dry-run preview ---"
-GC_OUT=$(GXFS_SERVER_CONFIG="$SERVER_CONFIG" "$BINARY" gc --dry-run --limit 10 2>&1 || true)
+GC_OUT=$(ROLIO_SERVER_CONFIG="$SERVER_CONFIG" "$BINARY" gc --dry-run --limit 10 2>&1 || true)
 if echo "$GC_OUT" | grep -q "2 orphan"; then
     printf "${GREEN}PASS${NC} Dry-run identifies 2 orphans\n"
     PASS_COUNT=$((PASS_COUNT + 1))
@@ -76,7 +76,7 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 # Verify docs still exist (dry-run should not delete)
-DOC_COUNT=$(db_exec "SELECT COUNT(*) FROM gxfs_docs WHERE id IN ('${ORPHAN1_ID}', '${ORPHAN2_ID}');")
+DOC_COUNT=$(db_exec "SELECT COUNT(*) FROM rolio_docs WHERE id IN ('${ORPHAN1_ID}', '${ORPHAN2_ID}');")
 if [ "$DOC_COUNT" = "2" ]; then
     printf "${GREEN}PASS${NC} Dry-run does not delete\n"
     PASS_COUNT=$((PASS_COUNT + 1))
@@ -87,7 +87,7 @@ fi
 
 # --- Scenario 2: Force delete ---
 echo "--- Scenario 2: Force delete ---"
-GC_OUT=$(GXFS_SERVER_CONFIG="$SERVER_CONFIG" "$BINARY" gc --force 2>&1 || true)
+GC_OUT=$(ROLIO_SERVER_CONFIG="$SERVER_CONFIG" "$BINARY" gc --force 2>&1 || true)
 if echo "$GC_OUT" | grep -q "Deleted 2"; then
     printf "${GREEN}PASS${NC} Force deleted 2 orphans\n"
     PASS_COUNT=$((PASS_COUNT + 1))
@@ -97,7 +97,7 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 # Referenced doc still exists
-KEEP_EXISTS=$(db_exec "SELECT COUNT(*) FROM gxfs_docs WHERE id = '${KEEP_ID}';")
+KEEP_EXISTS=$(db_exec "SELECT COUNT(*) FROM rolio_docs WHERE id = '${KEEP_ID}';")
 if [ "$KEEP_EXISTS" = "1" ]; then
     printf "${GREEN}PASS${NC} Referenced doc preserved\n"
     PASS_COUNT=$((PASS_COUNT + 1))
@@ -111,11 +111,11 @@ echo "--- Scenario 3: Grace period protection ---"
 # Create a fresh orphan (updated_at = now)
 curl_put "$(repo_url "$REPO1" write "path=/docs/fresh-orphan.md")" \
     '{"content":"# Fresh\n\nJust created.\n"}'
-FRESH_ID=$(db_exec "SELECT doc_id FROM gxfs_repo_paths WHERE path = '/docs/fresh-orphan.md' AND repo = '${REPO1}';")
-db_exec "DELETE FROM gxfs_repo_paths WHERE doc_id = '${FRESH_ID}';"
+FRESH_ID=$(db_exec "SELECT doc_id FROM rolio_repo_paths WHERE path = '/docs/fresh-orphan.md' AND repo = '${REPO1}';")
+db_exec "DELETE FROM rolio_repo_paths WHERE doc_id = '${FRESH_ID}';"
 # Do NOT age it - it should be protected by grace period
-GC_OUT=$(GXFS_SERVER_CONFIG="$SERVER_CONFIG" "$BINARY" gc --force 2>&1 || true)
-FRESH_EXISTS=$(db_exec "SELECT COUNT(*) FROM gxfs_docs WHERE id = '${FRESH_ID}';")
+GC_OUT=$(ROLIO_SERVER_CONFIG="$SERVER_CONFIG" "$BINARY" gc --force 2>&1 || true)
+FRESH_EXISTS=$(db_exec "SELECT COUNT(*) FROM rolio_docs WHERE id = '${FRESH_ID}';")
 if [ "$FRESH_EXISTS" = "1" ]; then
     printf "${GREEN}PASS${NC} Fresh orphan protected by grace period\n"
     PASS_COUNT=$((PASS_COUNT + 1))
@@ -138,7 +138,7 @@ type = "doc_postgres"
 dsn = "postgresql://myuser:supersecret@localhost:5432/${VERIFY_DB}"
 schema = "public"
 TOML
-GC_OUT=$(GXFS_SERVER_CONFIG="$DSN_CONFIG" "$BINARY" gc --dry-run 2>&1 || true)
+GC_OUT=$(ROLIO_SERVER_CONFIG="$DSN_CONFIG" "$BINARY" gc --dry-run 2>&1 || true)
 if echo "$GC_OUT" | grep -q "supersecret"; then
     printf "${RED}FAIL${NC} DSN redaction: password leaked in output!\n"
     FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -161,7 +161,7 @@ type = "doc_postgres"
 dsn = "postgresql://${VERIFY_USER}@localhost:5432/${VERIFY_DB}"
 schema = "public"
 TOML
-GC_OUT=$(GXFS_SERVER_CONFIG="$DEDUP_CONFIG" "$BINARY" gc --dry-run 2>&1 || true)
+GC_OUT=$(ROLIO_SERVER_CONFIG="$DEDUP_CONFIG" "$BINARY" gc --dry-run 2>&1 || true)
 TARGET_COUNT=$(echo "$GC_OUT" | grep -c "Target " || true)
 if [ "$TARGET_COUNT" = "1" ]; then
     printf "${GREEN}PASS${NC} Infra backend target count: 1 backend -> 1 target\n"
@@ -187,7 +187,7 @@ schema = "public"
 nodes_table = "vfs_nodes"
 content_table = "vfs_content"
 TOML
-GC_OUT=$(GXFS_SERVER_CONFIG="$NOTARGET_CONFIG" "$BINARY" gc --dry-run 2>&1 || true)
+GC_OUT=$(ROLIO_SERVER_CONFIG="$NOTARGET_CONFIG" "$BINARY" gc --dry-run 2>&1 || true)
 if [[ "$GC_OUT" == *"no doc_postgres storage targets configured"* ]]; then
     printf "${GREEN}PASS${NC} Zero-target: error message correct\n"
     PASS_COUNT=$((PASS_COUNT + 1))

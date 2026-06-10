@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 func NewHandler(adapter store.Adapter, writableRepos map[string]bool) http.Handler {
@@ -234,7 +234,7 @@ func (h *handler) handleUsageEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.LogID == "" {
-		req.LogID = r.Header.Get("X-Gxfs-Log-Id")
+		req.LogID = r.Header.Get("X-Rolio-Log-Id")
 	}
 	if req.EventKind == "" {
 		req.EventKind = store.UsageEventKindCLICommand
@@ -822,7 +822,7 @@ func (lm *loggingMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"duration_ms", time.Since(start).Milliseconds(),
 	}
 
-	if logID := r.Header.Get("X-Gxfs-Log-Id"); logID != "" {
+	if logID := r.Header.Get("X-Rolio-Log-Id"); logID != "" {
 		attrs = append(attrs, "log_id", logID)
 	}
 

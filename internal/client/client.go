@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 type Client struct {
@@ -19,7 +19,7 @@ type Client struct {
 	http       *http.Client
 	clientRepo string // sent as X-Client-Repo header for cross-repo write gate
 	mountPath  string // sent as X-Mount-Path header for observability
-	logID      string // sent as X-Gxfs-Log-Id header for audit correlation
+	logID      string // sent as X-Rolio-Log-Id header for audit correlation
 	sourceKind store.SourceKind
 	sourceName string
 }
@@ -51,7 +51,7 @@ func (c *Client) SetMountPath(mp string) {
 	c.mountPath = mp
 }
 
-// SetLogID sets the audit log ID sent as X-Gxfs-Log-Id header.
+// SetLogID sets the audit log ID sent as X-Rolio-Log-Id header.
 func (c *Client) SetLogID(id string) {
 	c.logID = id
 }
@@ -498,7 +498,7 @@ func (c *Client) do(req *http.Request, op string, out any) error {
 // and the caller handles the response.
 func (c *Client) doWithAllowed(req *http.Request, op string, out any, allowed []int) error {
 	if c.logID != "" {
-		req.Header.Set("X-Gxfs-Log-Id", c.logID)
+		req.Header.Set("X-Rolio-Log-Id", c.logID)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

@@ -139,52 +139,52 @@ func migrationTemplateData(cfg Config) (migrationData, error) {
 		}
 	}
 
-	reposTable, err := quoteTable(cfg.Schema, "gxfs_repos")
+	reposTable, err := quoteTable(cfg.Schema, "rolio_repos")
 	if err != nil {
 		return migrationData{}, err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return migrationData{}, err
 	}
-	repoPathsTable, err := quoteTable(cfg.Schema, "gxfs_repo_paths")
+	repoPathsTable, err := quoteTable(cfg.Schema, "rolio_repo_paths")
 	if err != nil {
 		return migrationData{}, err
 	}
-	docNamespacesTable, err := quoteTable(cfg.Schema, "gxfs_doc_namespaces")
+	docNamespacesTable, err := quoteTable(cfg.Schema, "rolio_doc_namespaces")
 	if err != nil {
 		return migrationData{}, err
 	}
-	docNamespacePathsTable, err := quoteTable(cfg.Schema, "gxfs_doc_namespace_paths")
+	docNamespacePathsTable, err := quoteTable(cfg.Schema, "rolio_doc_namespace_paths")
 	if err != nil {
 		return migrationData{}, err
 	}
-	docsetsTable, err := quoteTable(cfg.Schema, "gxfs_docsets")
+	docsetsTable, err := quoteTable(cfg.Schema, "rolio_docsets")
 	if err != nil {
 		return migrationData{}, err
 	}
-	docsetDocsTable, err := quoteTable(cfg.Schema, "gxfs_docset_docs")
+	docsetDocsTable, err := quoteTable(cfg.Schema, "rolio_docset_docs")
 	if err != nil {
 		return migrationData{}, err
 	}
-	docsetPathsView, err := quoteTable(cfg.Schema, "gxfs_docset_paths")
+	docsetPathsView, err := quoteTable(cfg.Schema, "rolio_docset_paths")
 	if err != nil {
 		return migrationData{}, err
 	}
-	legacyCollectionsTable, err := quoteTable(cfg.Schema, "gxfs_collections")
+	legacyCollectionsTable, err := quoteTable(cfg.Schema, "rolio_collections")
 	if err != nil {
 		return migrationData{}, err
 	}
-	legacyCollectionDocsTable, err := quoteTable(cfg.Schema, "gxfs_collection_docs")
+	legacyCollectionDocsTable, err := quoteTable(cfg.Schema, "rolio_collection_docs")
 	if err != nil {
 		return migrationData{}, err
 	}
-	usageEventsTable, err := quoteTable(cfg.Schema, "gxfs_usage_events")
+	usageEventsTable, err := quoteTable(cfg.Schema, "rolio_usage_events")
 	if err != nil {
 		return migrationData{}, err
 	}
-	legacyCollectionsRegClass := legacyRelationName(cfg.Schema, "gxfs_collections")
-	legacyCollectionDocsRegClass := legacyRelationName(cfg.Schema, "gxfs_collection_docs")
+	legacyCollectionsRegClass := legacyRelationName(cfg.Schema, "rolio_collections")
+	legacyCollectionDocsRegClass := legacyRelationName(cfg.Schema, "rolio_collection_docs")
 
 	return migrationData{
 		SchemaName:                   schemaName,

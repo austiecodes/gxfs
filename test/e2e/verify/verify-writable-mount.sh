@@ -10,19 +10,19 @@
 #
 # Prerequisites:
 #   - PostgreSQL running on localhost:5432
-#   - gxfs-server binary built
+#   - rolio-server binary built
 #
 # Usage:
-#   ./verify-writable-mount.sh [path-to-gxfs-server-binary]
+#   ./verify-writable-mount.sh [path-to-rolio-server-binary]
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
-BINARY="${1:-$(cd "${SCRIPT_DIR}/../.." && pwd)/bin/gxfs-server}"
+BINARY="${1:-$(cd "${SCRIPT_DIR}/../.." && pwd)/bin/rolio-server}"
 if [ ! -x "$BINARY" ]; then
-    echo "Building gxfs-server..."
-    (cd "${SCRIPT_DIR}/../.." && go build -o bin/gxfs-server ./cmd/gxfs-server)
-    BINARY="${SCRIPT_DIR}/../../bin/gxfs-server"
+    echo "Building rolio-server..."
+    (cd "${SCRIPT_DIR}/../.." && go build -o bin/rolio-server ./cmd/rolio-server)
+    BINARY="${SCRIPT_DIR}/../../bin/rolio-server"
 fi
 
 echo "=== Phase #14 (4A): Cross-repo Writable Mount E2E Verification ==="

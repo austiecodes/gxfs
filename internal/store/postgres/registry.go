@@ -11,13 +11,13 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 const (
-	repoRegistryTable            = "gxfs_repos"
-	docNamespaceRegistryTable    = "gxfs_doc_namespaces"
-	docsetRegistrySourceTable    = "gxfs_docsets"
+	repoRegistryTable            = "rolio_repos"
+	docNamespaceRegistryTable    = "rolio_doc_namespaces"
+	docsetRegistrySourceTable    = "rolio_docsets"
 	postgresDuplicateKeySQLState = "23505"
 )
 
@@ -160,7 +160,7 @@ func (r *Registry) ListDocNamespaces(ctx context.Context) ([]store.DocNamespace,
 	return namespaces, nil
 }
 
-// ListDocsets returns curated docset:// namespaces from gxfs_docsets.
+// ListDocsets returns curated docset:// namespaces from rolio_docsets.
 func (r *Registry) ListDocsets(ctx context.Context) ([]store.Docset, error) {
 	if r.pool == nil {
 		return nil, fmt.Errorf("postgres registry pool is nil")
@@ -293,7 +293,7 @@ func isRepoDuplicateError(err error) bool {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		return pgErr.Code == postgresDuplicateKeySQLState &&
-			(pgErr.ConstraintName == "gxfs_repos_pkey" || pgErr.TableName == repoRegistryTable)
+			(pgErr.ConstraintName == "rolio_repos_pkey" || pgErr.TableName == repoRegistryTable)
 	}
 	return isRepoDuplicateMessage(err)
 }
@@ -304,5 +304,5 @@ func isRepoDuplicateMessage(err error) bool {
 	}
 	msg := err.Error()
 	return (strings.Contains(msg, "duplicate key") || strings.Contains(msg, "violates unique constraint")) &&
-		(strings.Contains(msg, "gxfs_repos_pkey") || strings.Contains(msg, repoRegistryTable))
+		(strings.Contains(msg, "rolio_repos_pkey") || strings.Contains(msg, repoRegistryTable))
 }

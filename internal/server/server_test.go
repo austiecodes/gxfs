@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 type fakeAdapter struct {
@@ -179,7 +179,7 @@ func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
 
 func TestHandlerRoutesLS(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/ls?repo=gxfs&path=/docs", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/ls?repo=rolio&path=/docs", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -187,8 +187,8 @@ func TestHandlerRoutesLS(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if adapter.lsReq.Repo != "gxfs" || adapter.lsReq.Path != "/docs" {
-		t.Fatalf("ls req = %+v, want gxfs /docs", adapter.lsReq)
+	if adapter.lsReq.Repo != "rolio" || adapter.lsReq.Path != "/docs" {
+		t.Fatalf("ls req = %+v, want rolio /docs", adapter.lsReq)
 	}
 	var resp store.LSResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
@@ -203,13 +203,13 @@ func TestHandlerRecordsUsageEvent(t *testing.T) {
 	adapter := &fakeAdapter{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/usage-events", strings.NewReader(`{
 		"session_id":"session-1",
-		"client_repo":"gxfs",
+		"client_repo":"rolio",
 		"command":"search",
 		"exit_code":0,
 		"duration_ms":42,
 		"payload":{"query":"auth"}
 	}`))
-	req.Header.Set("X-Gxfs-Log-Id", "log-1")
+	req.Header.Set("X-Rolio-Log-Id", "log-1")
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -220,7 +220,7 @@ func TestHandlerRecordsUsageEvent(t *testing.T) {
 	if adapter.usageReq.LogID != "log-1" {
 		t.Fatalf("usage log_id = %q, want log-1", adapter.usageReq.LogID)
 	}
-	if adapter.usageReq.SessionID != "session-1" || adapter.usageReq.ClientRepo != "gxfs" {
+	if adapter.usageReq.SessionID != "session-1" || adapter.usageReq.ClientRepo != "rolio" {
 		t.Fatalf("usage req = %+v, want session/client repo", adapter.usageReq)
 	}
 	if adapter.usageReq.Command != "search" || adapter.usageReq.ExitCode != 0 || adapter.usageReq.DurationMs != 42 {
@@ -478,7 +478,7 @@ func TestHandlerRoutesDocsNamespaceToDocsAdapter(t *testing.T) {
 	repoAdapter := &fakeAdapter{}
 	docsAdapter := &fakeAdapter{}
 	registry, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": repoAdapter},
+		map[string]store.Adapter{"rolio": repoAdapter},
 		map[string]store.Adapter{"openai-go-sdk": docsAdapter},
 	)
 	if err != nil {
@@ -504,13 +504,13 @@ func TestHandlerRoutesRepoNamespaceToRepoAdapter(t *testing.T) {
 	repoAdapter := &fakeAdapter{}
 	docsAdapter := &fakeAdapter{}
 	registry, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": repoAdapter},
+		map[string]store.Adapter{"rolio": repoAdapter},
 		map[string]store.Adapter{"openai-go-sdk": docsAdapter},
 	)
 	if err != nil {
 		t.Fatalf("NewNamespaceRegistry() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=rolio&path=/readme.md", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(registry, nil).ServeHTTP(rec, req)
@@ -518,8 +518,8 @@ func TestHandlerRoutesRepoNamespaceToRepoAdapter(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if repoAdapter.catReq.Repo != "gxfs" || repoAdapter.catReq.Path != "/readme.md" {
-		t.Fatalf("repo cat req = %+v, want gxfs /readme.md", repoAdapter.catReq)
+	if repoAdapter.catReq.Repo != "rolio" || repoAdapter.catReq.Path != "/readme.md" {
+		t.Fatalf("repo cat req = %+v, want rolio /readme.md", repoAdapter.catReq)
 	}
 	if docsAdapter.catReq != (store.CatRequest{}) {
 		t.Fatalf("docs adapter cat req = %+v, want untouched", docsAdapter.catReq)
@@ -542,7 +542,7 @@ func TestHandlerDocsNamespaceRequiresSourceRouter(t *testing.T) {
 
 func TestHandlerUnknownDocsNamespaceMapsUnknownSource(t *testing.T) {
 	registry, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": &fakeAdapter{}},
+		map[string]store.Adapter{"rolio": &fakeAdapter{}},
 		map[string]store.Adapter{"openai-go-sdk": &fakeAdapter{}},
 	)
 	if err != nil {
@@ -563,7 +563,7 @@ func TestHandlerUnknownDocsNamespaceMapsUnknownSource(t *testing.T) {
 
 func TestHandlerMountSourcesListsRepoSources(t *testing.T) {
 	registry, err := store.NewRegistry(map[string]store.Adapter{
-		"gxfs":             &fakeAdapter{},
+		"rolio":             &fakeAdapter{},
 		"github/openai-go": &fakeAdapter{},
 	})
 	if err != nil {
@@ -589,8 +589,8 @@ func TestHandlerMountSourcesListsRepoSources(t *testing.T) {
 	if resp.Sources[0].Ref != "repo://github%2Fopenai-go" || resp.Sources[0].Kind != store.SourceKindRepo || resp.Sources[0].Name != "github/openai-go" {
 		t.Fatalf("source[0] = %+v, want escaped repo source", resp.Sources[0])
 	}
-	if resp.Sources[1].Ref != "repo://gxfs" || resp.Sources[1].Kind != store.SourceKindRepo || resp.Sources[1].Name != "gxfs" {
-		t.Fatalf("source[1] = %+v, want gxfs repo source", resp.Sources[1])
+	if resp.Sources[1].Ref != "repo://rolio" || resp.Sources[1].Kind != store.SourceKindRepo || resp.Sources[1].Name != "rolio" {
+		t.Fatalf("source[1] = %+v, want rolio repo source", resp.Sources[1])
 	}
 }
 
@@ -664,7 +664,7 @@ func TestHandlerRoutesLSParams(t *testing.T) {
 
 func TestHandlerRoutesGrepRegex(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/grep?repo=gxfs&path=/go&pattern=Adapter&regex=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/grep?repo=rolio&path=/go&pattern=Adapter&regex=true", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -672,7 +672,7 @@ func TestHandlerRoutesGrepRegex(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if adapter.grepReq.Repo != "gxfs" || adapter.grepReq.Path != "/go" ||
+	if adapter.grepReq.Repo != "rolio" || adapter.grepReq.Path != "/go" ||
 		adapter.grepReq.Pattern != "Adapter" || !adapter.grepReq.Regex {
 		t.Fatalf("grep req = %+v, want regex grep", adapter.grepReq)
 	}
@@ -958,7 +958,7 @@ func (a *readOnlyAdapter) Locate(_ context.Context, _ store.LocateRequest) (*sto
 }
 
 func TestHandlerMapsReadOnlyMountErrorToForbidden(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=gxfs&path=/docs/readme.md", strings.NewReader("hello"))
+	req := httptest.NewRequest(http.MethodPut, "/v1/repos/write?repo=rolio&path=/docs/readme.md", strings.NewReader("hello"))
 	rec := httptest.NewRecorder()
 
 	NewHandler(&readOnlyAdapter{}, nil).ServeHTTP(rec, req)
@@ -991,7 +991,7 @@ func TestHandlerMapsUnknownRepoToNotFound(t *testing.T) {
 
 func TestHandlerRoutesSearch(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/search?repo=gxfs&q=test&path=/docs&limit=5", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/search?repo=rolio&q=test&path=/docs&limit=5", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -1008,8 +1008,8 @@ func TestHandlerRoutesSearch(t *testing.T) {
 	if adapter.searchReq.Limit != 5 {
 		t.Fatalf("search limit = %d, want 5", adapter.searchReq.Limit)
 	}
-	if adapter.searchReq.Repo != "gxfs" {
-		t.Fatalf("search repo = %q, want %q", adapter.searchReq.Repo, "gxfs")
+	if adapter.searchReq.Repo != "rolio" {
+		t.Fatalf("search repo = %q, want %q", adapter.searchReq.Repo, "rolio")
 	}
 
 	var resp store.SearchResponse
@@ -1026,7 +1026,7 @@ func TestHandlerRoutesSearch(t *testing.T) {
 
 func TestHandlerSearchEmptyQuery(t *testing.T) {
 	adapter := &fakeAdapter{searchErr: store.ErrEmptyQuery}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/search?repo=gxfs&q=", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/search?repo=rolio&q=", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -1041,7 +1041,7 @@ func TestHandlerSearchEmptyQuery(t *testing.T) {
 
 func TestHandlerSearchInvalidLimit(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/search?repo=gxfs&q=test&limit=abc", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/search?repo=rolio&q=test&limit=abc", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -1055,7 +1055,7 @@ func TestHandlerSearchInvalidLimit(t *testing.T) {
 // underlying adapter returns ErrNotFound (e.g. after delete).
 func TestHandlerCatContentNotFound(t *testing.T) {
 	adapter := &notFoundCatAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/deleted.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=rolio&path=/docs/deleted.md", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -1293,7 +1293,7 @@ func TestHandlerSearchLimitOffset(t *testing.T) {
 
 func TestHandlerCatReturnsETag(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=rolio&path=/docs/readme.md", nil)
 	rec := httptest.NewRecorder()
 
 	NewHandler(adapter, nil).ServeHTTP(rec, req)
@@ -1322,7 +1322,7 @@ func TestHandlerCatReturnsETag(t *testing.T) {
 func TestHandlerCatIfNoneMatchReturns304(t *testing.T) {
 	adapter := &fakeAdapter{}
 	hash := store.HashContent("# Readme\n")
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=rolio&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", `"`+hash+`"`)
 	rec := httptest.NewRecorder()
 
@@ -1342,7 +1342,7 @@ func TestHandlerCatIfNoneMatchReturns304(t *testing.T) {
 
 func TestHandlerCatIfNoneMatchMismatchReturns200(t *testing.T) {
 	adapter := &fakeAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=rolio&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", `"sha256:0000000000"`)
 	rec := httptest.NewRecorder()
 
@@ -1363,7 +1363,7 @@ func TestHandlerCatIfNoneMatchMismatchReturns200(t *testing.T) {
 func TestHandlerCatIfNoneMatchUnquoted(t *testing.T) {
 	adapter := &fakeAdapter{}
 	hash := store.HashContent("# Readme\n")
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=rolio&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", hash)
 	rec := httptest.NewRecorder()
 
@@ -1377,7 +1377,7 @@ func TestHandlerCatIfNoneMatchUnquoted(t *testing.T) {
 func TestHandlerCatIfNoneMatchMultipleETags(t *testing.T) {
 	adapter := &fakeAdapter{}
 	hash := store.HashContent("# Readme\n")
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=rolio&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", `"sha256:other", "`+hash+`"`)
 	rec := httptest.NewRecorder()
 
@@ -1390,7 +1390,7 @@ func TestHandlerCatIfNoneMatchMultipleETags(t *testing.T) {
 
 func TestHandlerCatNoHashNoETag(t *testing.T) {
 	adapter := &noHashCatAdapter{}
-	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=gxfs&path=/docs/readme.md", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/repos/cat?repo=rolio&path=/docs/readme.md", nil)
 	req.Header.Set("If-None-Match", `"sha256:whatever"`)
 	rec := httptest.NewRecorder()
 

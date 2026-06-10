@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 type registryFakeAdapter struct {
@@ -150,7 +150,7 @@ func TestRegistryRootLSReturnsSourceCategories(t *testing.T) {
 func TestRegistryReposLSReturnsOwnerDirectories(t *testing.T) {
 	registry, err := store.NewRegistry(map[string]store.Adapter{
 		"austiecodes/xxxx": &registryFakeAdapter{},
-		"openai/gxfs":       &registryFakeAdapter{},
+		"openai/rolio":       &registryFakeAdapter{},
 	})
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
@@ -286,7 +286,7 @@ func TestRegistryRoutesDocsetsByLongestPrefix(t *testing.T) {
 		},
 	}
 	registry, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": &registryFakeAdapter{}},
+		map[string]store.Adapter{"rolio": &registryFakeAdapter{}},
 		map[string]store.Adapter{
 			"team":          &registryFakeAdapter{},
 			"team/playbook": docset,
@@ -321,7 +321,7 @@ func TestRegistryTreeFullPathLocalizesDocsetDescendants(t *testing.T) {
 		},
 	}
 	registry, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": &registryFakeAdapter{}},
+		map[string]store.Adapter{"rolio": &registryFakeAdapter{}},
 		map[string]store.Adapter{"team/playbook": docset},
 	)
 	if err != nil {
@@ -422,7 +422,7 @@ func TestNamespaceRegistryReposExcludesDocsNamespaces(t *testing.T) {
 
 func TestRegistryMountSourcesListsRepos(t *testing.T) {
 	registry, err := store.NewRegistry(map[string]store.Adapter{
-		"gxfs":             &registryFakeAdapter{},
+		"rolio":             &registryFakeAdapter{},
 		"github/openai-go": &registryFakeAdapter{},
 	})
 	if err != nil {
@@ -439,15 +439,15 @@ func TestRegistryMountSourcesListsRepos(t *testing.T) {
 	if sources[0].Ref != "repo://github%2Fopenai-go" || sources[0].Kind != store.SourceKindRepo || sources[0].Name != "github/openai-go" {
 		t.Fatalf("source[0] = %+v, want escaped github/openai-go repo", sources[0])
 	}
-	if sources[1].Ref != "repo://gxfs" || sources[1].Kind != store.SourceKindRepo || sources[1].Name != "gxfs" {
-		t.Fatalf("source[1] = %+v, want gxfs repo", sources[1])
+	if sources[1].Ref != "repo://rolio" || sources[1].Kind != store.SourceKindRepo || sources[1].Name != "rolio" {
+		t.Fatalf("source[1] = %+v, want rolio repo", sources[1])
 	}
 }
 
 func TestNamespaceRegistryMountSourcesListsReposAndDocs(t *testing.T) {
 	registry, err := store.NewNamespaceRegistry(
 		map[string]store.Adapter{
-			"gxfs":             &registryFakeAdapter{},
+			"rolio":             &registryFakeAdapter{},
 			"github/openai-go": &registryFakeAdapter{},
 		},
 		map[string]store.Adapter{
@@ -467,7 +467,7 @@ func TestNamespaceRegistryMountSourcesListsReposAndDocs(t *testing.T) {
 		{Ref: "docs://openai-go-sdk", Kind: store.SourceKindDocs, Name: "openai-go-sdk", Description: "shared docs namespace"},
 		{Ref: "docs://team%2Fplaybook", Kind: store.SourceKindDocs, Name: "team/playbook", Description: "shared docs namespace"},
 		{Ref: "repo://github%2Fopenai-go", Kind: store.SourceKindRepo, Name: "github/openai-go", Description: "repository namespace"},
-		{Ref: "repo://gxfs", Kind: store.SourceKindRepo, Name: "gxfs", Description: "repository namespace"},
+		{Ref: "repo://rolio", Kind: store.SourceKindRepo, Name: "rolio", Description: "repository namespace"},
 	}
 	if len(sources) != len(want) {
 		t.Fatalf("MountSources() len = %d, want %d: %+v", len(sources), len(want), sources)
@@ -486,14 +486,14 @@ func TestNamespaceRegistryAdapterForSource(t *testing.T) {
 	repoAdapter := &registryFakeAdapter{}
 	docsAdapter := &registryFakeAdapter{}
 	registry, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": repoAdapter},
+		map[string]store.Adapter{"rolio": repoAdapter},
 		map[string]store.Adapter{"openai-go-sdk": docsAdapter},
 	)
 	if err != nil {
 		t.Fatalf("NewNamespaceRegistry() error = %v", err)
 	}
 
-	gotRepo, err := registry.AdapterForSource(context.Background(), store.SourceRef{Kind: store.SourceKindRepo, Name: "gxfs"})
+	gotRepo, err := registry.AdapterForSource(context.Background(), store.SourceRef{Kind: store.SourceKindRepo, Name: "rolio"})
 	if err != nil {
 		t.Fatalf("AdapterForSource(repo) error = %v", err)
 	}
@@ -522,7 +522,7 @@ func TestNamespaceRegistryAdapterForSource(t *testing.T) {
 
 func TestNamespaceRegistryRejectsInvalidDocsAdapter(t *testing.T) {
 	_, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": &registryFakeAdapter{}},
+		map[string]store.Adapter{"rolio": &registryFakeAdapter{}},
 		map[string]store.Adapter{"": &registryFakeAdapter{}},
 	)
 	if err == nil {
@@ -530,7 +530,7 @@ func TestNamespaceRegistryRejectsInvalidDocsAdapter(t *testing.T) {
 	}
 
 	_, err = store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": &registryFakeAdapter{}},
+		map[string]store.Adapter{"rolio": &registryFakeAdapter{}},
 		map[string]store.Adapter{"openai-go-sdk": nil},
 	)
 	if err == nil {
@@ -542,7 +542,7 @@ func TestNamespaceRegistryInvalidatesDocsAdapters(t *testing.T) {
 	repoAdapter := &registryFakeAdapter{}
 	docsAdapter := &registryFakeAdapter{}
 	registry, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": repoAdapter},
+		map[string]store.Adapter{"rolio": repoAdapter},
 		map[string]store.Adapter{"openai-go-sdk": docsAdapter},
 	)
 	if err != nil {

@@ -382,7 +382,7 @@ type Globber interface {
 // DocsetMember represents a document reference in a docset.
 type DocsetMember struct {
 	Path  string `json:"path"`   // path within the docset (e.g., "/guide.md")
-	DocID string `json:"doc_id"` // reference to gxfs_docs.id
+	DocID string `json:"doc_id"` // reference to rolio_docs.id
 }
 
 // CreateDocsetRequest is the input for creating a docset.

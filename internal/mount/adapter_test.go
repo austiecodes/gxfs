@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/austiecodes/gxfs/internal/config"
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/config"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 type fakeStore struct {
@@ -112,7 +112,7 @@ func (f *fakeStore) Locate(_ context.Context, _ store.LocateRequest) (*store.Loc
 }
 
 func TestAdapterTranslatesRequestAndResponsePaths(t *testing.T) {
-	resolver, err := NewResolver("gxfs", []config.MountConfig{
+	resolver, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs", Remote: "repo://self/remote-docs", Mode: "writable"},
 	})
 	if err != nil {
@@ -125,7 +125,7 @@ func TestAdapterTranslatesRequestAndResponsePaths(t *testing.T) {
 	}
 	adapter := NewAdapter(base, resolver)
 
-	ls, err := adapter.LS(context.Background(), store.LSRequest{Repo: "gxfs", Path: "docs"})
+	ls, err := adapter.LS(context.Background(), store.LSRequest{Repo: "rolio", Path: "docs"})
 	if err != nil {
 		t.Fatalf("LS() error = %v", err)
 	}
@@ -136,7 +136,7 @@ func TestAdapterTranslatesRequestAndResponsePaths(t *testing.T) {
 		t.Fatalf("response path = %q, want /docs/guide.md", ls.Nodes[0].Path)
 	}
 
-	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "docs/guide.md"})
+	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "rolio", Path: "docs/guide.md"})
 	if err != nil {
 		t.Fatalf("Cat() error = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestAdapterTranslatesRequestAndResponsePaths(t *testing.T) {
 }
 
 func TestAdapterBuildsVirtualRootAndOverlaysNestedMounts(t *testing.T) {
-	resolver, err := NewResolver("gxfs", []config.MountConfig{
+	resolver, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs", Remote: "repo://self/remote-docs", Mode: "writable"},
 		{Local: "docs/shared", Remote: "repo://self/shared-docs", Mode: "readonly"},
 	})
@@ -179,7 +179,7 @@ func TestAdapterBuildsVirtualRootAndOverlaysNestedMounts(t *testing.T) {
 	}
 	adapter := NewAdapter(base, resolver)
 
-	root, err := adapter.LS(context.Background(), store.LSRequest{Repo: "gxfs", Path: "/"})
+	root, err := adapter.LS(context.Background(), store.LSRequest{Repo: "rolio", Path: "/"})
 	if err != nil {
 		t.Fatalf("LS(/) error = %v", err)
 	}
@@ -187,7 +187,7 @@ func TestAdapterBuildsVirtualRootAndOverlaysNestedMounts(t *testing.T) {
 		t.Fatalf("root nodes = %+v, want /docs dir", root.Nodes)
 	}
 
-	found, err := adapter.Find(context.Background(), store.FindRequest{Repo: "gxfs", Path: "docs", Name: "*.md"})
+	found, err := adapter.Find(context.Background(), store.FindRequest{Repo: "rolio", Path: "docs", Name: "*.md"})
 	if err != nil {
 		t.Fatalf("Find() error = %v", err)
 	}
@@ -198,7 +198,7 @@ func TestAdapterBuildsVirtualRootAndOverlaysNestedMounts(t *testing.T) {
 		t.Fatalf("find nodes = %+v, want overlay-localized paths", found.Nodes)
 	}
 
-	grep, err := adapter.Grep(context.Background(), store.GrepRequest{Repo: "gxfs", Path: "/", Pattern: "Adapter"})
+	grep, err := adapter.Grep(context.Background(), store.GrepRequest{Repo: "rolio", Path: "/", Pattern: "Adapter"})
 	if err != nil {
 		t.Fatalf("Grep() error = %v", err)
 	}
@@ -211,7 +211,7 @@ func TestAdapterBuildsVirtualRootAndOverlaysNestedMounts(t *testing.T) {
 }
 
 func TestAdapterRejectsReadOnlyWrites(t *testing.T) {
-	resolver, err := NewResolver("gxfs", []config.MountConfig{
+	resolver, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs/shared", Remote: "repo://self/shared", Mode: "readonly"},
 	})
 	if err != nil {
@@ -219,14 +219,14 @@ func TestAdapterRejectsReadOnlyWrites(t *testing.T) {
 	}
 	adapter := NewAdapter(&fakeStore{}, resolver)
 
-	_, err = adapter.Put(context.Background(), store.PutRequest{Repo: "gxfs", Path: "docs/shared/a.md", Content: "x"})
+	_, err = adapter.Put(context.Background(), store.PutRequest{Repo: "rolio", Path: "docs/shared/a.md", Content: "x"})
 	if !errors.Is(err, store.ErrReadOnlyMount) {
 		t.Fatalf("Put() error = %v, want ErrReadOnlyMount", err)
 	}
 }
 
 func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
-	resolver, err := NewResolver("gxfs", []config.MountConfig{
+	resolver, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs/openai-go-sdk", Remote: "docs://openai-go-sdk/reference", Mode: "readonly"},
 	})
 	if err != nil {
@@ -255,7 +255,7 @@ func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
 		},
 	}
 	registry, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": &fakeStore{}},
+		map[string]store.Adapter{"rolio": &fakeStore{}},
 		map[string]store.Adapter{"openai-go-sdk": docsStore},
 	)
 	if err != nil {
@@ -263,7 +263,7 @@ func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
 	}
 	adapter := NewAdapter(registry, resolver)
 
-	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "docs/openai-go-sdk/usage.md"})
+	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "rolio", Path: "docs/openai-go-sdk/usage.md"})
 	if err != nil {
 		t.Fatalf("Cat() error = %v", err)
 	}
@@ -274,7 +274,7 @@ func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
 		t.Fatalf("cat path = %q, want localized docs path", cat.Path)
 	}
 
-	ls, err := adapter.LS(context.Background(), store.LSRequest{Repo: "gxfs", Path: "docs/openai-go-sdk"})
+	ls, err := adapter.LS(context.Background(), store.LSRequest{Repo: "rolio", Path: "docs/openai-go-sdk"})
 	if err != nil {
 		t.Fatalf("LS() error = %v", err)
 	}
@@ -285,7 +285,7 @@ func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
 		t.Fatalf("ls nodes = %+v, want localized docs path", ls.Nodes)
 	}
 
-	found, err := adapter.Find(context.Background(), store.FindRequest{Repo: "gxfs", Path: "docs/openai-go-sdk", Name: "*.md"})
+	found, err := adapter.Find(context.Background(), store.FindRequest{Repo: "rolio", Path: "docs/openai-go-sdk", Name: "*.md"})
 	if err != nil {
 		t.Fatalf("Find() error = %v", err)
 	}
@@ -293,7 +293,7 @@ func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
 		t.Fatalf("find nodes = %+v, want localized docs path", found.Nodes)
 	}
 
-	grep, err := adapter.Grep(context.Background(), store.GrepRequest{Repo: "gxfs", Path: "docs/openai-go-sdk", Pattern: "Responses"})
+	grep, err := adapter.Grep(context.Background(), store.GrepRequest{Repo: "rolio", Path: "docs/openai-go-sdk", Pattern: "Responses"})
 	if err != nil {
 		t.Fatalf("Grep() error = %v", err)
 	}
@@ -301,7 +301,7 @@ func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
 		t.Fatalf("grep matches = %+v, want localized docs path", grep.Matches)
 	}
 
-	hashes, err := adapter.BatchHashes(context.Background(), store.HashRequest{Repo: "gxfs", Path: "docs/openai-go-sdk"})
+	hashes, err := adapter.BatchHashes(context.Background(), store.HashRequest{Repo: "rolio", Path: "docs/openai-go-sdk"})
 	if err != nil {
 		t.Fatalf("BatchHashes() error = %v", err)
 	}
@@ -314,7 +314,7 @@ func TestAdapterRoutesDocsSourceThroughSourceRouter(t *testing.T) {
 }
 
 func TestAdapterRoutesDocsetSourceThroughSourceRouterReadonly(t *testing.T) {
-	resolver, err := NewResolver("gxfs", []config.MountConfig{
+	resolver, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs/best-practices", Remote: "docset://best-practices/go", Mode: "readonly"},
 	})
 	if err != nil {
@@ -335,7 +335,7 @@ func TestAdapterRoutesDocsetSourceThroughSourceRouterReadonly(t *testing.T) {
 	}
 	adapter := NewAdapter(registry, resolver)
 
-	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "docs/best-practices/errors.md"})
+	cat, err := adapter.Cat(context.Background(), store.CatRequest{Repo: "rolio", Path: "docs/best-practices/errors.md"})
 	if err != nil {
 		t.Fatalf("Cat() error = %v", err)
 	}
@@ -346,7 +346,7 @@ func TestAdapterRoutesDocsetSourceThroughSourceRouterReadonly(t *testing.T) {
 		t.Fatalf("cat path = %q, want localized docset path", cat.Path)
 	}
 
-	ls, err := adapter.LS(context.Background(), store.LSRequest{Repo: "gxfs", Path: "docs/best-practices"})
+	ls, err := adapter.LS(context.Background(), store.LSRequest{Repo: "rolio", Path: "docs/best-practices"})
 	if err != nil {
 		t.Fatalf("LS() error = %v", err)
 	}
@@ -357,14 +357,14 @@ func TestAdapterRoutesDocsetSourceThroughSourceRouterReadonly(t *testing.T) {
 		t.Fatalf("ls nodes = %+v, want localized docset path", ls.Nodes)
 	}
 
-	_, err = adapter.Put(context.Background(), store.PutRequest{Repo: "gxfs", Path: "docs/best-practices/new.md", Content: "x"})
+	_, err = adapter.Put(context.Background(), store.PutRequest{Repo: "rolio", Path: "docs/best-practices/new.md", Content: "x"})
 	if !errors.Is(err, store.ErrReadOnlyMount) {
 		t.Fatalf("Put() error = %v, want ErrReadOnlyMount", err)
 	}
 }
 
 func TestAdapterWritesDocsSourceThroughSourceRouter(t *testing.T) {
-	resolver, err := NewResolver("gxfs", []config.MountConfig{
+	resolver, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs/openai-go-sdk", Remote: "docs://openai-go-sdk/reference", Mode: "writable"},
 	})
 	if err != nil {
@@ -372,7 +372,7 @@ func TestAdapterWritesDocsSourceThroughSourceRouter(t *testing.T) {
 	}
 	docsStore := &fakeStore{}
 	registry, err := store.NewNamespaceRegistry(
-		map[string]store.Adapter{"gxfs": &fakeStore{}},
+		map[string]store.Adapter{"rolio": &fakeStore{}},
 		map[string]store.Adapter{"openai-go-sdk": docsStore},
 	)
 	if err != nil {
@@ -381,7 +381,7 @@ func TestAdapterWritesDocsSourceThroughSourceRouter(t *testing.T) {
 	adapter := NewAdapter(registry, resolver)
 
 	resp, err := adapter.Put(context.Background(), store.PutRequest{
-		Repo:    "gxfs",
+		Repo:    "rolio",
 		Path:    "docs/openai-go-sdk/new.md",
 		Content: "new content",
 	})
@@ -397,7 +397,7 @@ func TestAdapterWritesDocsSourceThroughSourceRouter(t *testing.T) {
 }
 
 func TestAdapterRejectsDocsSourceWithoutSourceRouter(t *testing.T) {
-	resolver, err := NewResolver("gxfs", []config.MountConfig{
+	resolver, err := NewResolver("rolio", []config.MountConfig{
 		{Local: "docs/openai-go-sdk", Remote: "docs://openai-go-sdk", Mode: "readonly"},
 	})
 	if err != nil {
@@ -405,7 +405,7 @@ func TestAdapterRejectsDocsSourceWithoutSourceRouter(t *testing.T) {
 	}
 	adapter := NewAdapter(&fakeStore{}, resolver)
 
-	_, err = adapter.Cat(context.Background(), store.CatRequest{Repo: "gxfs", Path: "docs/openai-go-sdk/usage.md"})
+	_, err = adapter.Cat(context.Background(), store.CatRequest{Repo: "rolio", Path: "docs/openai-go-sdk/usage.md"})
 	if !errors.Is(err, store.ErrNotSupported) {
 		t.Fatalf("Cat() error = %v, want ErrNotSupported", err)
 	}

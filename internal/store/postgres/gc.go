@@ -29,9 +29,9 @@ type GCResult struct {
 
 // GC performs orphan document garbage collection.
 // An orphan document is one that:
-//   - has no references in gxfs_repo_paths
-//   - has no references in gxfs_doc_namespace_paths
-//   - has no references in gxfs_docset_docs
+//   - has no references in rolio_repo_paths
+//   - has no references in rolio_doc_namespace_paths
+//   - has no references in rolio_docset_docs
 //   - was last updated more than GraceHours ago (to protect fresh creates in progress)
 //
 // In dry-run mode, it reports the count and sample candidates without deleting.
@@ -44,7 +44,7 @@ func GC(ctx context.Context, pool *pgxpool.Pool, schema string, req GCRequest) (
 		req.Limit = 10
 	}
 
-	docsTable, err := quoteTable(schema, "gxfs_docs")
+	docsTable, err := quoteTable(schema, "rolio_docs")
 	if err != nil {
 		return nil, err
 	}
@@ -61,15 +61,15 @@ func GC(ctx context.Context, pool *pgxpool.Pool, schema string, req GCRequest) (
 }
 
 func gcOrphanCondition(schema string, graceHours int) (string, error) {
-	pathsTable, err := quoteTable(schema, "gxfs_repo_paths")
+	pathsTable, err := quoteTable(schema, "rolio_repo_paths")
 	if err != nil {
 		return "", err
 	}
-	namespacePathsTable, err := quoteTable(schema, "gxfs_doc_namespace_paths")
+	namespacePathsTable, err := quoteTable(schema, "rolio_doc_namespace_paths")
 	if err != nil {
 		return "", err
 	}
-	docsetDocsTable, err := quoteTable(schema, "gxfs_docset_docs")
+	docsetDocsTable, err := quoteTable(schema, "rolio_docset_docs")
 	if err != nil {
 		return "", err
 	}

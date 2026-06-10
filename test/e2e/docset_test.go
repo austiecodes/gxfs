@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/austiecodes/gxfs/internal/store"
-	"github.com/austiecodes/gxfs/internal/store/postgres"
+	"github.com/austiecodes/rolio/internal/store"
+	"github.com/austiecodes/rolio/internal/store/postgres"
 )
 
 // TestDocsetCRUD tests basic docset create/read/delete operations.
@@ -16,10 +16,10 @@ func TestDocsetCRUD(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-docset-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-docset-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := e2ePostgresConfig(dsn, "test-repo")
@@ -121,10 +121,10 @@ func TestDocsetMembership(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-docset-member-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-docset-member-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := e2ePostgresConfig(dsn, "test-repo")
@@ -135,7 +135,7 @@ func TestDocsetMembership(t *testing.T) {
 	applyMigrations(t, ctx, pool, cfg)
 	seedBackfillData(t, containerName)
 
-	// Run backfill to populate gxfs_docs and gxfs_repo_paths
+	// Run backfill to populate rolio_docs and rolio_repo_paths
 	if _, err := postgres.BackfillDocs(ctx, pool, cfg); err != nil {
 		t.Fatalf("BackfillDocs: %v", err)
 	}
@@ -248,10 +248,10 @@ func TestDocsetDeleteWithMembers(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-docset-del-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-docset-del-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := e2ePostgresConfig(dsn, "test-repo")

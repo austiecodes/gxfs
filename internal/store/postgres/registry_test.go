@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 func TestRegistrySQLBuilders(t *testing.T) {
@@ -22,22 +22,22 @@ func TestRegistrySQLBuilders(t *testing.T) {
 		{
 			name: "ListReposSQL",
 			fn:   ListReposSQL,
-			want: `select name, writable, created_at, updated_at from "catalog"."gxfs_repos" order by name`,
+			want: `select name, writable, created_at, updated_at from "catalog"."rolio_repos" order by name`,
 		},
 		{
 			name: "RegisterRepoSQL",
 			fn:   RegisterRepoSQL,
-			want: `insert into "catalog"."gxfs_repos"(name, writable) values($1, $2) returning name, writable, created_at, updated_at`,
+			want: `insert into "catalog"."rolio_repos"(name, writable) values($1, $2) returning name, writable, created_at, updated_at`,
 		},
 		{
 			name: "ListDocNamespacesSQL",
 			fn:   ListDocNamespacesSQL,
-			want: `select name, description, writable, created_at, updated_at from "catalog"."gxfs_doc_namespaces" order by name`,
+			want: `select name, description, writable, created_at, updated_at from "catalog"."rolio_doc_namespaces" order by name`,
 		},
 		{
 			name: "ListDocsetsSQL",
 			fn:   ListDocsetsSQL,
-			want: `select id::text, name, description, created_at, updated_at from "catalog"."gxfs_docsets" order by name`,
+			want: `select id::text, name, description, created_at, updated_at from "catalog"."rolio_docsets" order by name`,
 		},
 	}
 
@@ -90,20 +90,20 @@ func TestRepoRegistryMigrationBackfillsExistingRepoPaths(t *testing.T) {
 
 	var repoRegistryStmt string
 	for _, statement := range statements {
-		if strings.Contains(statement, `"gxfs_repos"`) {
+		if strings.Contains(statement, `"rolio_repos"`) {
 			repoRegistryStmt = statement
 			break
 		}
 	}
 	if repoRegistryStmt == "" {
-		t.Fatal("SchemaSQL() missing gxfs_repos migration")
+		t.Fatal("SchemaSQL() missing rolio_repos migration")
 	}
 	for _, want := range []string{
-		`create table if not exists "public"."gxfs_repos"`,
+		`create table if not exists "public"."rolio_repos"`,
 		`name text primary key`,
 		`writable bool not null default false`,
 		`select distinct repo`,
-		`from "public"."gxfs_repo_paths"`,
+		`from "public"."rolio_repo_paths"`,
 		`on conflict (name) do nothing`,
 	} {
 		if !strings.Contains(repoRegistryStmt, want) {
@@ -126,7 +126,7 @@ func TestSchemaSQLUsesDefaultsForInfraOnlyConfig(t *testing.T) {
 		`"kind" text not null default 'file'`,
 		`"size" bigint not null default 0`,
 		`"updated_at" timestamptz not null default now()`,
-		`"public"."gxfs_repos"`,
+		`"public"."rolio_repos"`,
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("SchemaSQL(Config{Schema: public}) missing default %q", want)
@@ -142,27 +142,27 @@ func TestIsRepoDuplicateError(t *testing.T) {
 	}{
 		{
 			name: "pg error primary key",
-			err:  &pgconn.PgError{Code: postgresDuplicateKeySQLState, ConstraintName: "gxfs_repos_pkey"},
+			err:  &pgconn.PgError{Code: postgresDuplicateKeySQLState, ConstraintName: "rolio_repos_pkey"},
 			want: true,
 		},
 		{
 			name: "pg error table name",
-			err:  &pgconn.PgError{Code: postgresDuplicateKeySQLState, TableName: "gxfs_repos"},
+			err:  &pgconn.PgError{Code: postgresDuplicateKeySQLState, TableName: "rolio_repos"},
 			want: true,
 		},
 		{
 			name: "wrapped pg error",
-			err:  fmt.Errorf("insert repo: %w", &pgconn.PgError{Code: postgresDuplicateKeySQLState, ConstraintName: "gxfs_repos_pkey"}),
+			err:  fmt.Errorf("insert repo: %w", &pgconn.PgError{Code: postgresDuplicateKeySQLState, ConstraintName: "rolio_repos_pkey"}),
 			want: true,
 		},
 		{
 			name: "string fallback",
-			err:  errors.New(`ERROR: duplicate key value violates unique constraint "gxfs_repos_pkey"`),
+			err:  errors.New(`ERROR: duplicate key value violates unique constraint "rolio_repos_pkey"`),
 			want: true,
 		},
 		{
 			name: "other unique constraint",
-			err:  &pgconn.PgError{Code: postgresDuplicateKeySQLState, ConstraintName: "gxfs_docsets_name_key"},
+			err:  &pgconn.PgError{Code: postgresDuplicateKeySQLState, ConstraintName: "rolio_docsets_name_key"},
 			want: false,
 		},
 		{

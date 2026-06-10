@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/austiecodes/gxfs/internal/config"
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/config"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 type Operation string

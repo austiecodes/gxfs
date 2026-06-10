@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/austiecodes/gxfs/internal/store"
+	"github.com/austiecodes/rolio/internal/store"
 )
 
 type repoCatalog interface {

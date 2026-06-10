@@ -5,11 +5,11 @@ import (
 )
 
 const (
-	docRepoPathsTable       = "gxfs_repo_paths"
+	docRepoPathsTable       = "rolio_repo_paths"
 	docRepoScopeColumn      = "repo"
-	docNamespacePathsTable  = "gxfs_doc_namespace_paths"
+	docNamespacePathsTable  = "rolio_doc_namespace_paths"
 	docNamespaceScopeColumn = "namespace"
-	docsetPathsView         = "gxfs_docset_paths"
+	docsetPathsView         = "rolio_docset_paths"
 	docsetScopeColumn       = "docset"
 )
 
@@ -57,7 +57,7 @@ func DocCatSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -73,7 +73,7 @@ func DocStatSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -102,7 +102,7 @@ func DocSearchCountSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -122,7 +122,7 @@ func DocSearchDataSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -146,7 +146,7 @@ func DocLocateCountSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -166,7 +166,7 @@ func DocLocateDataSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -188,7 +188,7 @@ func DocBatchHashesSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -207,7 +207,7 @@ func DocStreamGrepSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -224,7 +224,7 @@ func DocStreamGrepSQL(cfg Config) (string, error) {
 // DocInsertSQL inserts a new doc row with content and hash, returning the doc ID.
 // content_search is GENERATED and auto-updated.
 func DocInsertSQL(cfg Config) (string, error) {
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -242,7 +242,7 @@ func DocUpdateByPathSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -260,7 +260,7 @@ func DocSelectForUpdateSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -273,7 +273,7 @@ func DocSelectForUpdateSQL(cfg Config) (string, error) {
 
 // DocUpdateByIDSQL updates a doc by its ID (used after FOR UPDATE).
 func DocUpdateByIDSQL(cfg Config) (string, error) {
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}
@@ -316,7 +316,7 @@ func DocLookupPathWithHashSQL(cfg Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		return "", err
 	}

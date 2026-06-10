@@ -13,14 +13,14 @@ func TestGCOrphanCondition(t *testing.T) {
 		t.Fatalf("gcOrphanCondition() error = %v", err)
 	}
 
-	if !strings.Contains(orphanCondition, "gxfs_repo_paths") {
-		t.Error("orphan condition missing gxfs_repo_paths check")
+	if !strings.Contains(orphanCondition, "rolio_repo_paths") {
+		t.Error("orphan condition missing rolio_repo_paths check")
 	}
-	if !strings.Contains(orphanCondition, "gxfs_doc_namespace_paths") {
-		t.Error("orphan condition missing gxfs_doc_namespace_paths check")
+	if !strings.Contains(orphanCondition, "rolio_doc_namespace_paths") {
+		t.Error("orphan condition missing rolio_doc_namespace_paths check")
 	}
-	if !strings.Contains(orphanCondition, "gxfs_docset_docs") {
-		t.Error("orphan condition missing gxfs_docset_docs check")
+	if !strings.Contains(orphanCondition, "rolio_docset_docs") {
+		t.Error("orphan condition missing rolio_docset_docs check")
 	}
 	if !strings.Contains(orphanCondition, "NOT EXISTS") {
 		t.Error("orphan condition missing NOT EXISTS clause")
@@ -31,7 +31,7 @@ func TestGCCandidatesQuery(t *testing.T) {
 	// Test the candidates query structure for dry-run
 	cfg := Config{Schema: "public"}
 
-	docsTable, err := quoteTable(cfg.Schema, "gxfs_docs")
+	docsTable, err := quoteTable(cfg.Schema, "rolio_docs")
 	if err != nil {
 		t.Fatalf("quoteTable docs: %v", err)
 	}
@@ -54,7 +54,7 @@ LIMIT 10`
 	}
 
 	// Verify table name is properly quoted
-	if !strings.Contains(candidatesSQL, `"public"."gxfs_docs"`) {
+	if !strings.Contains(candidatesSQL, `"public"."rolio_docs"`) {
 		t.Error("candidates query missing properly quoted docs table")
 	}
 }
@@ -83,7 +83,7 @@ func TestGCLimitDefault(t *testing.T) {
 
 func TestGCSchemaSafety(t *testing.T) {
 	// Test that unsafe schema names are rejected
-	_, err := quoteTable("public; drop table users;", "gxfs_docs")
+	_, err := quoteTable("public; drop table users;", "rolio_docs")
 	if err == nil {
 		t.Error("quoteTable should reject unsafe schema names")
 	}

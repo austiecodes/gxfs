@@ -11,8 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/austiecodes/gxfs/internal/store"
-	"github.com/austiecodes/gxfs/internal/store/postgres"
+	"github.com/austiecodes/rolio/internal/store"
+	"github.com/austiecodes/rolio/internal/store/postgres"
 )
 
 // TestBackfillDocsIntegration verifies BackfillDocs migrates legacy data
@@ -21,10 +21,10 @@ func TestBackfillDocsIntegration(t *testing.T) {
 	requireDocker(t)
 
 	pgPort := freePort(t)
-	containerName := fmt.Sprintf("gxfs-backfill-test-%d", pgPort)
+	containerName := fmt.Sprintf("rolio-backfill-test-%d", pgPort)
 	startPostgres(t, containerName, pgPort)
 
-	dsn := fmt.Sprintf("postgres://gxfs:gxfs@127.0.0.1:%d/gxfs?sslmode=disable", pgPort)
+	dsn := fmt.Sprintf("postgres://rolio:rolio@127.0.0.1:%d/rolio?sslmode=disable", pgPort)
 	ctx := context.Background()
 
 	cfg := postgres.Config{
@@ -145,7 +145,7 @@ create table if not exists vfs_repo_nodes (
     primary key (repo, path)
 );
 
--- Directories (should NOT appear in gxfs_docs)
+-- Directories (should NOT appear in rolio_docs)
 insert into vfs_nodes(path, kind, size, updated_at) values
     ('/docs', 'dir', 0, '2026-01-01T00:00:00Z'),
     ('/docs/api', 'dir', 0, '2026-01-01T00:00:00Z'),
@@ -204,7 +204,7 @@ on conflict do nothing;
 
 	output, err := run(ctx, "", strings.NewReader(sql),
 		"docker", "exec", "-i", containerName,
-		"psql", "-U", "gxfs", "-d", "gxfs", "-v", "ON_ERROR_STOP=1",
+		"psql", "-U", "rolio", "-d", "rolio", "-v", "ON_ERROR_STOP=1",
 	)
 	if err != nil {
 		t.Fatalf("seed backfill data: %v: %s", err, output)
@@ -241,7 +241,7 @@ func applyMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg 
 func verifyDocContents(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
+	docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
 
 	// Check doc count: should be 5 (one per file, not per content blob, dirs excluded).
 	var docCount int
@@ -294,7 +294,7 @@ func verifyDocContents(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cf
 		t.Fatalf("count dir docs: %v", err)
 	}
 	if dirCount != 0 {
-		t.Fatalf("found %d dir docs, want 0 (dirs should not be in gxfs_docs)", dirCount)
+		t.Fatalf("found %d dir docs, want 0 (dirs should not be in rolio_docs)", dirCount)
 	}
 
 	// Check revision = 1 for all import snapshots.
@@ -312,7 +312,7 @@ func verifyDocContents(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cf
 func verifyRepoPaths(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+	pathsTable := quoteTableForTest(cfg.Schema, "rolio_repo_paths")
 
 	// Check repo_paths count.
 	var pathCount int
@@ -350,7 +350,7 @@ func verifyRepoPaths(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg 
 func verifyNoContentDedup(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
+	docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
 
 	// README.md and guide.md have same content. They must have different doc_ids.
 	var sameContentCount int
@@ -368,7 +368,7 @@ func verifyNoContentDedup(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 func verifyComputedHashes(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
+	docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
 
 	// Files with NULL hash in old table should now have computed hash.
 	rows, err := pool.Query(ctx, fmt.Sprintf(
@@ -424,7 +424,7 @@ func verifyComputedHashes(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 func captureDocIDs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) map[string]string {
 	t.Helper()
 
-	docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
+	docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
 
 	rows, err := pool.Query(ctx, fmt.Sprintf(
 		"select legacy_path, id::text from %s where legacy_path is not null", docsTable,
@@ -451,7 +451,7 @@ func captureDocIDs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg po
 func verifyNoDuplicates(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
+	docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
 
 	// Verify no duplicate legacy_path rows.
 	var dupCount int
@@ -469,8 +469,8 @@ func verifyNoDuplicates(t *testing.T, ctx context.Context, pool *pgxpool.Pool, c
 func verifyCatEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
-	pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+	docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
+	pathsTable := quoteTableForTest(cfg.Schema, "rolio_repo_paths")
 
 	// For each file in test-repo, verify Cat-equivalent query returns correct content.
 	rows, err := pool.Query(ctx, fmt.Sprintf(
@@ -511,8 +511,8 @@ func verifyCatEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 func verifyBatchHashesEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
-	pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+	docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
+	pathsTable := quoteTableForTest(cfg.Schema, "rolio_repo_paths")
 
 	// Verify BatchHashes-equivalent: every file has a non-empty content_hash.
 	rows, err := pool.Query(ctx, fmt.Sprintf(
@@ -567,7 +567,7 @@ func verifyBatchHashesEquivalent(t *testing.T, ctx context.Context, pool *pgxpoo
 func verifyLSEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+	pathsTable := quoteTableForTest(cfg.Schema, "rolio_repo_paths")
 
 	// LS / should list top-level entries: implicit dirs /docs, /src + file /README.md.
 	rows, err := pool.Query(ctx, fmt.Sprintf(
@@ -648,7 +648,7 @@ func lsEntries(t *testing.T, allPaths []string, prefix string) []string {
 func verifyFindEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+	pathsTable := quoteTableForTest(cfg.Schema, "rolio_repo_paths")
 
 	// Find all files named "readme.md" in test-repo.
 	rows, err := pool.Query(ctx, fmt.Sprintf(
@@ -698,8 +698,8 @@ func verifyFindEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 func verifySearchEquivalent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cfg postgres.Config) {
 	t.Helper()
 
-	docsTable := quoteTableForTest(cfg.Schema, "gxfs_docs")
-	pathsTable := quoteTableForTest(cfg.Schema, "gxfs_repo_paths")
+	docsTable := quoteTableForTest(cfg.Schema, "rolio_docs")
+	pathsTable := quoteTableForTest(cfg.Schema, "rolio_repo_paths")
 
 	// Search for "main" — should hit /src/main.go.
 	rows, err := pool.Query(ctx, fmt.Sprintf(
